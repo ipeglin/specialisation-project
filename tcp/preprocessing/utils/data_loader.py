@@ -11,11 +11,20 @@ import pandas as pd
 import numpy as np
 import h5py
 import json
+import sys
 from pathlib import Path
 import nibabel as nib
 
-def load_tcp_results(results_dir="/Users/ipeglin/git/ds005237/tcp_analysis_results"):
+# Add project root to path to import config
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from config.paths import get_script_output_path
+
+def load_tcp_results(results_dir=None):
     """Load the extracted TCP analysis results"""
+    if results_dir is None:
+        results_dir = get_script_output_path('tcp_preprocessing', 'extract_subjects')
     results_path = Path(results_dir)
     
     # Load subject dataframes
@@ -159,7 +168,7 @@ def get_demographics_summary(subjects_df, group_name="Subjects"):
     """Get demographics summary for a group of subjects"""
     print(f"\n{group_name} Demographics:")
     print(f"  N = {len(subjects_df)}")
-    print(f"  Age: {subjects_df['age'].mean():.1f} ± {subjects_df['age'].std():.1f} years")
+    print(f"  Age: {subjects_df['age'].mean():.1f} ï¿½ {subjects_df['age'].std():.1f} years")
     print(f"  Age range: {subjects_df['age'].min():.1f} - {subjects_df['age'].max():.1f} years")
     print(f"  Sex: {subjects_df['sex'].value_counts().to_dict()}")
     print(f"  Site: {subjects_df['Site'].value_counts().to_dict()}")

@@ -1,0 +1,120 @@
+{
+  "macos": {
+    "code_base": "/Users/ipeglin/Git",
+    "data_base": "/Users/ipeglin/Git",
+    "output_base": "/Users/ipeglin/Documents/specialisation-project/Analysis",
+    "preprocessing_base": "/Users/ipeglin/Documents/specialisation-project/Preprocessing",
+    "analysis_base": "/Users/ipeglin/Documents/specialisation-project/Analysis",
+    "figures_base": "/Users/ipeglin/Documents/specialisation-project/Figures",
+    "models_base": "/Users/ipeglin/Documents/specialisation-project/Models",
+    "reports_base": "/Users/ipeglin/Documents/specialisation-project/Reports",
+    "temp_base": "/tmp",
+    "description": "macOS M1 MacBook configuration"
+  },
+  "windows": {
+    "code_base": "C:/Users/ipeglin/Git",
+    "data_base": "C:/Users/ipeglin/Documents/specialisation-project/Data",
+    "output_base": "C:/Users/ipeglin/Documents/specialisation-project/Analysis",
+    "preprocessing_base": "C:/Users/ipeglin/Documents/specialisation-project/Preprocessing",
+    "analysis_base": "C:/Users/ipeglin/Documents/specialisation-project/Analysis",
+    "figures_base": "C:/Users/ipeglin/Documents/specialisation-project/Figures",
+    "models_base": "C:/Users/ipeglin/Documents/specialisation-project/Models",
+    "reports_base": "C:/Users/ipeglin/Documents/specialisation-project/Reports",
+    "temp_base": "C:/temp",
+    "description": "Windows 11 desktop configuration"
+  },
+  "idun": {
+    "code_base": "/cluster/home/ianpe",
+    "data_base": "/cluster/work/ianpe",
+    "output_base": "/cluster/work/ianpe/analysis",
+    "preprocessing_base": "/cluster/work/ianpe/preprocessing",
+    "analysis_base": "/cluster/work/ianpe/analysis",
+    "figures_base": "/cluster/work/ianpe/figures",
+    "models_base": "/cluster/work/ianpe/models",
+    "reports_base": "/cluster/work/ianpe/reports",
+    "temp_base": "/cluster/work/ianpe/tmp",
+    "description": "IDUN HPC cluster configuration"
+  },
+  "linux": {
+    "code_base": "/home/ipeglin/git",
+    "data_base": "/home/ipeglin/data",
+    "output_base": "/home/ipeglin/analysis",
+    "preprocessing_base": "/home/ipeglin/preprocessing",
+    "analysis_base": "/home/ipeglin/analysis",
+    "figures_base": "/home/ipeglin/figures",
+    "models_base": "/home/ipeglin/models",
+    "reports_base": "/home/ipeglin/reports",
+    "temp_base": "/tmp",
+    "description": "Generic Linux configuration"
+  },
+  "output_categories": {
+    "preprocessing": "preprocessing",
+    "analysis": "analysis",
+    "figures": "figures",
+    "models": "models",
+    "reports": "reports",
+    "temp": "temp",
+    "backup": "general"
+  },
+  "script_patterns": {
+    "tcp_preprocessing": {
+      "category": "preprocessing",
+      "subdir": "tcp"
+    },
+    "tcp_analysis": {
+      "category": "analysis",
+      "subdir": "tcp"
+    },
+    "mdd_analysis": {
+      "category": "analysis",
+      "subdir": "mdd"
+    },
+    "visualization": {
+      "category": "figures",
+      "subdir": "plots"
+    },
+    "model_training": {
+      "category": "models",
+      "subdir": "training"
+    },
+    "reports": {
+      "category": "reports",
+      "subdir": "documentation"
+    }
+  },
+  "common_subdirectories": {
+    "tcp_dataset": "ds005237",
+    "tcp_analysis": "tcp_analysis",
+    "mdd_analysis": "mdd_analysis",
+    "preprocessing": "preprocessing",
+    "results": "results",
+    "figures": "figures",
+    "models": "models"
+  },
+  "environment_detection": {
+    "idun_hostnames": [
+      "idun",
+      "login",
+      "idun-login"
+    ],
+    "hostname_patterns": {
+      "idun": [
+        "idun*",
+        "login*"
+      ]
+    }
+  },
+  "validation": {
+    "required_subdirs": {
+      "tcp_dataset": [
+        "participants.tsv",
+        "phenotype"
+      ],
+      "output_base": []
+    },
+    "create_if_missing": [
+      "output_base",
+      "temp_base"
+    ]
+  }
+}

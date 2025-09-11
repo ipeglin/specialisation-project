@@ -16,8 +16,18 @@ Date: 2025-09-11
 import pandas as pd
 import numpy as np
 import h5py
+import sys
 from pathlib import Path
-from data_loader_utils import *
+
+# Add project root to path to import config
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from config.paths import get_script_output_path
+
+# Import local utilities - update the import to use the actual filename
+sys.path.insert(0, str(Path(__file__).parent.parent / 'utils'))
+from data_loader import *
 
 def main_mdd_analysis():
     """Main analysis workflow for MDD subjects and controls"""
@@ -146,8 +156,8 @@ def main_mdd_analysis():
     # Step 8: Save analysis-ready datasets
     print(f"\n7. Saving Analysis-Ready Datasets...")
     
-    output_dir = Path("/Users/ipeglin/git/ds005237/mdd_analysis_datasets")
-    output_dir.mkdir(exist_ok=True)
+    output_dir = get_script_output_path('mdd_analysis', 'datasets')
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Save subject lists
     patients_analysis.to_csv(output_dir / "mdd_patients_stroop.csv", index=False)
