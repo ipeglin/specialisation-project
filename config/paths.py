@@ -114,10 +114,28 @@ class PathConfig:
         }
 
     def _load_env_overrides(self) -> Dict:
-        """Load environment variable overrides"""
+        """Load environment variable overrides from .env file and system environment"""
         overrides = {}
 
-        # Check for all path type environment variables
+        # First, try to load from .env file in project root
+        env_file = Path(__file__).parent.parent / '.env'
+        if env_file.exists():
+            try:
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        # Skip comments and empty lines
+                        if line and not line.startswith('#'):
+                            if '=' in line:
+                                key, value = line.split('=', 1)
+                                key, value = key.strip(), value.strip()
+                                # Set as environment variable so os.getenv can find it
+                                os.environ[key] = value
+            except Exception as e:
+                # Silent fail - if .env can't be read, continue with system env vars only
+                pass
+
+        # Check for all path type environment variables (from .env file or system)
         env_vars = [
             ('code_base', 'PROJECT_CODE_BASE'),
             ('data_base', 'PROJECT_DATA_BASE'),
