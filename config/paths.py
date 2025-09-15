@@ -114,28 +114,13 @@ class PathConfig:
         }
 
     def _load_env_overrides(self) -> Dict:
-        """Load environment variable overrides from .env file and system environment"""
+        """Load environment variable overrides from system env and .env files"""
         overrides = {}
 
-        # First, try to load from .env file in project root
-        env_file = Path(__file__).parent.parent / '.env'
-        if env_file.exists():
-            try:
-                with open(env_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        # Skip comments and empty lines
-                        if line and not line.startswith('#'):
-                            if '=' in line:
-                                key, value = line.split('=', 1)
-                                key, value = key.strip(), value.strip()
-                                # Set as environment variable so os.getenv can find it
-                                os.environ[key] = value
-            except Exception as e:
-                # Silent fail - if .env can't be read, continue with system env vars only
-                pass
+        # Load .env file if it exists (cross-platform approach without dependencies)
+        self._load_dotenv_file()
 
-        # Check for all path type environment variables (from .env file or system)
+        # Check for all path type environment variables
         env_vars = [
             ('code_base', 'PROJECT_CODE_BASE'),
             ('data_base', 'PROJECT_DATA_BASE'),
@@ -154,6 +139,48 @@ class PathConfig:
                 overrides[key] = value
 
         return overrides
+
+    def _load_dotenv_file(self) -> None:
+        """Load environment variables from .env file (cross-platform implementation)"""
+        # Look for .env file in project root (where config/ directory is located)
+        project_root = Path(__file__).parent.parent
+        env_file = project_root / '.env'
+        
+        if not env_file.exists():
+            return
+        
+        try:
+            with open(env_file, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    
+                    # Skip empty lines and comments
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    # Parse KEY=VALUE format
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        # Remove inline comments (everything after # character)
+                        if '#' in value:
+                            value = value.split('#')[0].strip()
+                        
+                        # Remove quotes if present (handle both single and double quotes)
+                        if (value.startswith('"') and value.endswith('"')) or \
+                           (value.startswith("'") and value.endswith("'")):
+                            value = value[1:-1]
+                        
+                        # Only set if not already in environment (system env takes precedence)
+                        if key and key not in os.environ:
+                            os.environ[key] = value
+                            
+        except (IOError, UnicodeDecodeError) as e:
+            # Silently continue if .env file can't be read
+            # This ensures the script works even with .env file issues
+            pass
 
     def _get_base_path(self, path_type: str) -> Path:
         """Get base path for a given type (code_base, data_base, etc.)"""
