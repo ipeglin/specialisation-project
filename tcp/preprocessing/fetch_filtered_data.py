@@ -13,7 +13,7 @@ import sys
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import argparse
 import logging
@@ -85,7 +85,7 @@ class DataladDataFetcher:
 
         return logger
 
-    def load_included_subjects(self) -> Set[str]:
+    def load_included_subjects(self) -> List[str]:
         """Load the list of included subjects from the filtering pipeline output"""
         self.logger.info(f"Loading included subjects from {self.included_subjects_path}")
 
@@ -118,8 +118,10 @@ class DataladDataFetcher:
             else:
                 self.logger.warning(f"File not found: {file_path}")
 
-        self.logger.info(f"Total included subjects: {len(included_subjects)}")
-        return included_subjects
+        # Return sorted list to ensure deterministic processing order while maintaining uniqueness
+        sorted_subjects = sorted(list(included_subjects))
+        self.logger.info(f"Total included subjects: {len(sorted_subjects)} (sorted alphabetically)")
+        return sorted_subjects
 
     def check_dataset_status(self) -> bool:
         """Check if the dataset path is a valid datalad repository"""
@@ -173,7 +175,7 @@ class DataladDataFetcher:
         except (OSError, IOError):
             return False
 
-    def find_actual_files(self, subject_ids: Set[str], data_types: List[str]) -> Dict[str, List[str]]:
+    def find_actual_files(self, subject_ids: List[str], data_types: List[str]) -> Tuple[Dict[str, List[str]], List[str]]:
         """Find actual files that exist for the given subjects and data types"""
         import glob
 
@@ -207,19 +209,19 @@ class DataladDataFetcher:
                 elif data_type not in global_data_types and data_type not in self.data_patterns:
                     self.logger.warning(f"Unknown data type: {data_type}")
 
-            # Add global files to the first subject only to avoid duplicates
-            if subject_id == list(subject_ids)[0]:
-                files.extend(global_files)
-
             if files:
                 subject_files[subject_id] = files
-                self.logger.info(f"Found {len(files)} total files for {subject_id}")
+                self.logger.info(f"Found {len(files)} subject-specific files for {subject_id}")
             else:
-                self.logger.warning(f"No files found for {subject_id}")
+                self.logger.warning(f"No subject-specific files found for {subject_id}")
 
-        return subject_files
+        # Return both subject-specific files and global files separately
+        if global_files:
+            self.logger.info(f"Found {len(global_files)} dataset-wide files (phenotype, participants, etc.) for processing")
 
-    def fetch_data(self, subject_ids: Set[str], data_types: List[str] = None) -> Dict[str, bool]:
+        return subject_files, global_files
+
+    def fetch_data(self, subject_ids: List[str], data_types: List[str] = None) -> Dict[str, bool]:
         """Fetch data for specified subjects and data types using datalad get"""
         if data_types is None:
             data_types = ['raw_nifti', 'events']  # Default to essential data
@@ -231,20 +233,29 @@ class DataladDataFetcher:
             self.logger.info("DRY RUN MODE - No actual data will be fetched")
 
         # Find actual files that exist
-        subject_files = self.find_actual_files(subject_ids, data_types)
+        subject_files, global_files = self.find_actual_files(subject_ids, data_types)
         fetch_results = {}
 
         # Calculate overall statistics
-        total_files = sum(len(files) for files in subject_files.values())
+        total_subject_files = sum(len(files) for files in subject_files.values())
+        total_files = total_subject_files + len(global_files)
         files_already_downloaded = 0
         files_to_download = 0
 
+        # Check subject-specific files
         for subject_id, file_list in subject_files.items():
             for file_path in file_list:
                 if self.is_file_downloaded(Path(file_path)):
                     files_already_downloaded += 1
                 else:
                     files_to_download += 1
+
+        # Check global files
+        for file_path in global_files:
+            if self.is_file_downloaded(Path(file_path)):
+                files_already_downloaded += 1
+            else:
+                files_to_download += 1
 
         try:
             self.logger.info(f"Overall progress: {files_already_downloaded}/{total_files} files already downloaded")
@@ -349,6 +360,88 @@ class DataladDataFetcher:
 
             fetch_results[subject_id] = success
 
+        # Handle global (dataset-wide) files
+        if global_files:
+            try:
+                self.logger.info(f"Processing {len(global_files)} dataset-wide files (phenotype, participants, etc.)")
+            except (OSError, IOError):
+                print(f"Processing {len(global_files)} dataset-wide files (phenotype, participants, etc.)")
+
+            global_files_to_download = []
+            global_files_already_downloaded = 0
+
+            # Check which global files need downloading
+            for file_path in global_files:
+                if self.is_file_downloaded(Path(file_path)):
+                    global_files_already_downloaded += 1
+                else:
+                    global_files_to_download.append(file_path)
+
+            if global_files_already_downloaded > 0:
+                try:
+                    self.logger.info(f"  {global_files_already_downloaded} dataset-wide files already downloaded")
+                except (OSError, IOError):
+                    print(f"  {global_files_already_downloaded} dataset-wide files already downloaded")
+
+            if len(global_files_to_download) > 0:
+                try:
+                    self.logger.info(f"  Downloading {len(global_files_to_download)} dataset-wide files...")
+                except (OSError, IOError):
+                    print(f"  Downloading {len(global_files_to_download)} dataset-wide files...")
+
+                # Download global files
+                for i, file_path in enumerate(global_files_to_download, 1):
+                    try:
+                        if self.dry_run:
+                            try:
+                                self.logger.info(f"  [{i}/{len(global_files_to_download)}] [DRY RUN] Would fetch: {file_path}")
+                            except (OSError, IOError):
+                                print(f"  [{i}/{len(global_files_to_download)}] [DRY RUN] Would fetch: {file_path}")
+                            continue
+
+                        # Use datalad get to fetch the specific file
+                        cmd = ['datalad', 'get', file_path]
+                        try:
+                            self.logger.info(f"  [{i}/{len(global_files_to_download)}] Downloading: {Path(file_path).name}")
+                        except (OSError, IOError):
+                            print(f"  [{i}/{len(global_files_to_download)}] Downloading: {Path(file_path).name}")
+
+                        result = subprocess.run(
+                            cmd,
+                            cwd=self.dataset_path,
+                            capture_output=True,
+                            text=True,
+                            timeout=300  # 5 minute timeout per file
+                        )
+
+                        if result.returncode == 0:
+                            try:
+                                self.logger.info(f"    ✓ Downloaded successfully")
+                            except (OSError, IOError):
+                                print(f"    ✓ Downloaded successfully")
+                        else:
+                            stderr_msg = result.stderr.strip() if result.stderr else "No error message"
+                            try:
+                                self.logger.warning(f"    ✗ Download failed: {stderr_msg}")
+                            except (OSError, IOError):
+                                print(f"    ✗ Download failed: {stderr_msg}")
+
+                    except subprocess.TimeoutExpired:
+                        try:
+                            self.logger.error(f"    ✗ Timeout downloading {Path(file_path).name}")
+                        except (OSError, IOError):
+                            print(f"    ✗ Timeout downloading {Path(file_path).name}")
+                    except Exception as e:
+                        try:
+                            self.logger.error(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                        except (OSError, IOError):
+                            print(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+            else:
+                try:
+                    self.logger.info(f"  All dataset-wide files already downloaded")
+                except (OSError, IOError):
+                    print(f"  All dataset-wide files already downloaded")
+
         # Handle subjects with no files found
         for subject_id in subject_ids:
             if subject_id not in fetch_results:
@@ -357,7 +450,7 @@ class DataladDataFetcher:
 
         return fetch_results
 
-    def generate_summary_report(self, fetch_results: Dict[str, bool], subject_ids: Set[str],
+    def generate_summary_report(self, fetch_results: Dict[str, bool], subject_ids: List[str],
                               data_types: List[str]) -> Path:
         """Generate a summary report of the data fetching process"""
         report_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')

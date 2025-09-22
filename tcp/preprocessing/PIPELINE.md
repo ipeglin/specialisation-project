@@ -16,3 +16,24 @@ We would like to only process data about subjects that have actually had task ba
 ```python3
 python3 tcp/preprocessing/filter_subjects.py
 ```
+
+# Fetching actual MRI data with Datalad
+As anatomical and fMRI scans result in large data files, these are not shipped in their entirety with the dataset, by default. We need to fetch the actual content of these data files using Datalad and Git Annex. Seeing as the dataset's true size boarder on 1TB in storage space, we are only interested in installing the specific data we want, and omit all other data. This means we selectively fetch task-based scan data, while we skip resting state data in its entirety. To do this, the script `fetch_filtered_data.py` iterates over included subjects computed by the previous step in the pipeline, and further uses file path pattern matching to call `datalad get` on all relevant files.
+
+You can run this script with a dry run for testing with
+
+```python3
+python3 tcp/preprocessing/fetch_filtered_data.py --dry-run
+```
+
+When installing, you can choose to use the default selection of data files – currently set to include everything for task-relevant scans – with
+
+```python3
+python tcp/preprocessing/fetch_filtered_data.py
+```
+
+Alternatively, you can fetch specific data types:
+
+```python3
+python tcp/preprocessing/fetch_filtered_data.py --data-types raw_nifti_hammer events_hammer anatomical_t1w
+```
