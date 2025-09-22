@@ -34,22 +34,29 @@ class DataladDataFetcher:
         self.dry_run = dry_run
         self.logger = self._setup_logging()
 
-        # Data type patterns for task-related, anatomical, and phenotypic data (no rest scans)
+        # Data type patterns for task-related, anatomical, and phenotypic data (hammer and stroop only, no rest scans)
         self.data_patterns = {
-            'raw_nifti': '{}/func/{}_task-*_bold.nii.gz',
-            'json_metadata': '{}/func/{}_task-*_bold.json',
-            'events': '{}/func/{}_task-*_events.tsv',
+            'raw_nifti': '{}/func/{}_task-hammer*_bold.nii.gz',
+            'raw_nifti_stroop': '{}/func/{}_task-stroop*_bold.nii.gz',
+            'json_metadata': '{}/func/{}_task-hammer*_bold.json',
+            'json_metadata_stroop': '{}/func/{}_task-stroop*_bold.json',
+            'events': '{}/func/{}_task-hammer*_events.tsv',
+            'events_stroop': '{}/func/{}_task-stroop*_events.tsv',
             'anatomical': '{}/anat/{}_T1w.nii.gz',
             'anatomical_t2w': '{}/anat/{}_T2w.nii.gz',
             'anatomical_json': '{}/anat/{}_T1w.json',
             'anatomical_t2w_json': '{}/anat/{}_T2w.json',
-            'physio': '{}/func/{}_task-*_physio.tsv.gz',
-            'behavioral': '{}/beh/{}_task-*_beh.tsv',
-            'derivatives_fmriprep_func': 'derivatives/fmriprep/{}/func/{}_task-*_space-*_desc-*_bold.nii.gz',
+            'physio': '{}/func/{}_task-hammer*_physio.tsv.gz',
+            'physio_stroop': '{}/func/{}_task-stroop*_physio.tsv.gz',
+            'behavioral': '{}/beh/{}_task-hammer*_beh.tsv',
+            'behavioral_stroop': '{}/beh/{}_task-stroop*_beh.tsv',
+            'derivatives_fmriprep_func': 'derivatives/fmriprep/{}/func/{}_task-hammer*_space-*_desc-*_bold.nii.gz',
+            'derivatives_fmriprep_func_stroop': 'derivatives/fmriprep/{}/func/{}_task-stroop*_space-*_desc-*_bold.nii.gz',
             'derivatives_fmriprep_anat': 'derivatives/fmriprep/{}/anat/{}_*T1w*.nii.gz',
             'derivatives_fmriprep_anat_t2w': 'derivatives/fmriprep/{}/anat/{}_*T2w*.nii.gz',
             'derivatives_fmriprep_figures': 'derivatives/fmriprep/{}/figures/{}_*',
-            'derivatives_mriqc_func': 'derivatives/mriqc/{}/func/{}_task-*_*.html',
+            'derivatives_mriqc_func': 'derivatives/mriqc/{}/func/{}_task-hammer*_*.html',
+            'derivatives_mriqc_func_stroop': 'derivatives/mriqc/{}/func/{}_task-stroop*_*.html',
             'derivatives_mriqc_anat': 'derivatives/mriqc/{}/anat/{}_*T1w*.html',
             'phenotype': 'phenotype/*.tsv',
             'participants': 'participants.tsv',
@@ -394,20 +401,24 @@ def main():
     """Main execution function"""
     # Define available data types for argument parsing
     available_data_types = [
-        'raw_nifti', 'json_metadata', 'events', 'anatomical', 'anatomical_t2w',
-        'anatomical_json', 'anatomical_t2w_json', 'physio', 'behavioral',
-        'derivatives_fmriprep_func', 'derivatives_fmriprep_anat', 'derivatives_fmriprep_anat_t2w',
-        'derivatives_fmriprep_figures', 'derivatives_mriqc_func', 'derivatives_mriqc_anat',
-        'phenotype', 'participants', 'dataset_description'
+        'raw_nifti', 'raw_nifti_stroop', 'json_metadata', 'json_metadata_stroop', 
+        'events', 'events_stroop', 'anatomical', 'anatomical_t2w',
+        'anatomical_json', 'anatomical_t2w_json', 'physio', 'physio_stroop', 
+        'behavioral', 'behavioral_stroop', 'derivatives_fmriprep_func', 'derivatives_fmriprep_func_stroop',
+        'derivatives_fmriprep_anat', 'derivatives_fmriprep_anat_t2w',
+        'derivatives_fmriprep_figures', 'derivatives_mriqc_func', 'derivatives_mriqc_func_stroop', 
+        'derivatives_mriqc_anat', 'phenotype', 'participants', 'dataset_description'
     ]
 
     parser = argparse.ArgumentParser(description='Fetch data for filtered TCP subjects using datalad')
     parser.add_argument('--data-types', nargs='+',
                        choices=available_data_types,
-                       default=['raw_nifti', 'json_metadata', 'events', 'anatomical', 'anatomical_json',
-                                'derivatives_fmriprep_func', 'derivatives_fmriprep_anat', 'derivatives_mriqc_func',
+                       default=['raw_nifti', 'raw_nifti_stroop', 'json_metadata', 'json_metadata_stroop', 
+                                'events', 'events_stroop', 'anatomical', 'anatomical_json',
+                                'derivatives_fmriprep_func', 'derivatives_fmriprep_func_stroop', 
+                                'derivatives_fmriprep_anat', 'derivatives_mriqc_func', 'derivatives_mriqc_func_stroop',
                                 'derivatives_mriqc_anat', 'phenotype', 'participants', 'dataset_description'],
-                       help='Data types to fetch (default: all task-related, anatomical, and phenotypic data)')
+                       help='Data types to fetch (default: hammer and stroop task data, anatomical, and phenotypic data)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,
