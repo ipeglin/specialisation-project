@@ -481,6 +481,56 @@ class DataladDataFetcher:
         self.logger.info(f"Summary report saved to: {report_file}")
         return report_file
 
+def detect_filtered_subjects_path() -> Path:
+    """Automatically detect the path to filtered subjects from new pipeline"""
+    
+    # Option 1: Use filter_subjects output (latest filtering step)
+    filter_subjects_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects', 'included')
+    patient_file = filter_subjects_dir / 'patient_subjects.csv'
+    control_file = filter_subjects_dir / 'control_subjects.csv'
+    
+    if patient_file.exists() and control_file.exists():
+        print(f"✓ Found task-filtered subjects: {filter_subjects_dir}")
+        return filter_subjects_dir
+    
+    # Option 2: Use phenotype filtered subjects (if filter_subjects not run)
+    phenotype_dir = get_script_output_path('tcp_preprocessing', 'filter_phenotype')
+    phenotype_file = phenotype_dir / 'phenotype_filtered_subjects.csv'
+    
+    if phenotype_file.exists():
+        print(f"⚠ Using phenotype filtered subjects: {phenotype_dir}")
+        print(f"  Consider running filter_subjects.py for task data filtering")
+        return phenotype_dir
+    
+    # Option 3: Use validated subjects (if no filtering done)
+    validation_dir = get_script_output_path('tcp_preprocessing', 'validate_subjects')
+    validation_file = validation_dir / 'valid_subjects.csv'
+    
+    if validation_file.exists():
+        print(f"⚠ Using all validated subjects: {validation_dir}")
+        print(f"  Consider running filter_phenotype.py and filter_subjects.py")
+        return validation_dir
+    
+    # Option 4: Fallback to legacy extract_subjects
+    extract_dir = get_script_output_path('tcp_preprocessing', 'extract_subjects')
+    extract_patient_file = extract_dir / 'patient_subjects.csv'
+    extract_control_file = extract_dir / 'control_subjects.csv'
+    
+    if extract_patient_file.exists() and extract_control_file.exists():
+        print(f"⚠ Using legacy extract_subjects output: {extract_dir}")
+        print(f"  Consider running the new pipeline for better optimization")
+        return extract_dir
+    
+    # No valid subjects found
+    raise FileNotFoundError(
+        "No filtered subjects found. Please run the preprocessing pipeline:\n"
+        "  1. initialize_dataset.py (if dataset not cloned)\n"
+        "  2. validate_subjects.py (required)\n"
+        "  3. fetch_global_data.py (required for phenotype filtering)\n"
+        "  4. filter_phenotype.py (optional, for diagnosis filtering)\n"
+        "  5. filter_subjects.py (required, for task data filtering)"
+    )
+
 def main():
     """Main execution function"""
     # Define available data types for argument parsing
@@ -502,13 +552,19 @@ def main():
     parser.add_argument('--dataset-path', type=Path,
                        help='Override dataset path (default: from config)')
     parser.add_argument('--included-path', type=Path,
-                       help='Override included subjects path (default: from config)')
+                       help='Override included subjects path (auto-detected by default)')
 
     args = parser.parse_args()
 
     # Get paths
     dataset_path = args.dataset_path or get_tcp_dataset_path()
-    included_path = args.included_path or get_script_output_path('tcp_preprocessing', 'filter_subjects', 'included')
+    
+    # Auto-detect included subjects path if not provided
+    if args.included_path:
+        included_path = args.included_path
+        print(f"Using specified subjects path: {included_path}")
+    else:
+        included_path = detect_filtered_subjects_path()
 
     print("TCP Dataset Data Fetcher")
     print("========================")
