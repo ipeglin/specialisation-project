@@ -13,7 +13,7 @@ import sys
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import argparse
 import logging
@@ -34,54 +34,65 @@ class DataladDataFetcher:
         self.dry_run = dry_run
         self.logger = self._setup_logging()
 
-        # Data type patterns for selective fetching (no sessions in this dataset)
+        # Data type patterns for task-related, anatomical, and phenotypic data (hammer and stroop only, no rest scans)
         self.data_patterns = {
-            'raw_nifti': '{}/func/{}_task-*_bold.nii.gz',
-            'derivatives_fmriprep': 'derivatives/fmriprep/{}/func/{}_task-*_*bold*.nii.gz', 
-            'derivatives_mriqc': 'derivatives/mriqc/{}/func/{}_task-*_*.html',
-            'events': '{}/func/{}_task-*_events.tsv',
-            'anatomical': '{}/anat/{}_T1w.nii.gz',
-            'derivatives_anat': 'derivatives/fmriprep/{}/anat/{}_*T1w*.nii.gz'
+            # Raw fMRI
+            'raw_nifti_hammer': '{}/func/{}_task-hammer*_bold.nii.gz',
+            'raw_nifti_stroop': '{}/func/{}_task-stroop*_bold.nii.gz',
+            'json_metadata_hammer': '{}/func/{}_task-hammer*_bold.json',
+            'json_metadata_stroop': '{}/func/{}_task-stroop*_bold.json',
+            'events_hammer': '{}/func/{}_task-hammer*_events.tsv',
+            'events_stroop': '{}/func/{}_task-stroop*_events.tsv',
+            # Anatomical scans
+            'anatomical_t1w': '{}/anat/{}_*T1w.nii.gz',
+            'anatomical_t2w': '{}/anat/{}_*T2w.nii.gz',
+            'anatomical_t1w_json': '{}/anat/{}_*T1w.json',
+            'anatomical_t2w_json': '{}/anat/{}_*T2w.json',
+            # Phenotype
+            'phenotype': 'phenotype/*.tsv',
+            'participants': 'participants.tsv',
+            'dataset_description': 'dataset_description.json'
         }
 
     def _setup_logging(self) -> logging.Logger:
-        """Setup logging for the data fetching process"""
-        # Create logs directory
-        log_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
-        log_dir.mkdir(parents=True, exist_ok=True)
-
+        """Setup logging for the data fetching process with error handling"""
         # Setup logger
         logger = logging.getLogger('datalad_fetcher')
         logger.setLevel(logging.INFO)
 
-        # File handler
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file = log_dir / f'fetch_data_{timestamp}.log'
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.INFO)
-
-        # Console handler
+        # Console handler (always works)
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-
-        # Formatter
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
         console_handler.setFormatter(formatter)
-
-        logger.addHandler(file_handler)
         logger.addHandler(console_handler)
+
+        # Try to add file handler, but don't fail if there are I/O issues
+        try:
+            log_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_file = log_dir / f'fetch_data_{timestamp}.log'
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            print(f"Logging to: {log_file}")
+        except (OSError, IOError) as e:
+            print(f"WARNING: Could not create log file due to I/O error: {e}")
+            print("Continuing with console logging only...")
 
         return logger
 
-    def load_included_subjects(self) -> Set[str]:
+    def load_included_subjects(self) -> List[str]:
         """Load the list of included subjects from the filtering pipeline output"""
         self.logger.info(f"Loading included subjects from {self.included_subjects_path}")
 
         included_subjects = set()
 
         # Look for patient and control CSV files
-        # 
+        #
         patient_file = self.included_subjects_path / 'patient_subjects.csv'
         control_file = self.included_subjects_path / 'control_subjects.csv'
 
@@ -95,7 +106,7 @@ class DataladDataFetcher:
                         id_column = 'subject_id'
                     elif 'participant_id' in df.columns:
                         id_column = 'participant_id'
-                    
+
                     if id_column:
                         subjects = df[id_column].tolist()
                         included_subjects.update(subjects)
@@ -107,8 +118,10 @@ class DataladDataFetcher:
             else:
                 self.logger.warning(f"File not found: {file_path}")
 
-        self.logger.info(f"Total included subjects: {len(included_subjects)}")
-        return included_subjects
+        # Return sorted list to ensure deterministic processing order while maintaining uniqueness
+        sorted_subjects = sorted(list(included_subjects))
+        self.logger.info(f"Total included subjects: {len(sorted_subjects)} (sorted alphabetically)")
+        return sorted_subjects
 
     def check_dataset_status(self) -> bool:
         """Check if the dataset path is a valid datalad repository"""
@@ -142,16 +155,49 @@ class DataladDataFetcher:
 
         return True
 
-    def find_actual_files(self, subject_ids: Set[str], data_types: List[str]) -> Dict[str, List[str]]:
+    def is_file_downloaded(self, file_path: Path) -> bool:
+        """Check if a file has been downloaded (not a git-annex symlink)"""
+        try:
+            full_path = self.dataset_path / file_path
+            if not full_path.exists():
+                return False
+
+            # Check if it's a symlink pointing to git-annex
+            if full_path.is_symlink():
+                link_target = str(full_path.readlink())
+                if '.git/annex/objects' in link_target:
+                    # It's still a git-annex symlink, not downloaded
+                    return False
+
+            # Check if it's an actual file with content
+            return full_path.stat().st_size > 0
+
+        except (OSError, IOError):
+            return False
+
+    def find_actual_files(self, subject_ids: List[str], data_types: List[str]) -> Tuple[Dict[str, List[str]], List[str]]:
         """Find actual files that exist for the given subjects and data types"""
         import glob
-        
+
         subject_files = {}
-        
+        global_files = []  # Files that are dataset-wide, not subject-specific
+
+        # Handle global (non-subject-specific) files first
+        global_data_types = ['phenotype', 'participants', 'dataset_description']
+        for data_type in data_types:
+            if data_type in global_data_types and data_type in self.data_patterns:
+                pattern = self.data_patterns[data_type]
+                full_pattern = str(self.dataset_path / pattern)
+                matching_files = glob.glob(full_pattern)
+                relative_files = [str(Path(f).relative_to(self.dataset_path)) for f in matching_files]
+                global_files.extend(relative_files)
+                self.logger.info(f"Found {len(relative_files)} {data_type} files (dataset-wide)")
+
+        # Handle subject-specific files
         for subject_id in subject_ids:
             files = []
             for data_type in data_types:
-                if data_type in self.data_patterns:
+                if data_type in self.data_patterns and data_type not in global_data_types:
                     pattern = self.data_patterns[data_type].format(subject_id, subject_id)
                     # Use glob to find actual files matching the pattern
                     full_pattern = str(self.dataset_path / pattern)
@@ -160,18 +206,22 @@ class DataladDataFetcher:
                     relative_files = [str(Path(f).relative_to(self.dataset_path)) for f in matching_files]
                     files.extend(relative_files)
                     self.logger.debug(f"Found {len(relative_files)} {data_type} files for {subject_id}")
-                else:
+                elif data_type not in global_data_types and data_type not in self.data_patterns:
                     self.logger.warning(f"Unknown data type: {data_type}")
-            
+
             if files:
                 subject_files[subject_id] = files
-                self.logger.info(f"Found {len(files)} total files for {subject_id}")
+                self.logger.info(f"Found {len(files)} subject-specific files for {subject_id}")
             else:
-                self.logger.warning(f"No files found for {subject_id}")
-                
-        return subject_files
+                self.logger.warning(f"No subject-specific files found for {subject_id}")
 
-    def fetch_data(self, subject_ids: Set[str], data_types: List[str] = None) -> Dict[str, bool]:
+        # Return both subject-specific files and global files separately
+        if global_files:
+            self.logger.info(f"Found {len(global_files)} dataset-wide files (phenotype, participants, etc.) for processing")
+
+        return subject_files, global_files
+
+    def fetch_data(self, subject_ids: List[str], data_types: List[str] = None) -> Dict[str, bool]:
         """Fetch data for specified subjects and data types using datalad get"""
         if data_types is None:
             data_types = ['raw_nifti', 'events']  # Default to essential data
@@ -183,22 +233,93 @@ class DataladDataFetcher:
             self.logger.info("DRY RUN MODE - No actual data will be fetched")
 
         # Find actual files that exist
-        subject_files = self.find_actual_files(subject_ids, data_types)
+        subject_files, global_files = self.find_actual_files(subject_ids, data_types)
         fetch_results = {}
 
+        # Calculate overall statistics
+        total_subject_files = sum(len(files) for files in subject_files.values())
+        total_files = total_subject_files + len(global_files)
+        files_already_downloaded = 0
+        files_to_download = 0
+
+        # Check subject-specific files
         for subject_id, file_list in subject_files.items():
-            self.logger.info(f"Fetching data for subject: {subject_id} ({len(file_list)} files)")
+            for file_path in file_list:
+                if self.is_file_downloaded(Path(file_path)):
+                    files_already_downloaded += 1
+                else:
+                    files_to_download += 1
+
+        # Check global files
+        for file_path in global_files:
+            if self.is_file_downloaded(Path(file_path)):
+                files_already_downloaded += 1
+            else:
+                files_to_download += 1
+
+        try:
+            self.logger.info(f"Overall progress: {files_already_downloaded}/{total_files} files already downloaded")
+            self.logger.info(f"Need to download: {files_to_download} files")
+        except (OSError, IOError):
+            print(f"Overall progress: {files_already_downloaded}/{total_files} files already downloaded")
+            print(f"Need to download: {files_to_download} files")
+
+        # Track progress
+        total_subjects = len(subject_files)
+        current_subject = 0
+
+        for subject_id, file_list in subject_files.items():
+            current_subject += 1
+            try:
+                self.logger.info(f"[{current_subject}/{total_subjects}] Fetching data for subject: {subject_id} ({len(file_list)} files)")
+            except (OSError, IOError):
+                print(f"[{current_subject}/{total_subjects}] Fetching data for subject: {subject_id} ({len(file_list)} files)")
 
             success = True
+            files_to_download = []
+            files_already_downloaded = 0
+
+            # First pass: check which files need downloading
             for file_path in file_list:
+                if self.is_file_downloaded(Path(file_path)):
+                    files_already_downloaded += 1
+                else:
+                    files_to_download.append(file_path)
+
+            if files_already_downloaded > 0:
+                try:
+                    self.logger.info(f"  {files_already_downloaded} files already downloaded")
+                except (OSError, IOError):
+                    print(f"  {files_already_downloaded} files already downloaded")
+
+            if len(files_to_download) == 0:
+                try:
+                    self.logger.info(f"  All files already downloaded for {subject_id}")
+                except (OSError, IOError):
+                    print(f"  All files already downloaded for {subject_id}")
+                continue
+
+            try:
+                self.logger.info(f"  Downloading {len(files_to_download)} files...")
+            except (OSError, IOError):
+                print(f"  Downloading {len(files_to_download)} files...")
+
+            # Second pass: download files that need it
+            for i, file_path in enumerate(files_to_download, 1):
                 try:
                     if self.dry_run:
-                        self.logger.info(f"[DRY RUN] Would fetch: {file_path}")
+                        try:
+                            self.logger.info(f"  [{i}/{len(files_to_download)}] [DRY RUN] Would fetch: {file_path}")
+                        except (OSError, IOError):
+                            print(f"  [{i}/{len(files_to_download)}] [DRY RUN] Would fetch: {file_path}")
                         continue
 
                     # Use datalad get to fetch the specific file
                     cmd = ['datalad', 'get', file_path]
-                    self.logger.info(f"Running: {' '.join(cmd)}")
+                    try:
+                        self.logger.info(f"  [{i}/{len(files_to_download)}] Downloading: {Path(file_path).name}")
+                    except (OSError, IOError):
+                        print(f"  [{i}/{len(files_to_download)}] Downloading: {Path(file_path).name}")
 
                     result = subprocess.run(
                         cmd,
@@ -209,27 +330,118 @@ class DataladDataFetcher:
                     )
 
                     if result.returncode == 0:
-                        self.logger.info(f"Successfully fetched: {file_path}")
+                        try:
+                            self.logger.info(f"    ✓ Downloaded successfully")
+                        except (OSError, IOError):
+                            print(f"    ✓ Downloaded successfully")
                     else:
                         stderr_msg = result.stderr.strip() if result.stderr else "No error message"
                         stdout_msg = result.stdout.strip() if result.stdout else "No output"
-                        self.logger.warning(f"Failed to fetch {file_path}")
-                        self.logger.warning(f"  Return code: {result.returncode}")
-                        self.logger.warning(f"  STDERR: {stderr_msg}")
-                        self.logger.warning(f"  STDOUT: {stdout_msg}")
+                        try:
+                            self.logger.warning(f"    ✗ Download failed: {stderr_msg}")
+                        except (OSError, IOError):
+                            print(f"    ✗ Download failed: {stderr_msg}")
                         # Don't mark as failure if files don't exist (common for optional data)
                         if "No such file" not in stderr_msg and "not found" not in stderr_msg and "nothing to get" not in stdout_msg.lower():
                             success = False
 
                 except subprocess.TimeoutExpired:
-                    self.logger.error(f"Timeout fetching {file_path}")
+                    try:
+                        self.logger.error(f"    ✗ Timeout downloading {Path(file_path).name}")
+                    except (OSError, IOError):
+                        print(f"    ✗ Timeout downloading {Path(file_path).name}")
                     success = False
                 except Exception as e:
-                    self.logger.error(f"Error fetching {file_path}: {e}")
+                    try:
+                        self.logger.error(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                    except (OSError, IOError):
+                        print(f"    ✗ Error downloading {Path(file_path).name}: {e}")
                     success = False
 
             fetch_results[subject_id] = success
-            
+
+        # Handle global (dataset-wide) files
+        if global_files:
+            try:
+                self.logger.info(f"Processing {len(global_files)} dataset-wide files (phenotype, participants, etc.)")
+            except (OSError, IOError):
+                print(f"Processing {len(global_files)} dataset-wide files (phenotype, participants, etc.)")
+
+            global_files_to_download = []
+            global_files_already_downloaded = 0
+
+            # Check which global files need downloading
+            for file_path in global_files:
+                if self.is_file_downloaded(Path(file_path)):
+                    global_files_already_downloaded += 1
+                else:
+                    global_files_to_download.append(file_path)
+
+            if global_files_already_downloaded > 0:
+                try:
+                    self.logger.info(f"  {global_files_already_downloaded} dataset-wide files already downloaded")
+                except (OSError, IOError):
+                    print(f"  {global_files_already_downloaded} dataset-wide files already downloaded")
+
+            if len(global_files_to_download) > 0:
+                try:
+                    self.logger.info(f"  Downloading {len(global_files_to_download)} dataset-wide files...")
+                except (OSError, IOError):
+                    print(f"  Downloading {len(global_files_to_download)} dataset-wide files...")
+
+                # Download global files
+                for i, file_path in enumerate(global_files_to_download, 1):
+                    try:
+                        if self.dry_run:
+                            try:
+                                self.logger.info(f"  [{i}/{len(global_files_to_download)}] [DRY RUN] Would fetch: {file_path}")
+                            except (OSError, IOError):
+                                print(f"  [{i}/{len(global_files_to_download)}] [DRY RUN] Would fetch: {file_path}")
+                            continue
+
+                        # Use datalad get to fetch the specific file
+                        cmd = ['datalad', 'get', file_path]
+                        try:
+                            self.logger.info(f"  [{i}/{len(global_files_to_download)}] Downloading: {Path(file_path).name}")
+                        except (OSError, IOError):
+                            print(f"  [{i}/{len(global_files_to_download)}] Downloading: {Path(file_path).name}")
+
+                        result = subprocess.run(
+                            cmd,
+                            cwd=self.dataset_path,
+                            capture_output=True,
+                            text=True,
+                            timeout=300  # 5 minute timeout per file
+                        )
+
+                        if result.returncode == 0:
+                            try:
+                                self.logger.info(f"    ✓ Downloaded successfully")
+                            except (OSError, IOError):
+                                print(f"    ✓ Downloaded successfully")
+                        else:
+                            stderr_msg = result.stderr.strip() if result.stderr else "No error message"
+                            try:
+                                self.logger.warning(f"    ✗ Download failed: {stderr_msg}")
+                            except (OSError, IOError):
+                                print(f"    ✗ Download failed: {stderr_msg}")
+
+                    except subprocess.TimeoutExpired:
+                        try:
+                            self.logger.error(f"    ✗ Timeout downloading {Path(file_path).name}")
+                        except (OSError, IOError):
+                            print(f"    ✗ Timeout downloading {Path(file_path).name}")
+                    except Exception as e:
+                        try:
+                            self.logger.error(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                        except (OSError, IOError):
+                            print(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+            else:
+                try:
+                    self.logger.info(f"  All dataset-wide files already downloaded")
+                except (OSError, IOError):
+                    print(f"  All dataset-wide files already downloaded")
+
         # Handle subjects with no files found
         for subject_id in subject_ids:
             if subject_id not in fetch_results:
@@ -238,7 +450,7 @@ class DataladDataFetcher:
 
         return fetch_results
 
-    def generate_summary_report(self, fetch_results: Dict[str, bool], subject_ids: Set[str],
+    def generate_summary_report(self, fetch_results: Dict[str, bool], subject_ids: List[str],
                               data_types: List[str]) -> Path:
         """Generate a summary report of the data fetching process"""
         report_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
@@ -269,31 +481,90 @@ class DataladDataFetcher:
         self.logger.info(f"Summary report saved to: {report_file}")
         return report_file
 
+def detect_filtered_subjects_path() -> Path:
+    """Automatically detect the path to filtered subjects from new pipeline"""
+    
+    # Option 1: Use filter_subjects output (latest filtering step)
+    filter_subjects_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects', 'included')
+    patient_file = filter_subjects_dir / 'patient_subjects.csv'
+    control_file = filter_subjects_dir / 'control_subjects.csv'
+    
+    if patient_file.exists() and control_file.exists():
+        print(f"✓ Found task-filtered subjects: {filter_subjects_dir}")
+        return filter_subjects_dir
+    
+    # Option 2: Use phenotype filtered subjects (if filter_subjects not run)
+    phenotype_dir = get_script_output_path('tcp_preprocessing', 'filter_phenotype')
+    phenotype_file = phenotype_dir / 'phenotype_filtered_subjects.csv'
+    
+    if phenotype_file.exists():
+        print(f"⚠ Using phenotype filtered subjects: {phenotype_dir}")
+        print(f"  Consider running filter_subjects.py for task data filtering")
+        return phenotype_dir
+    
+    # Option 3: Use validated subjects (if no filtering done)
+    validation_dir = get_script_output_path('tcp_preprocessing', 'validate_subjects')
+    validation_file = validation_dir / 'valid_subjects.csv'
+    
+    if validation_file.exists():
+        print(f"⚠ Using all validated subjects: {validation_dir}")
+        print(f"  Consider running filter_phenotype.py and filter_subjects.py")
+        return validation_dir
+    
+    # Option 4: Fallback to legacy extract_subjects
+    extract_dir = get_script_output_path('tcp_preprocessing', 'extract_subjects')
+    extract_patient_file = extract_dir / 'patient_subjects.csv'
+    extract_control_file = extract_dir / 'control_subjects.csv'
+    
+    if extract_patient_file.exists() and extract_control_file.exists():
+        print(f"⚠ Using legacy extract_subjects output: {extract_dir}")
+        print(f"  Consider running the new pipeline for better optimization")
+        return extract_dir
+    
+    # No valid subjects found
+    raise FileNotFoundError(
+        "No filtered subjects found. Please run the preprocessing pipeline:\n"
+        "  1. initialize_dataset.py (if dataset not cloned)\n"
+        "  2. validate_subjects.py (required)\n"
+        "  3. fetch_global_data.py (required for phenotype filtering)\n"
+        "  4. filter_phenotype.py (optional, for diagnosis filtering)\n"
+        "  5. filter_subjects.py (required, for task data filtering)"
+    )
+
 def main():
     """Main execution function"""
     # Define available data types for argument parsing
     available_data_types = [
-        'raw_nifti', 'derivatives_fmriprep', 'derivatives_mriqc',
-        'events', 'anatomical', 'derivatives_anat'
+        'raw_nifti_hammer', 'raw_nifti_stroop', 'json_metadata_hammer', 'json_metadata_stroop',
+        'events_hammer', 'events_stroop', 'anatomical_t1w', 'anatomical_t2w',
+        'anatomical_t1w_json', 'anatomical_t2w_json', 'phenotype', 'participants', 'dataset_description'
     ]
 
     parser = argparse.ArgumentParser(description='Fetch data for filtered TCP subjects using datalad')
     parser.add_argument('--data-types', nargs='+',
                        choices=available_data_types,
-                       default=['raw_nifti', 'events'],
-                       help='Data types to fetch (default: raw_nifti events)')
+                       default=['raw_nifti_hammer', 'raw_nifti_stroop', 'json_metadata_hammer', 'json_metadata_stroop',
+                                'events_hammer', 'events_stroop', 'anatomical_t1w', 'anatomical_t2w', 'anatomical_t1w_json', 'anatomical_t2w_json',
+                                'phenotype', 'participants', 'dataset_description'],
+                       help='Data types to fetch (default: hammer and stroop task data, anatomical, and phenotypic data)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,
                        help='Override dataset path (default: from config)')
     parser.add_argument('--included-path', type=Path,
-                       help='Override included subjects path (default: from config)')
+                       help='Override included subjects path (auto-detected by default)')
 
     args = parser.parse_args()
 
     # Get paths
     dataset_path = args.dataset_path or get_tcp_dataset_path()
-    included_path = args.included_path or get_script_output_path('tcp_preprocessing', 'filter_subjects', 'included')
+    
+    # Auto-detect included subjects path if not provided
+    if args.included_path:
+        included_path = args.included_path
+        print(f"Using specified subjects path: {included_path}")
+    else:
+        included_path = detect_filtered_subjects_path()
 
     print("TCP Dataset Data Fetcher")
     print("========================")
