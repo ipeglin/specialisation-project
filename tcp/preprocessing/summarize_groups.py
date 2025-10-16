@@ -85,9 +85,22 @@ class GroupSummarizer:
         """Merge group information into subjects dataframe"""
         print("Merging group information...")
 
-        # Ensure participant_id column for merging
-        if 'participant_id' not in demos_df.columns:
-            raise ValueError("participant_id column not found in phenotype data")
+        # Find the participant ID column (handle different naming conventions)
+        participant_id_col = None
+        possible_names = ['participant_id', 'src_subject_id', 'subjectkey', 'subject_id']
+
+        for col_name in possible_names:
+            if col_name in demos_df.columns:
+                participant_id_col = col_name
+                print(f"  Using '{col_name}' as participant ID column")
+                break
+
+        if participant_id_col is None:
+            raise ValueError(
+                f"No participant ID column found in phenotype data. "
+                f"Looked for: {possible_names}. "
+                f"Available columns: {list(demos_df.columns)}"
+            )
 
         # Handle subject_id format conversion if needed
         subjects_for_merge = subjects_df.copy()
@@ -102,18 +115,28 @@ class GroupSummarizer:
         else:
             raise ValueError("subject_id column not found in subjects data")
 
+        # Select columns for merge (only those that exist)
+        merge_columns = [participant_id_col]
+        optional_columns = ['Group', 'sex', 'age', 'Primary_Dx', 'Site']
+        for col in optional_columns:
+            if col in demos_df.columns:
+                merge_columns.append(col)
+
         # Merge with demos data
         merged = subjects_for_merge.merge(
-            demos_df[['participant_id', 'Group', 'sex', 'age', 'Primary_Dx', 'Site']],
+            demos_df[merge_columns],
             left_on='participant_id_for_merge',
-            right_on='participant_id',
+            right_on=participant_id_col,
             how='left'
         )
 
         # Check for missing Group assignments
-        missing_group = merged['Group'].isna().sum()
-        if missing_group > 0:
-            print(f"  ⚠ Warning: {missing_group} subjects missing Group assignment")
+        if 'Group' in merged.columns:
+            missing_group = merged['Group'].isna().sum()
+            if missing_group > 0:
+                print(f"  ⚠ Warning: {missing_group} subjects missing Group assignment")
+        else:
+            print(f"  ⚠ Warning: 'Group' column not found in merged data - group analysis will be limited")
 
         print(f"  Merged successfully")
 
@@ -125,6 +148,11 @@ class GroupSummarizer:
 
         # Group subjects
         groups = {}
+
+        # Check if Group column exists
+        if 'Group' not in subjects_with_groups.columns:
+            print("  ⚠ Warning: 'Group' column not found - cannot calculate group statistics")
+            return groups
 
         for group_name in ['Patient', 'GenPop']:
             group_subjects = subjects_with_groups[subjects_with_groups['Group'] == group_name]
@@ -207,7 +235,14 @@ class GroupSummarizer:
         self._export_text_report(groups, subjects_with_groups)
 
         # 3. Export flat CSV with group assignments
-        group_csv = subjects_with_groups[['subject_id', 'Group', 'sex', 'age', 'Site', 'Primary_Dx']].copy()
+        # Select only columns that exist
+        csv_columns = ['subject_id']
+        optional_csv_columns = ['Group', 'sex', 'age', 'Site', 'Primary_Dx']
+        for col in optional_csv_columns:
+            if col in subjects_with_groups.columns:
+                csv_columns.append(col)
+
+        group_csv = subjects_with_groups[csv_columns].copy()
         group_csv.to_csv(self.output_dir / "subjects_with_groups.csv", index=False)
         print(f"  ✓ Subjects with groups CSV: subjects_with_groups.csv")
 
