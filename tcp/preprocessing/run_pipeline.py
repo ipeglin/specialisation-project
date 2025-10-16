@@ -31,6 +31,8 @@ class PipelineStep(Enum):
     FETCH_GLOBAL_DATA = "fetch_global_data"
     FILTER_PHENOTYPE = "filter_phenotype"
     FILTER_SUBJECTS = "filter_subjects"
+    SUMMARIZE_GROUPS = "summarize_groups"
+    MAP_SUBJECT_FILES = "map_subject_files"
     FETCH_MRI_DATA = "fetch_mri_data"
 
 class StepStatus(Enum):
@@ -76,9 +78,21 @@ class TCPPipeline:
             },
             PipelineStep.FILTER_SUBJECTS: {
                 'script': 'filter_subjects.py',
-                'description': 'Filter subjects with task fMRI data',
+                'description': 'Filter subjects with task fMRI data (group-agnostic)',
                 'required': True,
                 'estimated_time': '5-15 minutes'
+            },
+            PipelineStep.SUMMARIZE_GROUPS: {
+                'script': 'summarize_groups.py',
+                'description': 'Summarize patient/control groups (optional analytical step)',
+                'required': False,
+                'estimated_time': '1-2 minutes'
+            },
+            PipelineStep.MAP_SUBJECT_FILES: {
+                'script': 'map_subject_files.py',
+                'description': 'Map file paths for all filtered subjects',
+                'required': True,
+                'estimated_time': '5-10 minutes'
             },
             PipelineStep.FETCH_MRI_DATA: {
                 'script': 'fetch_filtered_data.py',
@@ -181,11 +195,20 @@ class TCPPipeline:
             return (phenotype_dir / 'phenotype_filtered_subjects.csv').exists()
         
         elif step == PipelineStep.FILTER_SUBJECTS:
-            # Check if subject filtering output exists
+            # Check if subject filtering output exists (new unified format)
             filter_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects')
-            included_dir = filter_dir / 'included'
-            return (included_dir / 'patient_subjects.csv').exists() and (included_dir / 'control_subjects.csv').exists()
-        
+            return (filter_dir / 'task_filtered_subjects.csv').exists()
+
+        elif step == PipelineStep.SUMMARIZE_GROUPS:
+            # Check if group summarization output exists (optional step)
+            summary_dir = get_script_output_path('tcp_preprocessing', 'summarize_groups')
+            return (summary_dir / 'group_summary.json').exists()
+
+        elif step == PipelineStep.MAP_SUBJECT_FILES:
+            # Check if file mapping output exists
+            mapping_dir = get_script_output_path('tcp_preprocessing', 'map_subject_files')
+            return (mapping_dir / 'subject_file_mapping.json').exists()
+
         elif step == PipelineStep.FETCH_MRI_DATA:
             # Check if MRI data fetching was completed
             fetch_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
