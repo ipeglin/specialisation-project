@@ -56,49 +56,57 @@ class TCPPipeline:
                 'script': 'initialize_dataset.py',
                 'description': 'Initialize and clone TCP dataset',
                 'required': True,
-                'estimated_time': '5-10 minutes'
+                'estimated_time': '5-10 minutes',
+                'timeout': 1800  # 30 minutes
             },
             PipelineStep.VALIDATE_SUBJECTS: {
                 'script': 'validate_subjects.py',
                 'description': 'Validate subject directory structure',
                 'required': True,
-                'estimated_time': '2-5 minutes'
+                'estimated_time': '2-5 minutes',
+                'timeout': 900  # 15 minutes
             },
             PipelineStep.FETCH_GLOBAL_DATA: {
                 'script': 'fetch_global_data.py',
                 'description': 'Fetch participants.tsv and phenotype files',
                 'required': True,
-                'estimated_time': '1-3 minutes'
+                'estimated_time': '1-3 minutes',
+                'timeout': 600  # 10 minutes
             },
             PipelineStep.FILTER_PHENOTYPE: {
                 'script': 'filter_phenotype.py',
                 'description': 'Filter subjects by diagnosis (MDD vs controls)',
                 'required': False,
-                'estimated_time': '1-2 minutes'
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
             },
             PipelineStep.FILTER_SUBJECTS: {
                 'script': 'filter_subjects.py',
                 'description': 'Filter subjects with task fMRI data (group-agnostic)',
                 'required': True,
-                'estimated_time': '5-15 minutes'
+                'estimated_time': '5-15 minutes',
+                'timeout': 1800  # 30 minutes
             },
             PipelineStep.SUMMARIZE_GROUPS: {
                 'script': 'summarize_groups.py',
                 'description': 'Summarize patient/control groups (optional analytical step)',
                 'required': False,
-                'estimated_time': '1-2 minutes'
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
             },
             PipelineStep.MAP_SUBJECT_FILES: {
                 'script': 'map_subject_files.py',
                 'description': 'Map file paths for all filtered subjects',
                 'required': True,
-                'estimated_time': '5-10 minutes'
+                'estimated_time': '5-10 minutes',
+                'timeout': 1200  # 20 minutes
             },
             PipelineStep.FETCH_MRI_DATA: {
                 'script': 'fetch_filtered_data.py',
                 'description': 'Download MRI data for filtered subjects',
                 'required': True,
-                'estimated_time': '30-120 minutes'
+                'estimated_time': '2-10 hours',
+                'timeout': 36000  # 10 hours
             }
         }
         
@@ -270,12 +278,14 @@ class TCPPipeline:
                     cmd.append('--dry-run')
             
             # Execute step
+            step_timeout = step_info.get('timeout', 7200)  # Default 2 hours if not specified
             print(f"Executing: {' '.join(cmd)}")
+            print(f"Timeout: {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=7200  # 2 hour timeout
+                timeout=step_timeout
             )
             
             # Store results
@@ -301,7 +311,8 @@ class TCPPipeline:
                 return False
                 
         except subprocess.TimeoutExpired:
-            print(f"✗ Step timed out after 2 hours")
+            step_timeout = step_info.get('timeout', 7200)
+            print(f"✗ Step timed out after {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
             self.step_status[step] = StepStatus.FAILED
             self.save_pipeline_state()
             return False
