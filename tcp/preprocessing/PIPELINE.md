@@ -7,11 +7,15 @@ This document describes the optimized TCP preprocessing pipeline that minimizes 
 The new pipeline performs filtering **before** downloading large MRI files, reducing download requirements from ~1TB to only the data you need. The pipeline consists of the following steps:
 
 1. **Dataset Initialization** - Clone and validate dataset
-2. **Subject Validation** - Check subject directory structure  
+2. **Subject Validation** - Check subject directory structure
 3. **Global Data Fetching** - Download metadata files for filtering
 4. **Phenotype Filtering** (Optional) - Filter by diagnosis (MDD vs controls)
-5. **Task Data Filtering** - Filter subjects with hammer/stroop task data
-6. **MRI Data Fetching** - Download actual MRI files for selected subjects
+5. **Task Data Filtering** - Filter subjects with hammer/stroop task data (group-agnostic)
+6. **Group Summarization** (Optional) - Generate patient/control statistics
+7. **File Path Mapping** - Map all data files for filtered subjects
+8. **MRI Data Fetching** - Download actual MRI files for selected subjects
+
+**Key Design Principle**: Filtering is group-agnostic. All subjects are processed equally during filtering, regardless of patient/control status. Group classification is only used for analytical summaries and does not affect data organization.
 
 ## Quick Start
 
@@ -43,10 +47,16 @@ python3 tcp/preprocessing/fetch_global_data.py
 # Step 4: (Optional) Filter by phenotype/diagnosis
 python3 tcp/preprocessing/filter_phenotype.py
 
-# Step 5: Filter subjects with task data
+# Step 5: Filter subjects with task data (group-agnostic)
 python3 tcp/preprocessing/filter_subjects.py
 
-# Step 6: Download MRI data for filtered subjects
+# Step 6: (Optional) Summarize patient/control groups
+python3 tcp/preprocessing/summarize_groups.py
+
+# Step 7: Map file paths for all filtered subjects
+python3 tcp/preprocessing/map_subject_files.py
+
+# Step 8: Download MRI data for filtered subjects
 python3 tcp/preprocessing/fetch_filtered_data.py
 ```
 
@@ -134,9 +144,9 @@ python3 tcp/preprocessing/filter_phenotype.py --include-mdd --include-controls
 - `--max-age Y` - Maximum age (inclusive)
 - `--custom-filters` - Custom column:value filters
 
-### 5. Task Data Filtering (`filter_subjects.py`)
+### 5. Task Data Filtering (`filter_subjects.py`) - **REFACTORED**
 
-**Purpose**: Filter subjects who have hammer and/or stroop task fMRI data.
+**Purpose**: Filter subjects who have hammer and/or stroop task fMRI data. **Group-agnostic filtering** - processes all subjects equally.
 
 ```bash
 # Default: Require at least one task (hammer OR stroop)
@@ -154,20 +164,69 @@ python3 tcp/preprocessing/filter_subjects.py --data-types raw_nifti events
 - Scans dataset for task-specific files (hammer/stroop)
 - Filters subjects with at least one task (default) or all tasks
 - Checks across multiple data types (raw NIFTI, timeseries, events)
-- Uses existing filter pipeline architecture
+- **NEW**: Outputs unified subject list (no patient/control split)
+- Tracks which filters were applied and detailed inclusion/exclusion reasons
 
 **Input Auto-detection**:
 1. Uses phenotype filtered subjects (if available)
 2. Falls back to validated subjects
-3. Falls back to legacy extract_subjects output
+3. Falls back to legacy extract_subjects output (backward compatible)
+
+**Output** (New unified format):
+- `task_filtered_subjects.csv` - All subjects passing task filters (unified list)
+- `task_excluded_subjects.csv` - All subjects failing task filters
+- `task_filtering_summary.json` - Detailed filtering statistics
+- `filtering_reasons.json` - Per-subject inclusion/exclusion reasons
+
+**Note**: Group column (Patient/GenPop) is preserved in output CSV for later analysis, but filtering is group-agnostic.
+
+### 6. Group Summarization (`summarize_groups.py`) - **NEW** (Optional)
+
+**Purpose**: Generate analytical summary of patient/control group composition. **This is purely for understanding your data** - it does not affect data organization or downstream processing.
+
+```bash
+# Generate group statistics
+python3 tcp/preprocessing/summarize_groups.py
+```
+
+**What it does**:
+- Reads filtered subjects from `filter_subjects` output
+- Loads phenotype data to get Group classifications (Patient vs GenPop)
+- Calculates demographics by group (age, sex, site, diagnosis)
+- Computes task availability statistics per group
+- Creates both machine-readable (JSON) and human-readable (TXT) reports
 
 **Output**:
-- `included/patient_subjects.csv` - Patients with task data
-- `included/control_subjects.csv` - Controls with task data  
-- `excluded/` - Excluded subjects with reasons
-- `filtering_report.json` - Detailed filtering statistics
+- `group_summary.json` - Complete statistics breakdown
+- `group_breakdown.txt` - Human-readable report
+- `subjects_with_groups.csv` - Flat table with group assignments
 
-### 6. MRI Data Fetching (`fetch_filtered_data.py`)
+**When to use**: Run this step when you want to understand how many patients vs controls passed filtering, and their demographic characteristics. Skip this step if you don't need group-based statistics yet.
+
+### 7. File Path Mapping (`map_subject_files.py`) - **NEW**
+
+**Purpose**: Create comprehensive mapping of all data file paths for filtered subjects. **Group-agnostic** - maps files for all filtered subjects regardless of classification.
+
+```bash
+# Map all file paths
+python3 tcp/preprocessing/map_subject_files.py
+```
+
+**What it does**:
+- Scans dataset directory structure for each filtered subject
+- Discovers all available data files (raw NIFTI, events, anatomical, timeseries)
+- Handles both BIDS format (`sub-NDARINV...`) and timeseries format (`NDAR_INV...`)
+- Creates JSON mapping for efficient downstream processing
+- Identifies subjects missing expected data
+
+**Output**:
+- `subject_file_mapping.json` - **Main output**: Complete file paths for all subjects and global files
+- `file_mapping_summary.json` - Statistics on file availability
+- `missing_files_report.csv` - Subjects missing expected files
+
+**Why this step**: Pre-computing file paths makes the fetch step much faster and more reliable. The fetch script can simply read this mapping instead of discovering files at runtime.
+
+### 8. MRI Data Fetching (`fetch_filtered_data.py`)
 
 **Purpose**: Download actual MRI files for subjects passing all filters.
 
@@ -203,25 +262,34 @@ python3 tcp/preprocessing/fetch_filtered_data.py --data-types raw_nifti_hammer r
 - Potential reduction from ~1TB to ~100-200GB depending on filtering
 - Only download data for subjects of interest
 
-### 🎯 **Early Filtering** 
+### 🎯 **Early Filtering**
 - Filter by diagnosis before downloading large files
 - Apply age, sex, and other demographic filters
+- Group-agnostic task availability filtering
 - Customizable filtering criteria
 
 ### 🔧 **Modular Design**
 - Each step is independent and reusable
 - Can resume pipeline from any step
 - Easy to add new filtering criteria
+- Clean separation of concerns: Filtering → Analysis → Mapping → Fetching
 
 ### 📊 **Comprehensive Tracking**
 - Detailed inclusion/exclusion reasons at each step
 - Progress reporting and error handling
 - Pipeline state saving and resumption
+- Optional group statistics for understanding data composition
 
 ### 🔄 **Backward Compatible**
 - Works with existing analysis scripts
 - Maintains same output format as original pipeline
 - Legacy extract_subjects.py still supported
+
+### 🔬 **Group-Agnostic Architecture**
+- All subjects treated equally during filtering
+- Group classification decoupled from data organization
+- Optional analytical summaries for patient/control groups
+- No group-based subdirectories - simplified file structure
 
 ## Advanced Usage
 
@@ -231,15 +299,31 @@ python3 tcp/preprocessing/fetch_filtered_data.py --data-types raw_nifti_hammer r
 # Resume from phenotype filtering
 python3 tcp/preprocessing/run_pipeline.py --start-from filter_phenotype
 
-# Stop at subject filtering (don't download MRI data)
-python3 tcp/preprocessing/run_pipeline.py --stop-at filter_subjects
+# Resume from task filtering
+python3 tcp/preprocessing/run_pipeline.py --start-from filter_subjects
+
+# Stop at file mapping (don't download MRI data yet)
+python3 tcp/preprocessing/run_pipeline.py --stop-at map_subject_files
 ```
 
 ### Skip Optional Steps
 
 ```bash
-# Skip phenotype filtering (use all validated subjects)
+# Skip optional steps (phenotype filtering and group summarization)
 python3 tcp/preprocessing/run_pipeline.py --skip-optional
+```
+
+### Task Filtering Options
+
+```bash
+# Default: Require at least one task (hammer OR stroop)
+python3 tcp/preprocessing/filter_subjects.py
+
+# Require both tasks for inclusion
+python3 tcp/preprocessing/filter_subjects.py --require-all-tasks
+
+# Check only specific data types
+python3 tcp/preprocessing/filter_subjects.py --data-types raw_nifti events
 ```
 
 ### Custom Phenotype Filtering
@@ -271,7 +355,12 @@ If you were using the old `extract_subjects.py` pipeline:
    ```bash
    python3 tcp/preprocessing/run_pipeline.py
    ```
-3. **Benefits**: Reduced downloads, better filtering, progress tracking
+3. **Key Changes**:
+   - Unified subject lists (no patient/control split during filtering)
+   - Optional group summarization step for statistics
+   - Pre-computed file path mapping for faster fetching
+   - Group-agnostic data organization
+4. **Benefits**: Reduced downloads, better filtering, cleaner architecture, progress tracking
 
 ## Troubleshooting
 
@@ -292,7 +381,12 @@ If the orchestrator fails, run individual steps:
 ```bash
 python3 tcp/preprocessing/initialize_dataset.py
 python3 tcp/preprocessing/validate_subjects.py
-# etc.
+python3 tcp/preprocessing/fetch_global_data.py
+python3 tcp/preprocessing/filter_phenotype.py  # Optional
+python3 tcp/preprocessing/filter_subjects.py
+python3 tcp/preprocessing/summarize_groups.py  # Optional
+python3 tcp/preprocessing/map_subject_files.py
+python3 tcp/preprocessing/fetch_filtered_data.py
 ```
 
 ### Check Pipeline Status
