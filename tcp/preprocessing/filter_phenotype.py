@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
 from tcp.preprocessing.utils.phenotype_filters import (
-    PhenotypeFilter, PhenotypeFilterResult, PrimaryDiagnosisFilter,
+    PhenotypeFilter, PhenotypeFilterResult, PrimaryDiagnosisFilter, ShapsCompletionFilter,
     AgeRangeFilter, ColumnValueFilter, FilterAction
 )
 
@@ -80,6 +80,7 @@ class PhenotypeFilterPipeline:
         # Define phenotype files to load
         phenotype_files = {
             'demos': 'phenotype/demos.tsv',
+            'shaps01': 'phenotype/shaps01.tsv',
             'assessment': 'phenotype/assessment.tsv'
         }
 
@@ -363,6 +364,12 @@ def create_default_mdd_pipeline() -> PhenotypeFilterPipeline:
         include_control=True
     )
     pipeline.add_filter(primary_dx_filter)
+
+    # Add SHAPS questionnaire completion filter
+    shaps_completion_filter = ShapsCompletionFilter(
+        exclude_incomplete=True
+    )
+    pipeline.add_filter(shaps_completion_filter)
 
     """ Testing
     # Add age range filter (adults only, reasonable age range)

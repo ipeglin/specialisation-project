@@ -41,6 +41,16 @@ class GlobalDataFetcher:
                 'description': 'Demographic and diagnostic information',
                 'required': True
             },
+            'shaps': {
+                'path': 'phenotype/shaps01.tsv',
+                'description': 'Snaith-Hamilton pleasure scale questionnaire results',
+                'required': True
+            },
+            'shaps_definitions': {
+                'path': 'phenotype/shaps01_definitions.tsv',
+                'description': 'Snaith-Hamilton pleasure scale questionnaire definitions',
+                'required': False
+            },
             'dataset_description': {
                 'path': 'dataset_description.json',
                 'description': 'Dataset metadata',

@@ -331,6 +331,49 @@ class PrimaryDiagnosisFilter(ColumnValueFilter):
         else:
             return "Exclude all subjects (no valid criteria specified)"
 
+class ShapsCompletionFilter(ColumnValueFilter):
+    """Specialized filter for shaps_total column to identify subjects that have not completed the Snaith-Hamilton Please Scale(SHAPS) questionnaire"""
+
+    def __init__(self, exclude_incomplete: bool = True):
+        """
+        Initialize Shaps Completion filter for all subjects
+
+        Args:
+            exclude_incomplete: Whether to exclude subjects with "Missing/NK/NA" questionnaires (999)
+        """
+        self.exclude_incomplete = exclude_incomplete
+
+        # Define filter values based on what to include
+        filter_values = []
+        if exclude_incomplete:
+            filter_values.append("999")
+
+        super().__init__(
+            phenotype_file='shaps01',
+            column_name='shaps_total',
+            filter_values=filter_values,
+            match_type='contains',
+            case_sensitive=False,
+            action=FilterAction.EXCLUDE
+        )
+
+        # Override filter name and description
+        self.filter_name = "SHAPSCompletionFilter"
+        if not exclude_incomplete:
+            self.description = "Filter for subjects entered in the SHAPS questionnaire, but not necessarily completed it"
+        else: 
+            self.description = "Filter for subjects who have not completed the SHAPS questionnaire"
+
+    def get_criteria_description(self) -> str:
+        """Get human-readable description of filter criteria"""
+        criteria_parts = []
+        if self.exclude_incomplete:
+            criteria_parts.append("shaps_total = '999' (missing questionnaire)")
+
+        if criteria_parts:
+            return f"Exclude subjects exactly matching: {' OR '.join(criteria_parts)}"
+        else:
+            return "Include all subjects (no valid criteria specified)"
 
 class AgeRangeFilter(PhenotypeFilter):
     """Filter subjects based on age range"""
