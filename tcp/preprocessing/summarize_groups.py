@@ -10,19 +10,20 @@ Author: Ian Philip Eglin
 Date: 2025-10-16
 """
 
-import sys
 import argparse
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-import json
-from datetime import datetime
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
+from config.paths import get_script_output_path, get_tcp_dataset_path
 
 
 class GroupSummarizer:
@@ -82,17 +83,17 @@ class GroupSummarizer:
         return demos_df
 
     def merge_group_info(self, subjects_df: pd.DataFrame, demos_df: pd.DataFrame) -> pd.DataFrame:
-        """Merge group information into subjects dataframe"""
+        """Merge group information into subjects dataframe with automatic ID format detection"""
         print("Merging group information...")
 
         # Find the participant ID column (handle different naming conventions)
         participant_id_col = None
-        possible_names = ['participant_id', 'src_subject_id', 'subjectkey', 'subject_id']
+        possible_names = ['participant_id', 'subjectkey', 'subject_id', 'src_subject_id']
 
         for col_name in possible_names:
             if col_name in demos_df.columns:
                 participant_id_col = col_name
-                print(f"  Using '{col_name}' as participant ID column")
+                print(f"  Using '{col_name}' as participant ID column in phenotype data")
                 break
 
         if participant_id_col is None:
@@ -102,18 +103,58 @@ class GroupSummarizer:
                 f"Available columns: {list(demos_df.columns)}"
             )
 
-        # Handle subject_id format conversion if needed
+        # Print sample IDs for debugging
+        print(f"\n  Sample subject IDs from filtered subjects:")
+        print(f"    {subjects_df['subject_id'].head(3).tolist()}")
+        print(f"  Sample IDs from phenotype data ({participant_id_col}):")
+        print(f"    {demos_df[participant_id_col].head(3).tolist()}")
+
+        # Define ID conversion strategies to try
+        def create_conversion_strategies(sample_id):
+            """Create different ID format conversion strategies"""
+            strategies = {
+                'original': lambda x: x,
+                'strip_sub': lambda x: x.str.replace('sub-', '', regex=False),
+                'add_sub': lambda x: 'sub-' + x if not x.startswith('sub-') else x,
+                'underscore': lambda x: x.str.replace('NDARINV', 'NDAR_INV', regex=False),
+                'strip_and_underscore': lambda x: x.str.replace('sub-', '', regex=False).str.replace('NDARINV', 'NDAR_INV', regex=False),
+            }
+            return strategies
+
+        # Test each strategy and count matches
         subjects_for_merge = subjects_df.copy()
-        if 'subject_id' in subjects_df.columns:
-            # Convert sub-NDARINV to NDARINV for matching
-            if subjects_df['subject_id'].iloc[0].startswith('sub-'):
-                subjects_for_merge['participant_id_for_merge'] = \
-                    subjects_df['subject_id'].str.replace('sub-', '')
-            else:
-                subjects_for_merge['participant_id_for_merge'] = \
-                    'sub-' + subjects_df['subject_id']
-        else:
+        if 'subject_id' not in subjects_df.columns:
             raise ValueError("subject_id column not found in subjects data")
+
+        strategies = create_conversion_strategies(subjects_df['subject_id'].iloc[0])
+        best_strategy = None
+        best_match_count = 0
+
+        print(f"\n  Testing ID conversion strategies...")
+        for strategy_name, strategy_func in strategies.items():
+            # Apply conversion
+            test_ids = strategy_func(subjects_df['subject_id'])
+
+            # Count how many would match
+            match_count = demos_df[participant_id_col].isin(test_ids).sum()
+
+            print(f"    {strategy_name}: {match_count}/{len(subjects_df)} matches")
+
+            if match_count > best_match_count:
+                best_match_count = match_count
+                best_strategy = strategy_name
+
+        if best_match_count == 0:
+            raise ValueError(
+                f"Could not find any ID format conversion that matches phenotype data. "
+                f"Filtered subjects IDs: {subjects_df['subject_id'].head(3).tolist()}, "
+                f"Phenotype IDs: {demos_df[participant_id_col].head(3).tolist()}"
+            )
+
+        print(f"\n  ✓ Using '{best_strategy}' strategy ({best_match_count}/{len(subjects_df)} matches)")
+
+        # Apply the best strategy
+        subjects_for_merge['participant_id_for_merge'] = strategies[best_strategy](subjects_df['subject_id'])
 
         # Select columns for merge (only those that exist)
         merge_columns = [participant_id_col]
@@ -130,6 +171,10 @@ class GroupSummarizer:
             how='left'
         )
 
+        # Report merge statistics
+        successful_merges = merged[participant_id_col].notna().sum()
+        print(f"  Merge results: {successful_merges}/{len(subjects_df)} subjects matched")
+
         # Check for missing Group assignments
         if 'Group' in merged.columns:
             missing_group = merged['Group'].isna().sum()
@@ -137,8 +182,6 @@ class GroupSummarizer:
                 print(f"  ⚠ Warning: {missing_group} subjects missing Group assignment")
         else:
             print(f"  ⚠ Warning: 'Group' column not found in merged data - group analysis will be limited")
-
-        print(f"  Merged successfully")
 
         return merged
 
