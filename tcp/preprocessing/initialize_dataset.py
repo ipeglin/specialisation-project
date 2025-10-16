@@ -188,22 +188,22 @@ class DatasetInitializer:
         print(f"\n=== Cloning Dataset ===")
         print(f"Installing dataset from: {self.dataset_url}")
         print(f"Target directory: {self.dataset_path}")
-        
+
         # Ensure parent directory exists
         self.dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             # Use datalad install to clone the dataset
             cmd = ['datalad', 'install', str(self.dataset_path), '-s', self.dataset_url]
             print(f"Running: {' '.join(cmd)}")
-            
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=300  # 5 minute timeout for cloning
             )
-            
+
             if result.returncode == 0:
                 print("✓ Dataset cloned successfully")
                 print(f"Output: {result.stdout}")
@@ -212,32 +212,133 @@ class DatasetInitializer:
                 print(f"✗ Dataset cloning failed")
                 print(f"Error: {result.stderr}")
                 return False
-                
+
         except subprocess.TimeoutExpired:
             print("✗ Dataset cloning timed out (>5 minutes)")
             return False
         except Exception as e:
             print(f"✗ Dataset cloning failed with exception: {e}")
             return False
+
+    def reinstall_dataset_content(self) -> bool:
+        """Re-fetch all dataset content using datalad get -r"""
+        print(f"\n=== Force Reinstalling Dataset Content ===")
+        print(f"This will fetch all missing files without re-cloning the repository")
+        print(f"Dataset directory: {self.dataset_path}")
+
+        if not self.dataset_exists():
+            print(f"✗ Dataset directory does not exist: {self.dataset_path}")
+            print(f"Cannot reinstall content. Please run without --force-reinstall to clone the dataset first.")
+            return False
+
+        if not self.is_git_repository():
+            print(f"✗ Dataset is not a git repository: {self.dataset_path}")
+            print(f"Cannot reinstall content. Directory exists but is not a valid git repository.")
+            return False
+
+        try:
+            # Use datalad get -r to recursively fetch all content
+            # The -r flag makes it recursive, fetching all missing files
+            # Datalad will skip files that are already downloaded
+            cmd = ['datalad', 'get', '-r', '.']
+            print(f"Running: {' '.join(cmd)}")
+            print(f"Working directory: {self.dataset_path}")
+            print(f"\nThis may take a while depending on dataset size and missing files...")
+            print(f"(Datalad will automatically skip already-downloaded files)")
+
+            result = subprocess.run(
+                cmd,
+                cwd=self.dataset_path,
+                capture_output=True,
+                text=True,
+                timeout=7200  # 2 hour timeout for large datasets
+            )
+
+            if result.returncode == 0:
+                print("✓ Dataset content reinstalled successfully")
+                if result.stdout:
+                    # Print summary of what was fetched
+                    lines = result.stdout.strip().split('\n')
+                    fetched_count = sum(1 for line in lines if 'get(ok)' in line.lower())
+                    if fetched_count > 0:
+                        print(f"  → Fetched {fetched_count} missing files")
+                    else:
+                        print(f"  → All files were already present")
+                return True
+            else:
+                print(f"✗ Dataset content reinstall failed")
+                if result.stderr:
+                    print(f"Error: {result.stderr}")
+                # Even if some files fail, this might be acceptable for optional files
+                # Check if it's a partial success
+                if result.stdout and 'get(ok)' in result.stdout.lower():
+                    print(f"⚠ Some files were fetched, but the operation completed with errors")
+                    print(f"This may be acceptable if only optional files failed")
+                    return True
+                return False
+
+        except subprocess.TimeoutExpired:
+            print("✗ Dataset content reinstall timed out (>2 hours)")
+            print("The dataset may be very large. Consider fetching specific subdirectories instead.")
+            return False
+        except Exception as e:
+            print(f"✗ Dataset content reinstall failed with exception: {e}")
+            return False
     
-    def initialize_dataset(self) -> Tuple[bool, Dict]:
+    def initialize_dataset(self, force_reinstall: bool = False) -> Tuple[bool, Dict]:
         """Main dataset initialization workflow"""
         print("=== TCP Dataset Initialization ===\n")
-        
+
         # Check prerequisites
         if not self.check_datalad_available():
             return False, {"error": "DataLad not available"}
-        
+
         if not self.check_git_available():
             return False, {"error": "Git not available"}
-        
+
         # Check if dataset already exists and is valid
         is_valid, validation_results = self.validate_existing_dataset()
-        
+
+        # Handle force reinstall mode
+        if force_reinstall:
+            print("\n🔄 Force reinstall mode enabled")
+
+            if not self.dataset_exists():
+                print("Dataset does not exist. Cloning first...")
+                clone_success = self.clone_dataset()
+                if not clone_success:
+                    return False, {"error": "Dataset cloning failed"}
+
+            # Force reinstall all content
+            reinstall_success = self.reinstall_dataset_content()
+
+            if not reinstall_success:
+                return False, {
+                    "error": "Dataset content reinstall failed",
+                    "validation_results": validation_results
+                }
+
+            # Re-validate after reinstall
+            print(f"\n🔍 Validating dataset after reinstall...")
+            is_valid, validation_results = self.validate_existing_dataset()
+
+            if is_valid:
+                print("\n✅ Dataset reinstallation completed successfully!")
+                return True, validation_results
+            else:
+                print("\n⚠ Dataset reinstalled but validation has warnings")
+                print("This may be acceptable if only optional files are missing")
+                return True, {
+                    "warning": "Validation incomplete but reinstall succeeded",
+                    "validation_results": validation_results
+                }
+
+        # Normal mode (not force reinstall)
         if is_valid:
             print("\n✓ Dataset is already properly initialized!")
+            print("Tip: Use --force-reinstall to re-fetch any missing files")
             return True, validation_results
-        
+
         # If dataset exists but is invalid, ask for action
         if self.dataset_exists():
             print(f"\n⚠ Dataset directory exists but is invalid: {self.dataset_path}")
@@ -245,24 +346,26 @@ class DatasetInitializer:
             print("- A partial/failed installation")
             print("- A different dataset")
             print("- A corrupted installation")
-            print("\nRecommendation: Remove the directory and re-run this script")
+            print("\nRecommendations:")
+            print(f"  1. Use --force-reinstall to fetch missing files")
+            print(f"  2. Remove {self.dataset_path} and re-run to start fresh")
             return False, {
                 "error": "Invalid existing dataset",
                 "validation_results": validation_results,
-                "recommendation": f"Remove {self.dataset_path} and re-run"
+                "recommendation": f"Use --force-reinstall or remove {self.dataset_path} and re-run"
             }
-        
+
         # Clone the dataset
         print(f"\n📥 Dataset not found. Installing...")
         clone_success = self.clone_dataset()
-        
+
         if not clone_success:
             return False, {"error": "Dataset cloning failed"}
-        
+
         # Validate the newly cloned dataset
         print(f"\n🔍 Validating newly installed dataset...")
         is_valid, validation_results = self.validate_existing_dataset()
-        
+
         if is_valid:
             print("\n✅ Dataset initialization completed successfully!")
             return True, validation_results
@@ -296,12 +399,38 @@ class DatasetInitializer:
 
 def main():
     """Main execution function"""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Initialize TCP dataset and optionally force reinstall of all content'
+    )
+    parser.add_argument(
+        '--force-reinstall',
+        action='store_true',
+        help='Force reinstall of all dataset content, fetching any missing files without re-cloning'
+    )
+    parser.add_argument(
+        '--dataset-path',
+        type=Path,
+        help='Override dataset path (default: from config)'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=Path,
+        help='Override output directory (default: from config)'
+    )
+
+    args = parser.parse_args()
+
     print("TCP Dataset Initialization")
     print("=" * 50)
-    
+
     # Initialize the dataset
-    initializer = DatasetInitializer()
-    success, results = initializer.initialize_dataset()
+    initializer = DatasetInitializer(
+        dataset_path=args.dataset_path,
+        output_dir=args.output_dir
+    )
+    success, results = initializer.initialize_dataset(force_reinstall=args.force_reinstall)
     
     # Generate report
     report_file = initializer.generate_report(success, results)
