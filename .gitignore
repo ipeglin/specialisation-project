@@ -37,3 +37,6 @@ results/
 outputs/
 temp/
 *.log
+
+# Claude Code context file (untracked, for AI assistance)
+CLAUDE.md
