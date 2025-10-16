@@ -40,7 +40,7 @@ class SubjectFilter(ABC):
         self.description = description
 
     @abstractmethod
-    def apply(self, subjects_df: pd.DataFrame, file_paths: Dict, **kwargs) -> FilterResult:
+    def apply(self, subjects_df: pd.DataFrame, file_paths: Dict, **kwargs):
         """
         Apply filter to subjects dataframe
 
@@ -50,7 +50,7 @@ class SubjectFilter(ABC):
             **kwargs: Additional filter-specific parameters
 
         Returns:
-            FilterResult with included/excluded subjects and metadata
+            Tuple of (included_subjects, excluded_subjects, inclusion_reasons, exclusion_reasons)
         """
         pass
 
@@ -101,9 +101,14 @@ class TaskAvailabilityFilter(SubjectFilter):
         description = f"Filter subjects based on {data_type_desc} task data availability"
         super().__init__(filter_name, description)
 
-    def apply(self, subjects_df: pd.DataFrame, file_paths: Dict, **kwargs) -> FilterResult:
-        """Apply task availability filtering"""
+    def apply(self, subjects_df: pd.DataFrame, file_paths: Dict, **kwargs):
+        """Apply task availability filtering
+
+        Returns:
+            Tuple of (included_subjects, excluded_subjects, inclusion_reasons, exclusion_reasons)
+        """
         subjects_df = subjects_df.copy()
+        inclusion_reasons = {}
         exclusion_reasons = {}
 
         # Create task availability columns if they don't exist
@@ -129,6 +134,21 @@ class TaskAvailabilityFilter(SubjectFilter):
         included_subjects = subjects_df[task_mask].copy()
         excluded_subjects = subjects_df[~task_mask].copy()
 
+        # Generate inclusion reasons
+        for _, subject in included_subjects.iterrows():
+            subj_id = subject['participant_id']
+            available_tasks = []
+            for task in self.required_tasks:
+                task_col = f'has_{task}_{self.data_type.replace("_", "_")}'.replace("_nifti", "_raw")
+                if subject.get(task_col, False):
+                    available_tasks.append(task)
+
+            if self.require_all_tasks:
+                reason = f"Has all required tasks: {available_tasks}"
+            else:
+                reason = f"Has task data for: {available_tasks}"
+            inclusion_reasons[subj_id] = reason
+
         # Generate exclusion reasons
         for _, subject in excluded_subjects.iterrows():
             subj_id = subject['participant_id']
@@ -144,25 +164,8 @@ class TaskAvailabilityFilter(SubjectFilter):
                 reason = f"No task data available for any of: {self.required_tasks}"
             exclusion_reasons[subj_id] = reason
 
-        # Calculate statistics
-        statistics = {
-            "total_subjects": len(subjects_df),
-            "included_subjects": len(included_subjects),
-            "excluded_subjects": len(excluded_subjects),
-            "inclusion_rate": len(included_subjects) / len(subjects_df) if len(subjects_df) > 0 else 0,
-            "task_breakdown": self._calculate_task_breakdown(subjects_df)
-        }
-
-        data_type_desc = ", ".join(self.data_types) if len(self.data_types) > 1 else self.data_types[0]
-        criteria_description = f"Subjects must have {logic_description} ({data_type_desc} data)"
-
-        return FilterResult(
-            included_subjects=included_subjects,
-            excluded_subjects=excluded_subjects,
-            criteria_description=criteria_description,
-            exclusion_reasons=exclusion_reasons,
-            statistics=statistics
-        )
+        # Return tuple expected by refactored pipeline
+        return included_subjects, excluded_subjects, inclusion_reasons, exclusion_reasons
 
     def _has_task_data(self, subject_id: str, task: str, file_paths: Dict) -> bool:
         """Check if subject has data for specific task across all configured data types"""
