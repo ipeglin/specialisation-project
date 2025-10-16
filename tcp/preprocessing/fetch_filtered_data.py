@@ -5,8 +5,12 @@ Datalad data fetcher for filtered TCP dataset subjects.
 Uses datalad get to selectively fetch data for only the subjects that passed
 filtering, avoiding unnecessary downloads of excluded subjects' data.
 
+REFACTORED: Now uses pre-computed file mappings from map_subject_files.py for
+efficient fetching. Group-agnostic - processes all filtered subjects equally.
+
 Author: Ian Philip Eglin
 Date: 2025-09-17
+Updated: 2025-10-16
 """
 
 import sys
@@ -26,32 +30,25 @@ sys.path.insert(0, str(project_root))
 from config.paths import get_script_output_path, get_tcp_dataset_path
 
 class DataladDataFetcher:
-    """Manages selective data fetching for filtered subjects using datalad get"""
+    """Manages selective data fetching for filtered subjects using datalad get
 
-    def __init__(self, dataset_path: Path, included_subjects_path: Path, dry_run: bool = False):
+    Refactored to use pre-computed file mappings from map_subject_files.py,
+    eliminating runtime file discovery and improving efficiency.
+    """
+
+    def __init__(self, dataset_path: Path, file_mapping_path: Path, dry_run: bool = False):
         self.dataset_path = Path(dataset_path)
-        self.included_subjects_path = Path(included_subjects_path)
+        self.file_mapping_path = Path(file_mapping_path)
         self.dry_run = dry_run
         self.logger = self._setup_logging()
 
-        # Data type patterns for task-related, anatomical, and phenotypic data (hammer and stroop only, no rest scans)
-        self.data_patterns = {
-            # Raw fMRI
-            'raw_nifti_hammer': '{}/func/{}_task-hammer*_bold.nii.gz',
-            'raw_nifti_stroop': '{}/func/{}_task-stroop*_bold.nii.gz',
-            'json_metadata_hammer': '{}/func/{}_task-hammer*_bold.json',
-            'json_metadata_stroop': '{}/func/{}_task-stroop*_bold.json',
-            'events_hammer': '{}/func/{}_task-hammer*_events.tsv',
-            'events_stroop': '{}/func/{}_task-stroop*_events.tsv',
-            # Anatomical scans
-            'anatomical_t1w': '{}/anat/{}_*T1w.nii.gz',
-            'anatomical_t2w': '{}/anat/{}_*T2w.nii.gz',
-            'anatomical_t1w_json': '{}/anat/{}_*T1w.json',
-            'anatomical_t2w_json': '{}/anat/{}_*T2w.json',
-            # Phenotype
-            'phenotype': 'phenotype/*.tsv',
-            'participants': 'participants.tsv',
-            'dataset_description': 'dataset_description.json'
+        # Data type mapping for filtering which files to fetch
+        self.data_type_categories = {
+            'raw_nifti': ['raw_nifti'],
+            'events': ['events'],
+            'json_metadata': ['json_metadata'],
+            'anatomical': ['anatomical', 'anatomical_json'],
+            'timeseries': ['timeseries']
         }
 
     def _setup_logging(self) -> logging.Logger:
@@ -85,43 +82,32 @@ class DataladDataFetcher:
 
         return logger
 
-    def load_included_subjects(self) -> List[str]:
-        """Load the list of included subjects from the filtering pipeline output"""
-        self.logger.info(f"Loading included subjects from {self.included_subjects_path}")
+    def load_file_mapping(self) -> Tuple[Dict, List[str]]:
+        """Load pre-computed file mapping from map_subject_files.py output"""
+        self.logger.info(f"Loading file mapping from {self.file_mapping_path}")
 
-        included_subjects = set()
+        if not self.file_mapping_path.exists():
+            raise FileNotFoundError(
+                f"File mapping not found: {self.file_mapping_path}\n"
+                f"Please run map_subject_files.py first."
+            )
 
-        # Look for patient and control CSV files
-        #
-        patient_file = self.included_subjects_path / 'patient_subjects.csv'
-        control_file = self.included_subjects_path / 'control_subjects.csv'
+        try:
+            with open(self.file_mapping_path, 'r') as f:
+                mapping_data = json.load(f)
 
-        for file_path, group_name in [(patient_file, 'patients'), (control_file, 'controls')]:
-            if file_path.exists():
-                try:
-                    df = pd.read_csv(file_path)
-                    # Try both possible column names
-                    id_column = None
-                    if 'subject_id' in df.columns:
-                        id_column = 'subject_id'
-                    elif 'participant_id' in df.columns:
-                        id_column = 'participant_id'
+            subject_file_mapping = mapping_data.get('subjects', {})
+            global_files = mapping_data.get('global_files', [])
 
-                    if id_column:
-                        subjects = df[id_column].tolist()
-                        included_subjects.update(subjects)
-                        self.logger.info(f"Loaded {len(subjects)} {group_name} from {file_path.name}")
-                    else:
-                        self.logger.warning(f"No 'subject_id' or 'participant_id' column found in {file_path}")
-                except Exception as e:
-                    self.logger.error(f"Error reading {file_path}: {e}")
-            else:
-                self.logger.warning(f"File not found: {file_path}")
+            self.logger.info(f"Loaded file mapping for {len(subject_file_mapping)} subjects")
+            self.logger.info(f"Found {len(global_files)} global files")
 
-        # Return sorted list to ensure deterministic processing order while maintaining uniqueness
-        sorted_subjects = sorted(list(included_subjects))
-        self.logger.info(f"Total included subjects: {len(sorted_subjects)} (sorted alphabetically)")
-        return sorted_subjects
+            return subject_file_mapping, global_files
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in file mapping: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Error loading file mapping: {e}")
 
     def check_dataset_status(self) -> bool:
         """Check if the dataset path is a valid datalad repository"""
@@ -175,65 +161,63 @@ class DataladDataFetcher:
         except (OSError, IOError):
             return False
 
-    def find_actual_files(self, subject_ids: List[str], data_types: List[str]) -> Tuple[Dict[str, List[str]], List[str]]:
-        """Find actual files that exist for the given subjects and data types"""
-        import glob
+    def filter_files_by_data_types(self, subject_file_mapping: Dict,
+                                    data_types: List[str]) -> Dict[str, List[str]]:
+        """Filter the file mapping based on requested data types
 
-        subject_files = {}
-        global_files = []  # Files that are dataset-wide, not subject-specific
+        Args:
+            subject_file_mapping: Complete file mapping for all subjects
+            data_types: List of data type categories to include
 
-        # Handle global (non-subject-specific) files first
-        global_data_types = ['phenotype', 'participants', 'dataset_description']
-        for data_type in data_types:
-            if data_type in global_data_types and data_type in self.data_patterns:
-                pattern = self.data_patterns[data_type]
-                full_pattern = str(self.dataset_path / pattern)
-                matching_files = glob.glob(full_pattern)
-                relative_files = [str(Path(f).relative_to(self.dataset_path)) for f in matching_files]
-                global_files.extend(relative_files)
-                self.logger.info(f"Found {len(relative_files)} {data_type} files (dataset-wide)")
+        Returns:
+            Filtered mapping with only requested data types
+        """
+        filtered_mapping = {}
 
-        # Handle subject-specific files
-        for subject_id in subject_ids:
+        for subject_id, file_map in subject_file_mapping.items():
             files = []
+
             for data_type in data_types:
-                if data_type in self.data_patterns and data_type not in global_data_types:
-                    pattern = self.data_patterns[data_type].format(subject_id, subject_id)
-                    # Use glob to find actual files matching the pattern
-                    full_pattern = str(self.dataset_path / pattern)
-                    matching_files = glob.glob(full_pattern)
-                    # Convert back to relative paths
-                    relative_files = [str(Path(f).relative_to(self.dataset_path)) for f in matching_files]
-                    files.extend(relative_files)
-                    self.logger.debug(f"Found {len(relative_files)} {data_type} files for {subject_id}")
-                elif data_type not in global_data_types and data_type not in self.data_patterns:
-                    self.logger.warning(f"Unknown data type: {data_type}")
+                if data_type in file_map:
+                    # Handle nested structure (hammer/stroop or t1w/t2w)
+                    if isinstance(file_map[data_type], dict):
+                        for task_or_scan, file_list in file_map[data_type].items():
+                            files.extend(file_list)
+                    else:
+                        files.extend(file_map[data_type])
 
             if files:
-                subject_files[subject_id] = files
-                self.logger.info(f"Found {len(files)} subject-specific files for {subject_id}")
+                filtered_mapping[subject_id] = files
+                self.logger.debug(f"Filtered {len(files)} files for {subject_id}")
             else:
-                self.logger.warning(f"No subject-specific files found for {subject_id}")
+                self.logger.warning(f"No files matching requested data types for {subject_id}")
 
-        # Return both subject-specific files and global files separately
-        if global_files:
-            self.logger.info(f"Found {len(global_files)} dataset-wide files (phenotype, participants, etc.) for processing")
+        self.logger.info(f"Filtered file mapping: {len(filtered_mapping)} subjects with requested data types")
+        return filtered_mapping
 
-        return subject_files, global_files
+    def fetch_data(self, subject_file_mapping: Dict, global_files: List[str],
+                   data_types: List[str] = None) -> Dict[str, bool]:
+        """Fetch data using pre-computed file mapping from map_subject_files.py
 
-    def fetch_data(self, subject_ids: List[str], data_types: List[str] = None) -> Dict[str, bool]:
-        """Fetch data for specified subjects and data types using datalad get"""
+        Args:
+            subject_file_mapping: Pre-computed file mapping for all subjects
+            global_files: List of dataset-wide files to fetch
+            data_types: List of data type categories to fetch (default: essential data)
+
+        Returns:
+            Dictionary mapping subject_id to fetch success boolean
+        """
         if data_types is None:
             data_types = ['raw_nifti', 'events']  # Default to essential data
 
-        self.logger.info(f"Starting data fetch for {len(subject_ids)} subjects")
+        self.logger.info(f"Starting data fetch for {len(subject_file_mapping)} subjects")
         self.logger.info(f"Data types: {', '.join(data_types)}")
 
         if self.dry_run:
             self.logger.info("DRY RUN MODE - No actual data will be fetched")
 
-        # Find actual files that exist
-        subject_files, global_files = self.find_actual_files(subject_ids, data_types)
+        # Filter files by requested data types
+        subject_files = self.filter_files_by_data_types(subject_file_mapping, data_types)
         fetch_results = {}
 
         # Calculate overall statistics
@@ -442,15 +426,16 @@ class DataladDataFetcher:
                 except (OSError, IOError):
                     print(f"  All dataset-wide files already downloaded")
 
-        # Handle subjects with no files found
-        for subject_id in subject_ids:
+        # Handle subjects with no files found after filtering
+        all_subject_ids = list(subject_file_mapping.keys())
+        for subject_id in all_subject_ids:
             if subject_id not in fetch_results:
                 fetch_results[subject_id] = False
                 self.logger.warning(f"No files found for subject: {subject_id}")
 
         return fetch_results
 
-    def generate_summary_report(self, fetch_results: Dict[str, bool], subject_ids: List[str],
+    def generate_summary_report(self, fetch_results: Dict[str, bool],
                               data_types: List[str]) -> Path:
         """Generate a summary report of the data fetching process"""
         report_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
@@ -460,11 +445,12 @@ class DataladDataFetcher:
         report_file = report_dir / f'fetch_report_{timestamp}.json'
 
         successful_fetches = sum(1 for success in fetch_results.values() if success)
+        subject_ids = list(fetch_results.keys())
 
         report = {
             'timestamp': datetime.now().isoformat(),
             'dataset_path': str(self.dataset_path),
-            'included_subjects_path': str(self.included_subjects_path),
+            'file_mapping_path': str(self.file_mapping_path),
             'dry_run': self.dry_run,
             'total_subjects': len(subject_ids),
             'data_types': data_types,
@@ -472,7 +458,8 @@ class DataladDataFetcher:
             'failed_fetches': len(fetch_results) - successful_fetches,
             'success_rate': (successful_fetches / len(fetch_results)) * 100 if fetch_results else 0,
             'fetch_results': fetch_results,
-            'subject_ids': sorted(list(subject_ids))
+            'subject_ids': sorted(subject_ids),
+            'note': 'Group-agnostic fetching - all filtered subjects processed equally'
         }
 
         with open(report_file, 'w') as f:
@@ -481,132 +468,112 @@ class DataladDataFetcher:
         self.logger.info(f"Summary report saved to: {report_file}")
         return report_file
 
-def detect_filtered_subjects_path() -> Path:
-    """Automatically detect the path to filtered subjects from new pipeline"""
-    
-    # Option 1: Use filter_subjects output (latest filtering step)
-    filter_subjects_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects', 'included')
-    patient_file = filter_subjects_dir / 'patient_subjects.csv'
-    control_file = filter_subjects_dir / 'control_subjects.csv'
-    
-    if patient_file.exists() and control_file.exists():
-        print(f"✓ Found task-filtered subjects: {filter_subjects_dir}")
-        return filter_subjects_dir
-    
-    # Option 2: Use phenotype filtered subjects (if filter_subjects not run)
-    phenotype_dir = get_script_output_path('tcp_preprocessing', 'filter_phenotype')
-    phenotype_file = phenotype_dir / 'phenotype_filtered_subjects.csv'
-    
-    if phenotype_file.exists():
-        print(f"⚠ Using phenotype filtered subjects: {phenotype_dir}")
-        print(f"  Consider running filter_subjects.py for task data filtering")
-        return phenotype_dir
-    
-    # Option 3: Use validated subjects (if no filtering done)
-    validation_dir = get_script_output_path('tcp_preprocessing', 'validate_subjects')
-    validation_file = validation_dir / 'valid_subjects.csv'
-    
-    if validation_file.exists():
-        print(f"⚠ Using all validated subjects: {validation_dir}")
-        print(f"  Consider running filter_phenotype.py and filter_subjects.py")
-        return validation_dir
-    
-    # Option 4: Fallback to legacy extract_subjects
-    extract_dir = get_script_output_path('tcp_preprocessing', 'extract_subjects')
-    extract_patient_file = extract_dir / 'patient_subjects.csv'
-    extract_control_file = extract_dir / 'control_subjects.csv'
-    
-    if extract_patient_file.exists() and extract_control_file.exists():
-        print(f"⚠ Using legacy extract_subjects output: {extract_dir}")
-        print(f"  Consider running the new pipeline for better optimization")
-        return extract_dir
-    
-    # No valid subjects found
+def detect_file_mapping_path() -> Path:
+    """Automatically detect the path to file mapping from map_subject_files.py output"""
+
+    # Look for file mapping from map_subject_files step
+    mapping_dir = get_script_output_path('tcp_preprocessing', 'map_subject_files')
+    mapping_file = mapping_dir / 'subject_file_mapping.json'
+
+    if mapping_file.exists():
+        print(f"✓ Found file mapping: {mapping_file}")
+        return mapping_file
+
+    # No file mapping found
     raise FileNotFoundError(
-        "No filtered subjects found. Please run the preprocessing pipeline:\n"
+        "File mapping not found. Please run the preprocessing pipeline:\n"
         "  1. initialize_dataset.py (if dataset not cloned)\n"
         "  2. validate_subjects.py (required)\n"
         "  3. fetch_global_data.py (required for phenotype filtering)\n"
         "  4. filter_phenotype.py (optional, for diagnosis filtering)\n"
-        "  5. filter_subjects.py (required, for task data filtering)"
+        "  5. filter_subjects.py (required, for task data filtering)\n"
+        "  6. map_subject_files.py (required, creates file path mapping)\n"
+        "\n"
+        f"Expected file: {mapping_file}"
     )
 
 def main():
     """Main execution function"""
-    # Define available data types for argument parsing
+    # Define available data types for argument parsing (matching map_subject_files output structure)
     available_data_types = [
-        'raw_nifti_hammer', 'raw_nifti_stroop', 'json_metadata_hammer', 'json_metadata_stroop',
-        'events_hammer', 'events_stroop', 'anatomical_t1w', 'anatomical_t2w',
-        'anatomical_t1w_json', 'anatomical_t2w_json', 'phenotype', 'participants', 'dataset_description'
+        'raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'
     ]
 
-    parser = argparse.ArgumentParser(description='Fetch data for filtered TCP subjects using datalad')
+    parser = argparse.ArgumentParser(
+        description='Fetch data for filtered TCP subjects using datalad',
+        epilog='This script uses pre-computed file mappings from map_subject_files.py'
+    )
     parser.add_argument('--data-types', nargs='+',
                        choices=available_data_types,
-                       default=['raw_nifti_hammer', 'raw_nifti_stroop', 'json_metadata_hammer', 'json_metadata_stroop',
-                                'events_hammer', 'events_stroop', 'anatomical_t1w', 'anatomical_t2w', 'anatomical_t1w_json', 'anatomical_t2w_json',
-                                'phenotype', 'participants', 'dataset_description'],
-                       help='Data types to fetch (default: hammer and stroop task data, anatomical, and phenotypic data)')
+                       default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json'],
+                       help='Data type categories to fetch (default: raw NIFTI, events, JSON metadata, and anatomical scans)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,
                        help='Override dataset path (default: from config)')
-    parser.add_argument('--included-path', type=Path,
-                       help='Override included subjects path (auto-detected by default)')
+    parser.add_argument('--file-mapping', type=Path,
+                       help='Override file mapping path (auto-detected by default)')
 
     args = parser.parse_args()
 
     # Get paths
     dataset_path = args.dataset_path or get_tcp_dataset_path()
-    
-    # Auto-detect included subjects path if not provided
-    if args.included_path:
-        included_path = args.included_path
-        print(f"Using specified subjects path: {included_path}")
-    else:
-        included_path = detect_filtered_subjects_path()
 
-    print("TCP Dataset Data Fetcher")
-    print("========================")
+    # Auto-detect file mapping path if not provided
+    if args.file_mapping:
+        file_mapping_path = args.file_mapping
+        print(f"Using specified file mapping: {file_mapping_path}")
+    else:
+        file_mapping_path = detect_file_mapping_path()
+
+    print("TCP Dataset Data Fetcher (REFACTORED)")
+    print("=" * 50)
     print(f"Dataset path: {dataset_path}")
-    print(f"Included subjects path: {included_path}")
+    print(f"File mapping: {file_mapping_path}")
     print(f"Data types: {', '.join(args.data_types)}")
     print(f"Dry run: {args.dry_run}")
     print()
 
     # Initialize fetcher
-    fetcher = DataladDataFetcher(dataset_path, included_path, dry_run=args.dry_run)
+    fetcher = DataladDataFetcher(dataset_path, file_mapping_path, dry_run=args.dry_run)
 
     # Check dataset status
     if not fetcher.check_dataset_status():
         print("ERROR: Dataset validation failed. Please check the dataset path and datalad installation.")
         return 1
 
-    # Load included subjects
-    subject_ids = fetcher.load_included_subjects()
-    if not subject_ids:
-        print("ERROR: No included subjects found. Please check the filtering pipeline output.")
+    # Load file mapping
+    try:
+        subject_file_mapping, global_files = fetcher.load_file_mapping()
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    if not subject_file_mapping:
+        print("ERROR: No subjects found in file mapping. Please check map_subject_files.py output.")
         return 1
 
     # Fetch data
-    fetch_results = fetcher.fetch_data(subject_ids, args.data_types)
+    fetch_results = fetcher.fetch_data(subject_file_mapping, global_files, args.data_types)
 
     # Generate report
-    report_file = fetcher.generate_summary_report(fetch_results, subject_ids, args.data_types)
+    report_file = fetcher.generate_summary_report(fetch_results, args.data_types)
 
     # Print summary
     successful = sum(1 for success in fetch_results.values() if success)
     total = len(fetch_results)
 
-    print(f"\n=== FETCH COMPLETE ===")
-    print(f"Processed {total} subjects")
+    print(f"\n{'=' * 50}")
+    print(f"FETCH COMPLETE")
+    print(f"{'=' * 50}")
+    print(f"Processed {total} subjects (group-agnostic)")
     print(f"Successful: {successful}")
     print(f"Failed: {total - successful}")
     print(f"Success rate: {(successful/total)*100:.1f}%")
     print(f"Report saved to: {report_file}")
 
     if args.dry_run:
-        print("\nThis was a dry run. Use --no-dry-run to actually fetch the data.")
+        print("\nThis was a dry run. Remove --dry-run flag to actually fetch the data.")
 
     return 0 if successful == total else 1
 
