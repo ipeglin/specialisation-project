@@ -84,66 +84,58 @@ class NewSubjectFilterPipeline:
         return self
     
     def load_and_convert_data(self):
-        """Load data from new pipeline format and convert to old format for compatibility"""
+        """Load data from new pipeline format - unified subject list (group-agnostic)"""
         import pandas as pd
         import json
         from pathlib import Path
-        
+
         # Check input format and load accordingly
         phenotype_file = self.input_dir / 'phenotype_filtered_subjects.csv'
         validation_file = self.input_dir / 'valid_subjects.csv'
-        
+
         if phenotype_file.exists():
             # Load from phenotype filtering
             print("Loading phenotype filtered subjects...")
             subjects_df = pd.read_csv(phenotype_file)
-            
-            # Split into patients and controls based on Group if available
-            if 'Group' in subjects_df.columns:
-                patients_df = subjects_df[subjects_df['Group'] == 'Patient'].copy()
-                controls_df = subjects_df[subjects_df['Group'] == 'GenPop'].copy()
-            else:
-                # If no Group column, put all subjects as "patients" for processing
-                patients_df = subjects_df.copy()
-                controls_df = pd.DataFrame()
-                
+            print(f"  Loaded {len(subjects_df)} phenotype-filtered subjects")
+            # Keep Group column if present (for later analysis), but don't split here
+
         elif validation_file.exists():
-            # Load from validation step - need to create patient/control split
+            # Load from validation step
             print("Loading validated subjects...")
             subjects_df = pd.read_csv(validation_file)
-            
-            # Since validation doesn't split by diagnosis, treat all as potential subjects
-            # The task filter will determine which have usable data
-            patients_df = subjects_df.copy()
-            controls_df = pd.DataFrame()
-            
+            print(f"  Loaded {len(subjects_df)} validated subjects")
+
         else:
-            # Try legacy format
+            # Try legacy format (backward compatibility)
             patient_file = self.input_dir / 'patient_subjects.csv'
             control_file = self.input_dir / 'control_subjects.csv'
-            
+
             if patient_file.exists() and control_file.exists():
                 print("Loading legacy extract_subjects format...")
                 patients_df = pd.read_csv(patient_file)
                 controls_df = pd.read_csv(control_file)
+                # Combine into unified list
+                subjects_df = pd.concat([patients_df, controls_df], ignore_index=True)
+                print(f"  Loaded {len(subjects_df)} subjects ({len(patients_df)} patients + {len(controls_df)} controls)")
             else:
                 raise FileNotFoundError(f"No valid subject files found in {self.input_dir}")
-        
+
         # Generate task file paths by scanning the dataset
         print("Generating task file paths...")
-        file_paths = self._generate_task_file_paths(patients_df, controls_df)
-        
-        return patients_df, controls_df, file_paths
+        file_paths = self._generate_task_file_paths(subjects_df)
+
+        return subjects_df, file_paths
     
-    def _generate_task_file_paths(self, patients_df, controls_df):
-        """Generate task file paths by scanning dataset structure"""
+    def _generate_task_file_paths(self, subjects_df):
+        """Generate task file paths by scanning dataset structure (unified subject list)"""
         import glob
-        
-        all_subjects = []
-        if len(patients_df) > 0:
-            all_subjects.extend(patients_df['subject_id'].tolist())
-        if len(controls_df) > 0:
-            all_subjects.extend(controls_df['subject_id'].tolist())
+
+        # Get all subject IDs from unified list
+        if 'subject_id' not in subjects_df.columns:
+            raise ValueError("subject_id column not found in subjects data")
+
+        all_subjects = subjects_df['subject_id'].tolist()
         
         file_paths = {
             'raw_nifti': {},
@@ -198,63 +190,108 @@ class NewSubjectFilterPipeline:
         print(f"  Task file scanning complete")
         return file_paths
     
-    def apply_filters(self, patients_df, controls_df, file_paths):
-        """Apply filters using the existing filter pipeline logic"""
-        # Use the existing SubjectFilterPipeline but with custom data
-        from tcp.preprocessing.utils.filter_pipeline import SubjectFilterPipeline
-        
-        # Create temporary directory structure for compatibility
-        temp_input_dir = self.output_dir / "temp_input"
-        temp_input_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Ensure DataFrames have 'participant_id' column for compatibility with filters
-        if 'subject_id' in patients_df.columns and 'participant_id' not in patients_df.columns:
-            patients_df['participant_id'] = patients_df['subject_id']
-        if 'subject_id' in controls_df.columns and 'participant_id' not in controls_df.columns:
-            controls_df['participant_id'] = controls_df['subject_id']
-        
-        # Save data in format expected by SubjectFilterPipeline
-        patients_df.to_csv(temp_input_dir / "patient_subjects.csv", index=False)
-        
-        # Ensure controls_df has proper column structure even if empty
-        if controls_df.empty and not patients_df.empty:
-            # Create empty DataFrame with same columns as patients_df
-            controls_df = pd.DataFrame(columns=patients_df.columns)
-        controls_df.to_csv(temp_input_dir / "control_subjects.csv", index=False)
-        
+    def apply_filters(self, subjects_df, file_paths):
+        """Apply filters to unified subject list (group-agnostic)"""
         import json
-        with open(temp_input_dir / "task_file_paths.json", 'w') as f:
-            json.dump(file_paths, f, indent=2)
-        
-        # Create summary for compatibility
-        summary = {
-            'dataset_info': {
-                'total_patients': len(patients_df),
-                'total_controls': len(controls_df)
+        from datetime import datetime
+
+        print(f"\nApplying {len(self.filters)} filters to {len(subjects_df)} subjects...")
+
+        # Ensure participant_id column exists for filter compatibility
+        if 'subject_id' in subjects_df.columns and 'participant_id' not in subjects_df.columns:
+            subjects_df['participant_id'] = subjects_df['subject_id']
+
+        # Apply each filter sequentially
+        current_subjects = subjects_df.copy()
+        all_inclusion_reasons = {}
+        all_exclusion_reasons = {}
+        filter_statistics = []
+
+        for i, filter_instance in enumerate(self.filters, 1):
+            print(f"\n[Filter {i}/{len(self.filters)}] {filter_instance.filter_name}")
+            print(f"  Criteria: {filter_instance.get_criteria_description()}")
+
+            # Apply filter
+            included_subjects, excluded_subjects, inclusion_reasons, exclusion_reasons = \
+                filter_instance.apply(current_subjects, file_paths)
+
+            # Update tracking
+            all_inclusion_reasons.update(inclusion_reasons)
+            all_exclusion_reasons.update(exclusion_reasons)
+
+            # Track filter statistics
+            filter_stat = {
+                'filter_name': filter_instance.filter_name,
+                'criteria': filter_instance.get_criteria_description(),
+                'input_count': len(current_subjects),
+                'included_count': len(included_subjects),
+                'excluded_count': len(excluded_subjects),
+                'inclusion_rate': len(included_subjects) / len(current_subjects) if len(current_subjects) > 0 else 0
             }
-        }
-        with open(temp_input_dir / "summary.json", 'w') as f:
-            json.dump(summary, f, indent=2)
-        
-        # Use existing pipeline
-        pipeline = SubjectFilterPipeline(str(temp_input_dir), str(self.output_dir))
-        
-        # Add all filters
-        for filter_instance in self.filters:
-            pipeline.add_filter(filter_instance)
-        
-        # Run pipeline
-        pipeline.load_extracted_data()
-        pipeline.apply_filters()
-        
+            filter_statistics.append(filter_stat)
+
+            print(f"  Results: {len(included_subjects)} included, {len(excluded_subjects)} excluded")
+            print(f"  Inclusion rate: {filter_stat['inclusion_rate']*100:.1f}%")
+
+            # Update current subjects for next filter
+            current_subjects = included_subjects
+
+        # Final results
+        included_subjects = current_subjects
+        excluded_subject_ids = set(subjects_df['subject_id']) - set(included_subjects['subject_id'])
+        excluded_subjects = subjects_df[subjects_df['subject_id'].isin(excluded_subject_ids)]
+
         # Export results
-        output_path = pipeline.export_results()
-        
-        # Clean up temp directory
-        import shutil
-        shutil.rmtree(temp_input_dir, ignore_errors=True)
-        
-        return pipeline
+        self._export_unified_results(
+            included_subjects, excluded_subjects,
+            all_inclusion_reasons, all_exclusion_reasons,
+            filter_statistics, subjects_df
+        )
+
+        return included_subjects, excluded_subjects
+
+    def _export_unified_results(self, included_subjects, excluded_subjects,
+                               inclusion_reasons, exclusion_reasons,
+                               filter_statistics, original_subjects):
+        """Export unified filtering results (phenotype filtering style)"""
+        import json
+        from datetime import datetime
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\nExporting results to {self.output_dir}")
+
+        # Export subject lists
+        included_subjects.to_csv(self.output_dir / "task_filtered_subjects.csv", index=False)
+        excluded_subjects.to_csv(self.output_dir / "task_excluded_subjects.csv", index=False)
+        print(f"  ✓ Included subjects: {len(included_subjects)}")
+        print(f"  ✓ Excluded subjects: {len(excluded_subjects)}")
+
+        # Export inclusion/exclusion reasons
+        reasons_data = {
+            'inclusion_reasons': inclusion_reasons,
+            'exclusion_reasons': exclusion_reasons
+        }
+        with open(self.output_dir / "filtering_reasons.json", 'w') as f:
+            json.dump(reasons_data, f, indent=2)
+        print(f"  ✓ Filtering reasons exported")
+
+        # Create summary report
+        summary = {
+            'timestamp': datetime.now().isoformat(),
+            'dataset_path': str(self.dataset_path),
+            'input_directory': str(self.input_dir),
+            'total_input_subjects': len(original_subjects),
+            'total_included_subjects': len(included_subjects),
+            'total_excluded_subjects': len(excluded_subjects),
+            'overall_inclusion_rate': len(included_subjects) / len(original_subjects) if len(original_subjects) > 0 else 0,
+            'filters_applied': filter_statistics,
+            'note': 'Filtering is group-agnostic. Use summarize_groups.py to see patient/control breakdown.'
+        }
+
+        with open(self.output_dir / "task_filtering_summary.json", 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"  ✓ Summary report: task_filtering_summary.json")
 
 def main():
     """Main execution function"""
@@ -304,54 +341,47 @@ def main():
     pipeline.add_filter(task_filter)
     
     try:
-        # Load and convert data to compatible format
-        patients_df, controls_df, file_paths = pipeline.load_and_convert_data()
-        
+        # Load data (unified subject list)
+        subjects_df, file_paths = pipeline.load_and_convert_data()
+
         # Apply filters
-        filter_pipeline = pipeline.apply_filters(patients_df, controls_df, file_paths)
-        
-        # Get final results
-        included_patients, excluded_patients, included_controls, excluded_controls = filter_pipeline.get_final_results()
-        
-        print(f"\n=== FILTERING COMPLETE ===")
-        print(f"Output saved to: {output_dir}")
-        print(f"\nFinal Results:")
-        print(f"  Included: {len(included_patients)} patients, {len(included_controls)} controls")
-        print(f"  Excluded: {len(excluded_patients)} patients, {len(excluded_controls)} controls")
-        
-        total_subjects = len(included_patients) + len(excluded_patients) + len(included_controls) + len(excluded_controls)
-        if total_subjects > 0:
-            inclusion_rate = (len(included_patients) + len(included_controls)) / total_subjects * 100
-            print(f"  Inclusion Rate: {inclusion_rate:.1f}%")
-        
-        # Show task data summary for included subjects
-        if len(included_patients) > 0:
-            hammer_patients = included_patients['has_hammer_raw'].sum() if 'has_hammer_raw' in included_patients.columns else 0
-            stroop_patients = included_patients['has_stroop_raw'].sum() if 'has_stroop_raw' in included_patients.columns else 0
-            print(f"\nIncluded Patients Task Data:")
-            print(f"  - With Hammer task: {hammer_patients}")
-            print(f"  - With Stroop task: {stroop_patients}")
-        
-        if len(included_controls) > 0:
-            hammer_controls = included_controls['has_hammer_raw'].sum() if 'has_hammer_raw' in included_controls.columns else 0
-            stroop_controls = included_controls['has_stroop_raw'].sum() if 'has_stroop_raw' in included_controls.columns else 0
-            print(f"\nIncluded Controls Task Data:")
-            print(f"  - With Hammer task: {hammer_controls}")
-            print(f"  - With Stroop task: {stroop_controls}")
-        
+        included_subjects, excluded_subjects = pipeline.apply_filters(subjects_df, file_paths)
+
         print(f"\n{'='*60}")
         print(f"TASK FILTERING COMPLETE")
         print(f"{'='*60}")
-        print(f"Results saved to: {output_dir}")
+        print(f"\nFinal Results:")
+        print(f"  Total input subjects: {len(subjects_df)}")
+        print(f"  Included subjects: {len(included_subjects)}")
+        print(f"  Excluded subjects: {len(excluded_subjects)}")
+
+        if len(subjects_df) > 0:
+            inclusion_rate = (len(included_subjects) / len(subjects_df)) * 100
+            print(f"  Overall inclusion rate: {inclusion_rate:.1f}%")
+
+        # Show task availability summary if possible
+        if 'has_hammer_raw' in included_subjects.columns or 'has_stroop_raw' in included_subjects.columns:
+            print(f"\nTask Data Availability (Included Subjects):")
+            if 'has_hammer_raw' in included_subjects.columns:
+                hammer_count = included_subjects['has_hammer_raw'].sum()
+                print(f"  - Hammer task: {hammer_count}/{len(included_subjects)} ({hammer_count/len(included_subjects)*100:.1f}%)")
+            if 'has_stroop_raw' in included_subjects.columns:
+                stroop_count = included_subjects['has_stroop_raw'].sum()
+                print(f"  - Stroop task: {stroop_count}/{len(included_subjects)} ({stroop_count/len(included_subjects)*100:.1f}%)")
+
+        print(f"\nOutput saved to: {output_dir}")
         print(f"\nNext steps:")
-        print(f"  1. Run fetch_filtered_data.py to download MRI data for included subjects")
-        print(f"  2. Review filtering_report.json for detailed statistics")
-        print(f"  3. Use included/ directory for downstream analysis")
-        
+        print(f"  1. (Optional) Run summarize_groups.py to see patient/control breakdown")
+        print(f"  2. Run map_subject_files.py to create file path mapping")
+        print(f"  3. Run fetch_filtered_data.py to download MRI data")
+        print(f"  4. Review task_filtering_summary.json for detailed statistics")
+
         return 0
-        
+
     except Exception as e:
         print(f"❌ Error during task filtering: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 if __name__ == "__main__":
