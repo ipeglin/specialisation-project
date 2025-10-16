@@ -115,7 +115,7 @@ class GroupSummarizer:
             strategies = {
                 'original': lambda x: x,
                 'strip_sub': lambda x: x.str.replace('sub-', '', regex=False),
-                'add_sub': lambda x: 'sub-' + x if not x.startswith('sub-') else x,
+                'add_sub': lambda x: x.apply(lambda id: id if id.startswith('sub-') else 'sub-' + id),
                 'underscore': lambda x: x.str.replace('NDARINV', 'NDAR_INV', regex=False),
                 'strip_and_underscore': lambda x: x.str.replace('sub-', '', regex=False).str.replace('NDARINV', 'NDAR_INV', regex=False),
             }
