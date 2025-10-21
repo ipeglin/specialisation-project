@@ -9,12 +9,13 @@ Author: Ian Philip Eglin
 Date: 2025-09-23
 """
 
+import re
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Union
-import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
-import re
+from typing import Any, Dict, List, Optional, Union
+
+import pandas as pd
 
 
 class FilterAction(Enum):
@@ -330,6 +331,36 @@ class PrimaryDiagnosisFilter(ColumnValueFilter):
             return f"Include subjects with: {' OR '.join(criteria_parts)}"
         else:
             return "Exclude all subjects (no valid criteria specified)"
+        
+class NonPrimaryDiagnosisFilter(ColumnValueFilter):
+    """Specialized filter for Non-Primary_Dx colum to identify MDD subjects with a different primary diagnosis"""
+
+    def __init__(self):
+        """
+        Initialize Non-Primary Diagnosis filter for MDD identification
+        """
+
+        # Define filter values based on what to include
+        filter_values = ["MDD"]
+
+        super().__init__(
+            phenotype_file='demos',
+            column_name='Non-Primary_Dx',
+            filter_values=filter_values,
+            match_type='contains',
+            case_sensitive=False,
+            action=FilterAction.INCLUDE
+        )
+
+        # Override filter name and description
+        self.filter_name = "NonPrimaryDiagnosisFilter"
+        self.description = "Filter for Non-MDD patients that are suffering from MDD as a comorbid illness based on content on Non-Primary_Dx"
+
+    def get_criteria_description(self) -> str:
+        """Get human-readable description of filter criteria"""
+        criteria_parts = ["Non-Primary_Dx contains 'MDD' (patients)"]
+
+        return f"Include subjects with: {' OR '.join(criteria_parts)}"
 
 class ShapsCompletionFilter(ColumnValueFilter):
     """Specialized filter for shaps_total column to identify subjects that have not completed the Snaith-Hamilton Please Scale(SHAPS) questionnaire"""
@@ -544,3 +575,203 @@ class AgeRangeFilter(PhenotypeFilter):
             return f"Age <= {self.max_age} years"
         else:
             return "No age restrictions (include all ages)"
+
+
+class AnhedoniaSegmentationFilter(PhenotypeFilter):
+    """Segmentation filter for anhedonia scores based on SHAPS total score"""
+
+    def __init__(self, 
+                 score_column: str = 'shaps_total',
+                 phenotype_file: str = 'shaps01',
+                 subject_id_column: str = 'subjectkey'):
+        """
+        Initialize anhedonia segmentation filter
+        
+        Classifies subjects into:
+        - non-anhedonic: 0 <= score <= 2
+        - low-anhedonic: 3 <= score <= 8  
+        - high-anhedonic: 9 <= score <= 14
+
+        Args:
+            score_column: Name of the SHAPS total score column
+            phenotype_file: Name of phenotype file containing SHAPS data
+            subject_id_column: Name of subject ID column in phenotype file (default: 'subjectkey')
+        """
+        self.score_column = score_column
+        self.phenotype_file = phenotype_file
+        self.subject_id_column = subject_id_column
+
+        filter_name = "AnhedoniaSegmentationFilter"
+        description = f"Segment subjects into anhedonia classes based on {score_column} scores"
+        super().__init__(filter_name, description)
+
+    @staticmethod
+    def classify_anhedonia_score(score: float) -> str:
+        """
+        Classify anhedonia score into categories
+        
+        Args:
+            score: SHAPS total score (0-14)
+            
+        Returns:
+            Category string: 'non-anhedonic', 'low-anhedonic', or 'high-anhedonic'
+        """
+        if pd.isna(score):
+            return 'unknown'
+        
+        score = float(score)
+        
+        if 0 <= score <= 2:
+            return 'non-anhedonic'
+        elif 3 <= score <= 8:
+            return 'low-anhedonic'
+        elif 9 <= score <= 14:
+            return 'high-anhedonic'
+        else:
+            return 'invalid_score'
+
+    def apply(self, subjects_df: pd.DataFrame, phenotype_data: Dict[str, pd.DataFrame], **kwargs) -> PhenotypeFilterResult:
+        """Apply anhedonia segmentation"""
+        subjects_df = subjects_df.copy()
+
+        # Check if required phenotype file exists
+        if self.phenotype_file not in phenotype_data:
+            raise ValueError(f"Phenotype file '{self.phenotype_file}' not found in phenotype_data. "
+                           f"Available files: {list(phenotype_data.keys())}")
+
+        phenotype_df = phenotype_data[self.phenotype_file]
+
+        # Check if required columns exist
+        if self.score_column not in phenotype_df.columns:
+            raise ValueError(f"Score column '{self.score_column}' not found in {self.phenotype_file}.tsv. "
+                           f"Available columns: {list(phenotype_df.columns)}")
+        
+        if self.subject_id_column not in phenotype_df.columns:
+            raise ValueError(f"Subject ID column '{self.subject_id_column}' not found in {self.phenotype_file}.tsv. "
+                           f"Available columns: {list(phenotype_df.columns)}")
+
+        # Create working copy
+        phenotype_df = phenotype_df.copy()
+
+        # Handle subject ID format conversion
+        subjects_ids = set(subjects_df['subject_id'].tolist())
+        phenotype_ids = set(phenotype_df[self.subject_id_column].tolist())
+        
+        subjects_df = subjects_df.copy()
+        
+        if not subjects_ids.intersection(phenotype_ids):
+            # Try different ID format conversions
+            if subjects_df['subject_id'].iloc[0].startswith('sub-'):
+                # Convert sub-NDARXXX to NDARXXX
+                converted_ids = subjects_df['subject_id'].str.replace('sub-', '')
+                
+                if not set(converted_ids).intersection(phenotype_ids):
+                    # Try sub-NDAR-XXX to NDAR_XXX (hyphens to underscores)
+                    converted_ids = subjects_df['subject_id'].str.replace('sub-NDAR', 'NDAR_').str.replace('-', '_')
+                
+                subjects_df['subject_id_for_merge'] = converted_ids
+            else:
+                # Convert NDARXXX to sub-NDARXXX
+                subjects_df['subject_id_for_merge'] = 'sub-' + subjects_df['subject_id']
+        else:
+            # IDs match directly
+            subjects_df['subject_id_for_merge'] = subjects_df['subject_id']
+
+        # Merge dataframes - create subset manually to avoid column selection issues
+        merge_df = pd.DataFrame({
+            self.subject_id_column: phenotype_df[self.subject_id_column],
+            self.score_column: phenotype_df[self.score_column]
+        })
+        
+        merged_df = subjects_df.merge(
+            merge_df, 
+            left_on='subject_id_for_merge', 
+            right_on=self.subject_id_column, 
+            how='left'
+        )
+
+        # Apply segmentation classification
+        merged_df['anhedonia_class'] = merged_df[self.score_column].apply(self.classify_anhedonia_score)
+
+        # Filter out invalid or missing scores (keep only valid classifications)
+        valid_mask = merged_df['anhedonia_class'].isin(['non-anhedonic', 'low-anhedonic', 'high-anhedonic'])
+        
+        included_subjects = merged_df[valid_mask].copy()
+        excluded_subjects = merged_df[~valid_mask].copy()
+
+        # Generate classification reasons
+        inclusion_reasons = {}
+        exclusion_reasons = {}
+
+        for _, subject in included_subjects.iterrows():
+            subj_id = subject['subject_id']
+            score = subject[self.score_column]
+            anhedonia_class = subject['anhedonia_class']
+            inclusion_reasons[subj_id] = f"SHAPS score {score} classified as {anhedonia_class}"
+
+        for _, subject in excluded_subjects.iterrows():
+            subj_id = subject['subject_id']
+            score = subject[self.score_column]
+            anhedonia_class = subject['anhedonia_class']
+            if anhedonia_class == 'unknown':
+                exclusion_reasons[subj_id] = f"SHAPS score is missing/NaN"
+            elif anhedonia_class == 'invalid_score':
+                exclusion_reasons[subj_id] = f"SHAPS score {score} is outside valid range (0-14)"
+            else:
+                exclusion_reasons[subj_id] = f"SHAPS score {score} classification failed"
+
+        # Remove merge columns but keep anhedonia_class
+        # Get original columns from subjects_df and add anhedonia_class
+        merge_columns_to_remove = ['subject_id_for_merge', self.subject_id_column]
+        original_columns = [col for col in subjects_df.columns if col not in merge_columns_to_remove]
+        columns_to_keep = original_columns + ['anhedonia_class']
+        
+        # Filter to only columns that actually exist in the merged dataframe
+        available_columns = list(included_subjects.columns)
+        columns_to_keep = [col for col in columns_to_keep if col in available_columns]
+        
+        included_subjects = included_subjects[columns_to_keep]
+        
+        # For excluded_subjects, only keep columns that exist
+        excluded_columns_to_keep = [col for col in original_columns if col in excluded_subjects.columns]
+        excluded_subjects = excluded_subjects[excluded_columns_to_keep]
+
+        # Calculate statistics
+        total_subjects = len(merged_df)
+        valid_scores = merged_df[self.score_column].dropna()
+        
+        # Classification distribution
+        class_distribution = included_subjects['anhedonia_class'].value_counts().to_dict()
+        
+        statistics = {
+            "total_subjects": total_subjects,
+            "included_subjects": len(included_subjects),
+            "excluded_subjects": len(excluded_subjects),
+            "inclusion_rate": len(included_subjects) / total_subjects if total_subjects > 0 else 0,
+            "score_statistics": {
+                "mean_score": float(valid_scores.mean()) if len(valid_scores) > 0 else None,
+                "median_score": float(valid_scores.median()) if len(valid_scores) > 0 else None,
+                "min_score": float(valid_scores.min()) if len(valid_scores) > 0 else None,
+                "max_score": float(valid_scores.max()) if len(valid_scores) > 0 else None,
+                "std_score": float(valid_scores.std()) if len(valid_scores) > 0 else None
+            },
+            "classification_distribution": class_distribution,
+            "missing_scores": int(merged_df[self.score_column].isna().sum()),
+            "invalid_scores": int((merged_df['anhedonia_class'] == 'invalid_score').sum())
+        }
+
+        criteria_description = self.get_criteria_description()
+
+        return PhenotypeFilterResult(
+            included_subjects=included_subjects,
+            excluded_subjects=excluded_subjects,
+            criteria_description=criteria_description,
+            inclusion_reasons=inclusion_reasons,
+            exclusion_reasons=exclusion_reasons,
+            statistics=statistics
+        )
+
+    def get_criteria_description(self) -> str:
+        """Get human-readable description of filter criteria"""
+        return ("Classify subjects based on SHAPS total score: "
+                "non-anhedonic (0-2), low-anhedonic (3-8), high-anhedonic (9-14)")
