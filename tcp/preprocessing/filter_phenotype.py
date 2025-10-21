@@ -9,23 +9,25 @@ Author: Ian Philip Eglin
 Date: 2025-09-23
 """
 
+import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-import json
-from datetime import datetime
-import argparse
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
+from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.phenotype_filters import (
-    PhenotypeFilter, PhenotypeFilterResult, PrimaryDiagnosisFilter, ShapsCompletionFilter,
-    AgeRangeFilter, ColumnValueFilter, FilterAction
-)
+    AgeRangeFilter, ColumnValueFilter, FilterAction, NonPrimaryDiagnosisFilter,
+    PhenotypeFilter, PhenotypeFilterResult, PrimaryDiagnosisFilter,
+    ShapsCompletionFilter)
+
 
 class PhenotypeFilterPipeline:
     """Orchestrates multiple phenotype filters with dependency injection"""
@@ -364,6 +366,10 @@ def create_default_mdd_pipeline() -> PhenotypeFilterPipeline:
         include_control=True
     )
     pipeline.add_filter(primary_dx_filter)
+
+    # Add non-primary diagnosis filter (MDD) [OPTIONAL]
+    # non_primary_dx_filter = NonPrimaryDiagnosisFilter()
+    # pipeline.add_filter(non_primary_dx_filter)
 
     # Add SHAPS questionnaire completion filter
     shaps_completion_filter = ShapsCompletionFilter(

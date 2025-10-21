@@ -31,6 +31,7 @@ class PipelineStep(Enum):
     FETCH_GLOBAL_DATA = "fetch_global_data"
     FILTER_PHENOTYPE = "filter_phenotype"
     FILTER_SUBJECTS = "filter_subjects"
+    ANHEDONIA_SEGMENTATION = "anhedonia_segmentation"
     SUMMARIZE_GROUPS = "summarize_groups"
     MAP_SUBJECT_FILES = "map_subject_files"
     FETCH_MRI_DATA = "fetch_mri_data"
@@ -86,6 +87,13 @@ class TCPPipeline:
                 'required': True,
                 'estimated_time': '5-15 minutes',
                 'timeout': 1800  # 30 minutes
+            },
+            PipelineStep.ANHEDONIA_SEGMENTATION: {
+                'script': 'anhedonia_segmentation.py',
+                'description': 'Segment subjects into anhedonia classes (non/low/high-anhedonic)',
+                'required': False,
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
             },
             PipelineStep.SUMMARIZE_GROUPS: {
                 'script': 'summarize_groups.py',
@@ -207,6 +215,11 @@ class TCPPipeline:
             filter_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects')
             return (filter_dir / 'task_filtered_subjects.csv').exists()
 
+        elif step == PipelineStep.ANHEDONIA_SEGMENTATION:
+            # Check if anhedonia segmentation output exists (optional analytical step)
+            segmentation_dir = get_script_output_path('tcp_preprocessing', 'anhedonia_segmentation')
+            return (segmentation_dir / 'anhedonia_segmented_subjects.csv').exists()
+
         elif step == PipelineStep.SUMMARIZE_GROUPS:
             # Check if group summarization output exists (optional step)
             summary_dir = get_script_output_path('tcp_preprocessing', 'summarize_groups')
@@ -281,21 +294,42 @@ class TCPPipeline:
             step_timeout = step_info.get('timeout', 7200)  # Default 2 hours if not specified
             print(f"Executing: {' '.join(cmd)}")
             print(f"Timeout: {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=step_timeout
-            )
             
-            # Store results
-            step_result = {
-                'command': ' '.join(cmd),
-                'return_code': result.returncode,
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'timestamp': datetime.now().isoformat()
-            }
+            # Use real-time output for long-running steps (especially data fetching)
+            if step == PipelineStep.FETCH_MRI_DATA:
+                # Allow real-time output for data fetching to show progress
+                print("Starting data fetch with real-time output...")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=False,  # Show real-time output
+                    text=True,
+                    timeout=step_timeout
+                )
+                # Create result object compatible with existing code
+                step_result = {
+                    'command': ' '.join(cmd),
+                    'return_code': result.returncode,
+                    'stdout': f"Real-time output mode - check console above",
+                    'stderr': f"Real-time output mode - errors shown in console",
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                # Use captured output for other steps
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=step_timeout
+                )
+                # Store results
+                step_result = {
+                    'command': ' '.join(cmd),
+                    'return_code': result.returncode,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'timestamp': datetime.now().isoformat()
+                }
+            
             self.step_results[step.value] = step_result
             
             if result.returncode == 0:

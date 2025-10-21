@@ -11,9 +11,10 @@ The new pipeline performs filtering **before** downloading large MRI files, redu
 3. **Global Data Fetching** - Download metadata files for filtering
 4. **Phenotype Filtering** (Optional) - Filter by diagnosis (MDD vs controls)
 5. **Task Data Filtering** - Filter subjects with hammer/stroop task data (group-agnostic)
-6. **Group Summarization** (Optional) - Generate patient/control statistics
-7. **File Path Mapping** - Map all data files for filtered subjects
-8. **MRI Data Fetching** - Download actual MRI files for selected subjects
+6. **Anhedonia Segmentation** (Optional) - Classify subjects by anhedonia severity
+7. **Group Summarization** (Optional) - Generate patient/control statistics
+8. **File Path Mapping** - Map all data files for filtered subjects
+9. **MRI Data Fetching** - Download actual MRI files for selected subjects
 
 **Key Design Principle**: Filtering is group-agnostic. All subjects are processed equally during filtering, regardless of patient/control status. Group classification is only used for analytical summaries and does not affect data organization.
 
@@ -50,13 +51,16 @@ python3 tcp/preprocessing/filter_phenotype.py
 # Step 5: Filter subjects with task data (group-agnostic)
 python3 tcp/preprocessing/filter_subjects.py
 
-# Step 6: (Optional) Summarize patient/control groups
+# Step 6: (Optional) Segment subjects by anhedonia severity
+python3 tcp/preprocessing/anhedonia_segmentation.py
+
+# Step 7: (Optional) Summarize patient/control groups
 python3 tcp/preprocessing/summarize_groups.py
 
-# Step 7: Map file paths for all filtered subjects
+# Step 8: Map file paths for all filtered subjects
 python3 tcp/preprocessing/map_subject_files.py
 
-# Step 8: Download MRI data for filtered subjects
+# Step 9: Download MRI data for filtered subjects
 python3 tcp/preprocessing/fetch_filtered_data.py
 ```
 
@@ -180,7 +184,35 @@ python3 tcp/preprocessing/filter_subjects.py --data-types raw_nifti events
 
 **Note**: Group column (Patient/GenPop) is preserved in output CSV for later analysis, but filtering is group-agnostic.
 
-### 6. Group Summarization (`summarize_groups.py`) - **NEW** (Optional)
+### 6. Anhedonia Segmentation (`anhedonia_segmentation.py`) - **NEW** (Optional)
+
+**Purpose**: Classify subjects into anhedonia severity classes based on SHAPS total scores. **This is purely for data organization** - it helps categorize subjects for anhedonia-focused analysis.
+
+```bash
+# Segment subjects by anhedonia severity
+python3 tcp/preprocessing/anhedonia_segmentation.py
+```
+
+**What it does**:
+- Reads task-filtered subjects from `filter_subjects` output
+- Loads SHAPS questionnaire data to get total anhedonia scores
+- Classifies subjects into three categories:
+  - **non-anhedonic**: SHAPS total score 0-2
+  - **low-anhedonic**: SHAPS total score 3-8  
+  - **high-anhedonic**: SHAPS total score 9-14
+- Excludes subjects with missing or invalid SHAPS scores (score = 999 or outside 0-14 range)
+- Adds `anhedonia_class` column to subject data for downstream analysis
+
+**Output**:
+- `anhedonia_segmented_subjects.csv` - All subjects with valid classifications and anhedonia_class column
+- `anhedonia_excluded_subjects.csv` - Subjects with missing/invalid SHAPS scores
+- `non_anhedonic_subjects.csv`, `low_anhedonic_subjects.csv`, `high_anhedonic_subjects.csv` - Separate files by anhedonia class
+- `anhedonia_segmentation_summary.json` - Detailed statistics and class distribution
+- `segmentation_reasons.json` - Per-subject classification reasons
+
+**When to use**: Run this step when you want to organize subjects by anhedonia severity for research focused on anhedonic symptoms. This classification is based on established SHAPS score ranges and provides a systematic way to compare different levels of anhedonic presentation.
+
+### 7. Group Summarization (`summarize_groups.py`) - **NEW** (Optional)
 
 **Purpose**: Generate analytical summary of patient/control group composition. **This is purely for understanding your data** - it does not affect data organization or downstream processing.
 
@@ -203,7 +235,7 @@ python3 tcp/preprocessing/summarize_groups.py
 
 **When to use**: Run this step when you want to understand how many patients vs controls passed filtering, and their demographic characteristics. Skip this step if you don't need group-based statistics yet.
 
-### 7. File Path Mapping (`map_subject_files.py`) - **NEW**
+### 8. File Path Mapping (`map_subject_files.py`) - **NEW**
 
 **Purpose**: Create comprehensive mapping of all data file paths for filtered subjects. **Group-agnostic** - maps files for all filtered subjects regardless of classification.
 
@@ -226,7 +258,7 @@ python3 tcp/preprocessing/map_subject_files.py
 
 **Why this step**: Pre-computing file paths makes the fetch step much faster and more reliable. The fetch script can simply read this mapping instead of discovering files at runtime.
 
-### 8. MRI Data Fetching (`fetch_filtered_data.py`)
+### 9. MRI Data Fetching (`fetch_filtered_data.py`)
 
 **Purpose**: Download actual MRI files for subjects passing all filters.
 
@@ -384,6 +416,7 @@ python3 tcp/preprocessing/validate_subjects.py
 python3 tcp/preprocessing/fetch_global_data.py
 python3 tcp/preprocessing/filter_phenotype.py  # Optional
 python3 tcp/preprocessing/filter_subjects.py
+python3 tcp/preprocessing/anhedonia_segmentation.py  # Optional
 python3 tcp/preprocessing/summarize_groups.py  # Optional
 python3 tcp/preprocessing/map_subject_files.py
 python3 tcp/preprocessing/fetch_filtered_data.py
