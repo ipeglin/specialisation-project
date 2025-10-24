@@ -208,7 +208,7 @@ class DataladDataFetcher:
             Dictionary mapping subject_id to fetch success boolean
         """
         if data_types is None:
-            data_types = ['raw_nifti', 'events']  # Default to essential data
+            data_types = ['raw_nifti', 'events', 'timeseries']  # Default to essential data including timeseries
 
         self.logger.info(f"Starting data fetch for {len(subject_file_mapping)} subjects")
         self.logger.info(f"Data types: {', '.join(data_types)}")
@@ -505,8 +505,8 @@ def main():
     )
     parser.add_argument('--data-types', nargs='+',
                        choices=available_data_types,
-                       default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json'],
-                       help='Data type categories to fetch (default: raw NIFTI, events, JSON metadata, and anatomical scans)')
+                       default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
+                       help='Data type categories to fetch (default: raw NIFTI, events, JSON metadata, anatomical scans, and timeseries)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,

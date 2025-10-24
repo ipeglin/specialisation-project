@@ -508,7 +508,7 @@ def main():
     
     # Data fetching options
     parser.add_argument('--data-types', nargs='+',
-                       default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json'],
+                       default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
                        help='Data types to fetch')
     parser.add_argument('--fetch-dry-run', action='store_true',
                        help='Dry run for data fetching step')
