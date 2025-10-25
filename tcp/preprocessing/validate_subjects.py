@@ -50,6 +50,27 @@ class SubjectValidator:
         print(f"✓ Dataset directory found: {self.dataset_path}")
         return True
     
+    def get_expected_subjects_from_participants(self) -> List[str]:
+        """Get list of expected subjects from participants.tsv"""
+        participants_file = self.dataset_path / "participants.tsv"
+        
+        if not participants_file.exists():
+            print(f"Warning: participants.tsv not found at {participants_file}")
+            return []
+        
+        try:
+            participants_df = pd.read_csv(participants_file, sep='\t')
+            if 'participant_id' not in participants_df.columns:
+                print(f"Warning: participants.tsv missing 'participant_id' column")
+                return []
+            
+            expected_subjects = participants_df['participant_id'].tolist()
+            print(f"Found {len(expected_subjects)} subjects in participants.tsv")
+            return expected_subjects
+        except Exception as e:
+            print(f"Error reading participants.tsv: {e}")
+            return []
+    
     def find_subject_directories(self) -> List[str]:
         """Find all subject directories in the dataset"""
         if not self.validate_dataset_exists():
@@ -64,6 +85,28 @@ class SubjectValidator:
         
         print(f"Found {len(subject_dirs)} subject directories")
         return subject_dirs
+    
+    def get_all_subjects_to_process(self) -> Tuple[List[str], List[str]]:
+        """Get comprehensive list of subjects to process and those missing directories"""
+        expected_subjects = self.get_expected_subjects_from_participants()
+        existing_dirs = self.find_subject_directories()
+        
+        # Find subjects missing directories
+        existing_dirs_set = set(existing_dirs)
+        missing_dirs = [subj for subj in expected_subjects if subj not in existing_dirs_set]
+        
+        if missing_dirs:
+            print(f"Found {len(missing_dirs)} subjects in participants.tsv without directories:")
+            for subj in missing_dirs[:5]:  # Show first 5 as example
+                print(f"  - {subj}")
+            if len(missing_dirs) > 5:
+                print(f"  ... and {len(missing_dirs) - 5} more")
+        
+        # Combine all subjects for processing (dirs + missing)
+        all_subjects = list(existing_dirs_set.union(set(expected_subjects)))
+        all_subjects.sort()
+        
+        return all_subjects, missing_dirs
     
     def validate_subject_id_format(self, subject_id: str) -> Tuple[bool, str]:
         """Validate subject ID format (BIDS compliance)"""
@@ -159,35 +202,62 @@ class SubjectValidator:
         
         return validation_result
     
+    def create_missing_directory_entry(self, subject_id: str) -> Dict[str, any]:
+        """Create validation entry for subject missing directory"""
+        return {
+            'subject_id': subject_id,
+            'directory_exists': False,
+            'is_directory': False,
+            'id_format_valid': True,  # Assume valid since it's in participants.tsv
+            'id_format_reason': 'Valid BIDS subject ID format',
+            'subdirectories': {},
+            'has_func': False,
+            'has_anat': False,
+            'func_file_count': 0,
+            'anat_file_count': 0,
+            'validation_status': 'invalid',
+            'exclusion_reasons': ['Subject directory does not exist (listed in participants.tsv but no directory found)']
+        }
+    
     def validate_all_subjects(self) -> Tuple[List[Dict], List[Dict]]:
         """Validate all subjects and separate into valid/invalid"""
         print("\n=== Validating All Subjects ===")
         
+        # Get comprehensive list of subjects to process
+        all_subjects, missing_dirs = self.get_all_subjects_to_process()
         subject_dirs = self.find_subject_directories()
         
-        if not subject_dirs:
-            print("No subject directories found")
+        if not all_subjects:
+            print("No subjects found to validate")
             return [], []
         
         valid_subjects = []
         invalid_subjects = []
         
-        print(f"Validating {len(subject_dirs)} subjects...")
+        print(f"Validating {len(all_subjects)} subjects (including {len(missing_dirs)} missing directories)...")
         
-        for i, subject_id in enumerate(subject_dirs, 1):
-            if i % 50 == 0 or i == len(subject_dirs):
-                print(f"  Progress: {i}/{len(subject_dirs)} subjects")
+        for i, subject_id in enumerate(all_subjects, 1):
+            if i % 50 == 0 or i == len(all_subjects):
+                print(f"  Progress: {i}/{len(all_subjects)} subjects")
             
-            validation_result = self.validate_subject_structure(subject_id)
-            
-            if validation_result['validation_status'] == 'valid':
-                valid_subjects.append(validation_result)
-            else:
+            # Check if this subject has a directory
+            if subject_id in missing_dirs:
+                # Create entry for missing directory
+                validation_result = self.create_missing_directory_entry(subject_id)
                 invalid_subjects.append(validation_result)
+            else:
+                # Validate normally
+                validation_result = self.validate_subject_structure(subject_id)
+                
+                if validation_result['validation_status'] == 'valid':
+                    valid_subjects.append(validation_result)
+                else:
+                    invalid_subjects.append(validation_result)
         
         print(f"\nValidation complete:")
         print(f"  ✓ Valid subjects: {len(valid_subjects)}")
         print(f"  ✗ Invalid subjects: {len(invalid_subjects)}")
+        print(f"  📁 Missing directories: {len(missing_dirs)}")
         
         return valid_subjects, invalid_subjects
     
@@ -357,8 +427,8 @@ def main():
     print(f"Results saved to: {output_dir}")
     print(f"\nNext steps:")
     print(f"  1. Run fetch_global_data.py to get participants.tsv")
-    print(f"  2. Optionally run filter_phenotype.py for diagnosis filtering")
-    print(f"  3. Run filter_subjects.py for task data filtering")
+    print(f"  2. Run filter_subjects.py for task data filtering")
+    print(f"  3. Run the anhedonia classification pipeline (filter_base_subjects.py, classify_anhedonia.py, etc.)")
     
     # Return success if we have any valid subjects
     return 0 if valid_subjects else 1
