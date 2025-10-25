@@ -2,11 +2,20 @@
 """
 TCP Preprocessing Pipeline Orchestrator
 
-Runs the complete TCP preprocessing pipeline in the correct order with
+Runs the complete TCP anhedonia-focused preprocessing pipeline in the correct order with
 error handling, progress tracking, and resumable execution.
 
+The pipeline follows this sequence:
+1. Dataset initialization and validation  
+2. Subject filtering (task fMRI + SHAPS completion)
+3. Anhedonia classification (SHAPS scores)
+4. Diagnosis classification (MDD status) 
+5. Analysis group generation (Primary/Secondary/Tertiary/Quaternary)
+6. Subject sampling and file mapping
+7. Cross-analysis integration and data download
+
 Author: Ian Philip Eglin  
-Date: 2025-09-23
+Date: 2025-10-25
 """
 
 import sys
@@ -29,12 +38,15 @@ class PipelineStep(Enum):
     INITIALIZE_DATASET = "initialize_dataset"
     VALIDATE_SUBJECTS = "validate_subjects"
     FETCH_GLOBAL_DATA = "fetch_global_data"
-    FILTER_PHENOTYPE = "filter_phenotype"
     FILTER_SUBJECTS = "filter_subjects"
-    ANHEDONIA_SEGMENTATION = "anhedonia_segmentation"
-    SUMMARIZE_GROUPS = "summarize_groups"
+    FILTER_BASE_SUBJECTS = "filter_base_subjects"
+    CLASSIFY_ANHEDONIA = "classify_anhedonia"
+    CLASSIFY_DIAGNOSES = "classify_diagnoses"
+    GENERATE_ANALYSIS_GROUPS = "generate_analysis_groups"
+    SAMPLE_SUBJECTS = "sample_subjects"
     MAP_SUBJECT_FILES = "map_subject_files"
-    FETCH_MRI_DATA = "fetch_mri_data"
+    INTEGRATE_CROSS_ANALYSIS = "integrate_cross_analysis"
+    FETCH_FILTERED_DATA = "fetch_filtered_data"
 
 class StepStatus(Enum):
     """Step execution status"""
@@ -74,13 +86,6 @@ class TCPPipeline:
                 'estimated_time': '1-3 minutes',
                 'timeout': 600  # 10 minutes
             },
-            PipelineStep.FILTER_PHENOTYPE: {
-                'script': 'filter_phenotype.py',
-                'description': 'Filter subjects by diagnosis (MDD vs controls)',
-                'required': False,
-                'estimated_time': '1-2 minutes',
-                'timeout': 600  # 10 minutes
-            },
             PipelineStep.FILTER_SUBJECTS: {
                 'script': 'filter_subjects.py',
                 'description': 'Filter subjects with task fMRI data (group-agnostic)',
@@ -88,30 +93,58 @@ class TCPPipeline:
                 'estimated_time': '5-15 minutes',
                 'timeout': 1800  # 30 minutes
             },
-            PipelineStep.ANHEDONIA_SEGMENTATION: {
-                'script': 'anhedonia_segmentation.py',
-                'description': 'Segment subjects into anhedonia classes (non/low/high-anhedonic)',
-                'required': False,
+            PipelineStep.FILTER_BASE_SUBJECTS: {
+                'script': 'filter_base_subjects.py',
+                'description': 'Apply universal inclusion criteria (SHAPS completion)',
+                'required': True,
                 'estimated_time': '1-2 minutes',
                 'timeout': 600  # 10 minutes
             },
-            PipelineStep.SUMMARIZE_GROUPS: {
-                'script': 'summarize_groups.py',
-                'description': 'Summarize patient/control groups (optional analytical step)',
-                'required': False,
+            PipelineStep.CLASSIFY_ANHEDONIA: {
+                'script': 'classify_anhedonia.py',
+                'description': 'Classify subjects by anhedonia severity (SHAPS scores)',
+                'required': True,
                 'estimated_time': '1-2 minutes',
                 'timeout': 600  # 10 minutes
+            },
+            PipelineStep.CLASSIFY_DIAGNOSES: {
+                'script': 'classify_diagnoses.py',
+                'description': 'Classify subjects by MDD diagnosis status',
+                'required': True,
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
+            },
+            PipelineStep.GENERATE_ANALYSIS_GROUPS: {
+                'script': 'generate_analysis_groups.py',
+                'description': 'Generate 4 analysis groups (Primary/Secondary/Tertiary/Quaternary)',
+                'required': True,
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
+            },
+            PipelineStep.SAMPLE_SUBJECTS: {
+                'script': 'sample_subjects_for_download.py',
+                'description': 'Sample subjects for data download (development vs production)',
+                'required': False,
+                'estimated_time': '30 seconds',
+                'timeout': 300  # 5 minutes
             },
             PipelineStep.MAP_SUBJECT_FILES: {
                 'script': 'map_subject_files.py',
-                'description': 'Map file paths for all filtered subjects',
+                'description': 'Map file paths for sampled/filtered subjects',
                 'required': True,
-                'estimated_time': '5-10 minutes',
+                'estimated_time': '1-10 minutes',
                 'timeout': 1200  # 20 minutes
             },
-            PipelineStep.FETCH_MRI_DATA: {
+            PipelineStep.INTEGRATE_CROSS_ANALYSIS: {
+                'script': 'integrate_cross_analysis.py',
+                'description': 'Generate cross-analysis statistics and datasets',
+                'required': False,
+                'estimated_time': '1-2 minutes',
+                'timeout': 600  # 10 minutes
+            },
+            PipelineStep.FETCH_FILTERED_DATA: {
                 'script': 'fetch_filtered_data.py',
-                'description': 'Download MRI data for filtered subjects',
+                'description': 'Download MRI data for selected subjects',
                 'required': True,
                 'estimated_time': '2-10 hours',
                 'timeout': 36000  # 10 hours
@@ -205,32 +238,47 @@ class TCPPipeline:
                     return False
             return False
         
-        elif step == PipelineStep.FILTER_PHENOTYPE:
-            # Check if phenotype filtering output exists (optional step)
-            phenotype_dir = get_script_output_path('tcp_preprocessing', 'filter_phenotype')
-            return (phenotype_dir / 'phenotype_filtered_subjects.csv').exists()
-        
         elif step == PipelineStep.FILTER_SUBJECTS:
-            # Check if subject filtering output exists (new unified format)
+            # Check if subject filtering output exists (group-agnostic task filtering)
             filter_dir = get_script_output_path('tcp_preprocessing', 'filter_subjects')
             return (filter_dir / 'task_filtered_subjects.csv').exists()
 
-        elif step == PipelineStep.ANHEDONIA_SEGMENTATION:
-            # Check if anhedonia segmentation output exists (optional analytical step)
-            segmentation_dir = get_script_output_path('tcp_preprocessing', 'anhedonia_segmentation')
-            return (segmentation_dir / 'anhedonia_segmented_subjects.csv').exists()
+        elif step == PipelineStep.FILTER_BASE_SUBJECTS:
+            # Check if base subject filtering output exists (universal inclusion criteria)
+            base_dir = get_script_output_path('tcp_preprocessing', 'filter_base_subjects')
+            return (base_dir / 'base_filtered_subjects.csv').exists()
 
-        elif step == PipelineStep.SUMMARIZE_GROUPS:
-            # Check if group summarization output exists (optional step)
-            summary_dir = get_script_output_path('tcp_preprocessing', 'summarize_groups')
-            return (summary_dir / 'group_summary.json').exists()
+        elif step == PipelineStep.CLASSIFY_ANHEDONIA:
+            # Check if anhedonia classification output exists
+            anhedonia_dir = get_script_output_path('tcp_preprocessing', 'classify_anhedonia')
+            return (anhedonia_dir / 'anhedonia_classified_subjects.csv').exists()
+
+        elif step == PipelineStep.CLASSIFY_DIAGNOSES:
+            # Check if diagnosis classification output exists  
+            diagnoses_dir = get_script_output_path('tcp_preprocessing', 'classify_diagnoses')
+            return (diagnoses_dir / 'diagnosis_classified_subjects.csv').exists()
+
+        elif step == PipelineStep.GENERATE_ANALYSIS_GROUPS:
+            # Check if analysis groups generation output exists
+            groups_dir = get_script_output_path('tcp_preprocessing', 'generate_analysis_groups')
+            return (groups_dir / 'primary_analysis_subjects.csv').exists()
+
+        elif step == PipelineStep.SAMPLE_SUBJECTS:
+            # Check if subject sampling output exists (optional step)
+            sample_dir = get_script_output_path('tcp_preprocessing', 'sample_subjects_for_download')
+            return (sample_dir / 'sampled_subjects_for_download.csv').exists()
 
         elif step == PipelineStep.MAP_SUBJECT_FILES:
             # Check if file mapping output exists
             mapping_dir = get_script_output_path('tcp_preprocessing', 'map_subject_files')
             return (mapping_dir / 'subject_file_mapping.json').exists()
 
-        elif step == PipelineStep.FETCH_MRI_DATA:
+        elif step == PipelineStep.INTEGRATE_CROSS_ANALYSIS:
+            # Check if cross-analysis integration output exists (optional step)
+            cross_dir = get_script_output_path('tcp_preprocessing', 'integrate_cross_analysis')
+            return (cross_dir / 'cross_analysis_master_summary.json').exists()
+
+        elif step == PipelineStep.FETCH_FILTERED_DATA:
             # Check if MRI data fetching was completed
             fetch_dir = get_script_output_path('tcp_preprocessing', 'fetch_filtered_data')
             # Look for recent fetch report
@@ -272,18 +320,16 @@ class TCPPipeline:
             cmd = [sys.executable, str(script_path)]
             
             # Add step-specific arguments
-            if step == PipelineStep.FILTER_PHENOTYPE:
-                # Add phenotype filtering arguments if provided
-                if 'include_mdd' in kwargs and kwargs['include_mdd']:
-                    cmd.append('--include-mdd')
-                if 'include_controls' in kwargs and kwargs['include_controls']:
-                    cmd.append('--include-controls')
-                if 'min_age' in kwargs and kwargs['min_age'] is not None:
-                    cmd.extend(['--min-age', str(kwargs['min_age'])])
-                if 'max_age' in kwargs and kwargs['max_age'] is not None:
-                    cmd.extend(['--max-age', str(kwargs['max_age'])])
+            if step == PipelineStep.SAMPLE_SUBJECTS:
+                # Add subject sampling arguments if provided
+                sample_mode = kwargs.get('sample_mode', 'development')
+                cmd.extend(['--sample-mode', sample_mode])
+                
+                analysis_groups = kwargs.get('analysis_groups', ['primary'])
+                if analysis_groups:
+                    cmd.extend(['--analysis-groups'] + analysis_groups)
             
-            elif step == PipelineStep.FETCH_MRI_DATA:
+            elif step == PipelineStep.FETCH_FILTERED_DATA:
                 # Add data fetching arguments if provided
                 if 'data_types' in kwargs:
                     cmd.extend(['--data-types'] + kwargs['data_types'])
@@ -296,7 +342,7 @@ class TCPPipeline:
             print(f"Timeout: {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
             
             # Use real-time output for long-running steps (especially data fetching)
-            if step == PipelineStep.FETCH_MRI_DATA:
+            if step == PipelineStep.FETCH_FILTERED_DATA:
                 # Allow real-time output for data fetching to show progress
                 print("Starting data fetch with real-time output...")
                 result = subprocess.run(
@@ -506,10 +552,20 @@ def main():
     parser.add_argument('--max-age', type=float,
                        help='Maximum age for phenotype filtering')
     
+    # Subject sampling options
+    parser.add_argument('--sample-mode', 
+                       choices=['development', 'production', 'custom'],
+                       default='development',
+                       help='Sampling strategy: development (~15GB), production (~300GB), or custom (default: development)')
+    parser.add_argument('--analysis-groups', nargs='+',
+                       choices=['primary', 'secondary', 'tertiary', 'quaternary', 'all'],
+                       default=['primary'],
+                       help='Analysis groups to include in sampling (default: primary only)')
+    
     # Data fetching options
     parser.add_argument('--data-types', nargs='+',
                        default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
-                       help='Data types to fetch')
+                       help='Data types to fetch (default: ALL data types). Use this flag to restrict to specific data types only.')
     parser.add_argument('--fetch-dry-run', action='store_true',
                        help='Dry run for data fetching step')
     
@@ -528,6 +584,8 @@ def main():
         'include_controls': args.include_controls,
         'min_age': args.min_age,
         'max_age': args.max_age,
+        'sample_mode': args.sample_mode,
+        'analysis_groups': args.analysis_groups,
         'data_types': args.data_types,
         'fetch_dry_run': args.fetch_dry_run
     }
