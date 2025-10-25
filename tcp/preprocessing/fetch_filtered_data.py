@@ -484,10 +484,11 @@ def detect_file_mapping_path() -> Path:
         "File mapping not found. Please run the preprocessing pipeline:\n"
         "  1. initialize_dataset.py (if dataset not cloned)\n"
         "  2. validate_subjects.py (required)\n"
-        "  3. fetch_global_data.py (required for phenotype filtering)\n"
-        "  4. filter_phenotype.py (optional, for diagnosis filtering)\n"
-        "  5. filter_subjects.py (required, for task data filtering)\n"
-        "  6. map_subject_files.py (required, creates file path mapping)\n"
+        "  3. fetch_global_data.py (required for phenotype data)\n"
+        "  4. filter_subjects.py (required, for task data filtering)\n"
+        "  5. filter_base_subjects.py, classify_anhedonia.py, classify_diagnoses.py (anhedonia pipeline)\n"
+        "  6. generate_analysis_groups.py, sample_subjects_for_download.py (optional)\n"
+        "  7. map_subject_files.py (required, creates file path mapping)\n"
         "\n"
         f"Expected file: {mapping_file}"
     )
@@ -506,7 +507,7 @@ def main():
     parser.add_argument('--data-types', nargs='+',
                        choices=available_data_types,
                        default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
-                       help='Data type categories to fetch (default: raw NIFTI, events, JSON metadata, anatomical scans, and timeseries)')
+                       help='Data type categories to fetch (default: ALL data types - raw NIFTI, events, JSON metadata, anatomical scans, and timeseries). Use this flag to restrict to specific data types only.')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,

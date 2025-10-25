@@ -41,6 +41,9 @@ class SubjectFileMapper:
         self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
         self.output_dir = Path(output_dir) if output_dir else \
             get_script_output_path('tcp_preprocessing', 'map_subject_files')
+            
+        # Directory for sampled subjects (priority input)
+        self.sampled_subjects_dir = get_script_output_path('tcp_preprocessing', 'sample_subjects_for_download')
 
         # File patterns for different data types
         self.file_patterns = {
@@ -66,20 +69,41 @@ class SubjectFileMapper:
             }
         }
 
+        print(f"Sampled subjects directory: {self.sampled_subjects_dir}")
         print(f"Filtered subjects directory: {self.filtered_subjects_dir}")
         print(f"Dataset path: {self.dataset_path}")
         print(f"Output directory: {self.output_dir}")
 
     def load_filtered_subjects(self) -> List[str]:
-        """Load filtered subject IDs"""
-        print("\nLoading filtered subjects...")
+        """Load subject IDs, prioritizing sampled subjects if available"""
+        print("\nLoading subjects for file mapping...")
 
+        # Try to load sampled subjects first (priority)
+        sampled_subjects_file = self.sampled_subjects_dir / "sampled_subjects_for_download.csv"
+        
+        if sampled_subjects_file.exists():
+            print(f"  Found sampled subjects file: {sampled_subjects_file}")
+            subjects_df = pd.read_csv(sampled_subjects_file)
+            
+            if 'subject_id' not in subjects_df.columns:
+                raise ValueError("subject_id column not found in sampled subjects data")
+                
+            subject_ids = subjects_df['subject_id'].tolist()
+            print(f"  Loaded {len(subject_ids)} SAMPLED subjects for mapping")
+            print(f"  (This will significantly reduce mapping time and storage requirements)")
+            return subject_ids
+        
+        # Fallback to task-filtered subjects
         subjects_file = self.filtered_subjects_dir / "task_filtered_subjects.csv"
 
         if not subjects_file.exists():
             raise FileNotFoundError(
-                f"Filtered subjects file not found: {subjects_file}\n"
-                f"Please run filter_subjects.py first."
+                f"No subjects found for mapping. Please run one of:\n"
+                f"  1. sample_subjects_for_download.py (recommended for development)\n"
+                f"  2. filter_subjects.py (for full dataset mapping)\n"
+                f"Expected files:\n"
+                f"  - {sampled_subjects_file} (preferred)\n"
+                f"  - {subjects_file} (fallback)"
             )
 
         subjects_df = pd.read_csv(subjects_file)
@@ -88,7 +112,8 @@ class SubjectFileMapper:
             raise ValueError("subject_id column not found in filtered subjects data")
 
         subject_ids = subjects_df['subject_id'].tolist()
-        print(f"  Loaded {len(subject_ids)} filtered subjects")
+        print(f"  Loaded {len(subject_ids)} filtered subjects (full dataset)")
+        print(f"  WARNING: This will map ALL filtered subjects. Consider running sample_subjects_for_download.py first for development.")
 
         return subject_ids
 
@@ -239,6 +264,10 @@ class SubjectFileMapper:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\nExporting results to {self.output_dir}")
+        
+        # Determine input source that was used
+        sampled_subjects_file = self.sampled_subjects_dir / "sampled_subjects_for_download.csv"
+        using_sampled_subjects = sampled_subjects_file.exists()
 
         # 1. Export main file mapping (used by fetch script)
         mapping_output = {
@@ -248,7 +277,8 @@ class SubjectFileMapper:
                 'timestamp': datetime.now().isoformat(),
                 'dataset_path': str(self.dataset_path),
                 'total_subjects': len(subject_file_mapping),
-                'total_global_files': len(global_files)
+                'total_global_files': len(global_files),
+                'input_source': 'sampled_subjects' if using_sampled_subjects else 'filtered_subjects'
             }
         }
 
@@ -260,9 +290,11 @@ class SubjectFileMapper:
         summary = {
             'timestamp': datetime.now().isoformat(),
             'dataset_path': str(self.dataset_path),
+            'input_source': 'sampled_subjects' if using_sampled_subjects else 'filtered_subjects',
+            'sampled_subjects_source': str(self.sampled_subjects_dir) if using_sampled_subjects else None,
             'filtered_subjects_source': str(self.filtered_subjects_dir),
             'statistics': stats,
-            'note': 'File mapping is group-agnostic. All filtered subjects included regardless of group.'
+            'note': 'File mapping for sampled subjects only' if using_sampled_subjects else 'File mapping for all filtered subjects'
         }
 
         with open(self.output_dir / "file_mapping_summary.json", 'w') as f:

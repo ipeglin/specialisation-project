@@ -30,15 +30,9 @@ import pandas as pd
 def detect_input_source() -> Path:
     """Automatically detect input source from new pipeline steps"""
     
-    # Option 1: Use phenotype filtered subjects (if available)
-    phenotype_dir = get_script_output_path('tcp_preprocessing', 'filter_phenotype')
-    phenotype_subjects_file = phenotype_dir / 'phenotype_filtered_subjects.csv'
+    # Option 1: Use validated subjects (standard input for new pipeline)
     
-    if phenotype_subjects_file.exists():
-        print(f"✓ Found phenotype filtered subjects: {phenotype_dir}")
-        return phenotype_dir
-    
-    # Option 2: Use valid subjects from validation step
+    # Use valid subjects from validation step (standard in new pipeline)
     validation_dir = get_script_output_path('tcp_preprocessing', 'validate_subjects')
     validation_subjects_file = validation_dir / 'valid_subjects.csv'
     
@@ -46,22 +40,9 @@ def detect_input_source() -> Path:
         print(f"✓ Found validated subjects: {validation_dir}")
         return validation_dir
     
-    # Option 3: Fallback to old extract_subjects output (backward compatibility)
-    extract_dir = get_script_output_path('tcp_preprocessing', 'extract_subjects')
-    extract_patients_file = extract_dir / 'patient_subjects.csv'
-    extract_controls_file = extract_dir / 'control_subjects.csv'
-    
-    if extract_patients_file.exists() and extract_controls_file.exists():
-        print(f"⚠ Using legacy extract_subjects output: {extract_dir}")
-        print(f"  Consider running the new pipeline: validate_subjects.py → filter_phenotype.py")
-        return extract_dir
-    
     # No valid input found
     raise FileNotFoundError(
-        "No valid input data found. Please run one of the following first:\n"
-        "  1. validate_subjects.py (required)\n"
-        "  2. filter_phenotype.py (optional, for diagnosis filtering)\n"
-        "  3. extract_subjects.py (legacy - for backward compatibility)"
+        "No valid input data found. Please run validate_subjects.py first to create validated subjects."
     )
 
 class NewSubjectFilterPipeline:
@@ -286,7 +267,7 @@ class NewSubjectFilterPipeline:
             'total_excluded_subjects': len(excluded_subjects),
             'overall_inclusion_rate': len(included_subjects) / len(original_subjects) if len(original_subjects) > 0 else 0,
             'filters_applied': filter_statistics,
-            'note': 'Filtering is group-agnostic. Use summarize_groups.py to see patient/control breakdown.'
+            'note': 'Filtering is group-agnostic. Use classify_diagnoses.py and integrate_cross_analysis.py for patient/control analysis.'
         }
 
         with open(self.output_dir / "task_filtering_summary.json", 'w') as f:
@@ -371,7 +352,7 @@ def main():
 
         print(f"\nOutput saved to: {output_dir}")
         print(f"\nNext steps:")
-        print(f"  1. (Optional) Run summarize_groups.py to see patient/control breakdown")
+        print(f"  1. (Optional) Run classify_diagnoses.py and integrate_cross_analysis.py for analysis groups")
         print(f"  2. Run map_subject_files.py to create file path mapping")
         print(f"  3. Run fetch_filtered_data.py to download MRI data")
         print(f"  4. Review task_filtering_summary.json for detailed statistics")

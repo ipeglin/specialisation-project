@@ -240,7 +240,7 @@ class ColumnValueFilter(PhenotypeFilter):
                 exclusion_reasons[subj_id] = f"{self.column_name}='{value}' matches exclusion criteria"
 
         # Remove merge columns
-        columns_to_keep = [col for col in subjects_df.columns if col != 'participant_id_for_merge']
+        columns_to_keep = [col for col in included_subjects.columns if col not in ['participant_id_for_merge', 'participant_id']]
         included_subjects = included_subjects[columns_to_keep]
         excluded_subjects = excluded_subjects[columns_to_keep]
 
@@ -531,7 +531,7 @@ class AgeRangeFilter(PhenotypeFilter):
                 exclusion_reasons[subj_id] = f"Age {age} outside specified range"
 
         # Remove merge columns
-        columns_to_keep = [col for col in subjects_df.columns if col != 'participant_id_for_merge']
+        columns_to_keep = [col for col in included_subjects.columns if col not in ['participant_id_for_merge', 'participant_id']]
         included_subjects = included_subjects[columns_to_keep]
         excluded_subjects = excluded_subjects[columns_to_keep]
 
@@ -677,10 +677,16 @@ class AnhedoniaSegmentationFilter(PhenotypeFilter):
             # IDs match directly
             subjects_df['subject_id_for_merge'] = subjects_df['subject_id']
 
+        # Handle column conflicts by renaming score column if it exists in subjects_df
+        score_column_name = self.score_column
+        if self.score_column in subjects_df.columns:
+            # Remove existing score column from subjects_df to avoid conflicts
+            subjects_df = subjects_df.drop(columns=[self.score_column])
+        
         # Merge dataframes - create subset manually to avoid column selection issues
         merge_df = pd.DataFrame({
             self.subject_id_column: phenotype_df[self.subject_id_column],
-            self.score_column: phenotype_df[self.score_column]
+            score_column_name: phenotype_df[self.score_column]
         })
         
         merged_df = subjects_df.merge(
@@ -691,7 +697,7 @@ class AnhedoniaSegmentationFilter(PhenotypeFilter):
         )
 
         # Apply segmentation classification
-        merged_df['anhedonia_class'] = merged_df[self.score_column].apply(self.classify_anhedonia_score)
+        merged_df['anhedonia_class'] = merged_df[score_column_name].apply(self.classify_anhedonia_score)
 
         # Filter out invalid or missing scores (keep only valid classifications)
         valid_mask = merged_df['anhedonia_class'].isin(['non-anhedonic', 'low-anhedonic', 'high-anhedonic'])
@@ -705,13 +711,13 @@ class AnhedoniaSegmentationFilter(PhenotypeFilter):
 
         for _, subject in included_subjects.iterrows():
             subj_id = subject['subject_id']
-            score = subject[self.score_column]
+            score = subject[score_column_name]
             anhedonia_class = subject['anhedonia_class']
             inclusion_reasons[subj_id] = f"SHAPS score {score} classified as {anhedonia_class}"
 
         for _, subject in excluded_subjects.iterrows():
             subj_id = subject['subject_id']
-            score = subject[self.score_column]
+            score = subject[score_column_name]
             anhedonia_class = subject['anhedonia_class']
             if anhedonia_class == 'unknown':
                 exclusion_reasons[subj_id] = f"SHAPS score is missing/NaN"
@@ -738,7 +744,7 @@ class AnhedoniaSegmentationFilter(PhenotypeFilter):
 
         # Calculate statistics
         total_subjects = len(merged_df)
-        valid_scores = merged_df[self.score_column].dropna()
+        valid_scores = merged_df[score_column_name].dropna()
         
         # Classification distribution
         class_distribution = included_subjects['anhedonia_class'].value_counts().to_dict()

@@ -411,8 +411,8 @@ def main():
         
         if report['all_required_files_fetched']:
             print(f"\nNext steps:")
-            print(f"  1. Optionally run filter_phenotype.py for diagnosis filtering")
-            print(f"  2. Run filter_subjects.py for task data filtering")
+            print(f"  1. Run filter_subjects.py for task data filtering")
+            print(f"  2. Run the anhedonia classification pipeline (filter_base_subjects.py, classify_anhedonia.py, etc.)")
             return 0
         else:
             print(f"\n⚠ Some required files could not be fetched.")
