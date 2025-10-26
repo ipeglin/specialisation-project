@@ -40,3 +40,6 @@ temp/
 
 # Claude Code context file (untracked, for AI assistance)
 CLAUDE.md
+
+# Platform-specific environment files (not tracked - each platform uses environment.yml or local variants)
+environment-windows.yml
