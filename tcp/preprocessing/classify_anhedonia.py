@@ -31,6 +31,7 @@ from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.phenotype_filters import (
     AnhedoniaSegmentationFilter
 )
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class AnhedoniaClassificationPipeline:
@@ -170,7 +171,7 @@ class AnhedoniaClassificationPipeline:
         # 1. Export all classified subjects
         classified_file = self.output_dir / "anhedonia_classified_subjects.csv"
         classified_subjects.to_csv(classified_file, index=False)
-        print(f"  ✓ Classified subjects: {classified_file}")
+        print(f"  {CHECK} Classified subjects: {classified_file}")
 
         # 2. Export subjects by anhedonia category
         if 'anhedonia_class' in classified_subjects.columns:
@@ -179,16 +180,16 @@ class AnhedoniaClassificationPipeline:
                 category_subjects = classified_subjects[classified_subjects['anhedonia_class'] == category]
                 category_file = self.output_dir / f"{category.replace('-', '_')}_subjects.csv"
                 category_subjects.to_csv(category_file, index=False)
-                print(f"  ✓ {category} subjects: {category_file}")
+                print(f"  {CHECK} {category} subjects: {category_file}")
 
         # 3. Export binary groups (anhedonic vs non-anhedonic)
         if 'anhedonic_status' in classified_subjects.columns:
             for status in ['anhedonic', 'non-anhedonic']:
                 status_subjects = classified_subjects[classified_subjects['anhedonic_status'] == status]
                 if len(status_subjects) > 0:
-                    status_file = self.output_dir / f"{status}_subjects.csv"
+                    status_file = self.output_dir / f"{status.replace('-', '_')}_subjects.csv"
                     status_subjects.to_csv(status_file, index=False)
-                    print(f"  ✓ {status} subjects: {status_file}")
+                    print(f"  {CHECK} {status} subjects: {status_file}")
 
         # 4. Export excluded subjects
         anhedonia_filter = AnhedoniaSegmentationFilter()
@@ -200,7 +201,7 @@ class AnhedoniaClassificationPipeline:
         if len(filter_result.excluded_subjects) > 0:
             excluded_file = self.output_dir / "anhedonia_excluded_subjects.csv"
             filter_result.excluded_subjects.to_csv(excluded_file, index=False)
-            print(f"  ✓ Excluded subjects: {excluded_file}")
+            print(f"  {CHECK} Excluded subjects: {excluded_file}")
 
         # 5. Export classification summary
         summary = {
@@ -219,7 +220,7 @@ class AnhedoniaClassificationPipeline:
         summary_file = self.output_dir / "anhedonia_classification_summary.json"
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: {summary_file}")
+        print(f"  {CHECK} Summary: {summary_file}")
 
     def print_summary(self, statistics: Dict) -> None:
         """Print summary to console"""
@@ -301,7 +302,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during anhedonia classification: {e}")
+        print(f"{ERROR} Error during anhedonia classification: {e}")
         import traceback
         traceback.print_exc()
         return 1
