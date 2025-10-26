@@ -291,6 +291,131 @@ class CrossAnalysisIntegrator:
         with open(master_file, 'w') as f:
             json.dump(master_summary, f, indent=2, cls=NumpyEncoder)
         print(f"  ✓ Master summary: {master_file}")
+        
+        # 6. Export comprehensive data manifest for processing pipeline
+        self._export_data_manifest(analysis_datasets)
+
+    def _export_data_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> None:
+        """Export comprehensive data manifest for processing pipeline"""
+        print("  Creating comprehensive data manifest for processing pipeline...")
+        
+        # Load additional subject data for complete manifest
+        manifest_data = self._build_comprehensive_manifest(analysis_datasets)
+        
+        # Export the manifest
+        manifest_file = self.output_dir / "processing_data_manifest.json"
+        with open(manifest_file, 'w') as f:
+            json.dump(manifest_data, f, indent=2, cls=NumpyEncoder)
+        print(f"  ✓ Processing data manifest: {manifest_file}")
+        
+    def _build_comprehensive_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> Dict:
+        """Build comprehensive data manifest with subject files and metadata"""
+        from config.paths import get_tcp_dataset_path
+        
+        dataset_path = get_tcp_dataset_path()
+        
+        # Base manifest structure
+        manifest = {
+            "manifest_metadata": {
+                "created_timestamp": datetime.now().isoformat(),
+                "preprocessing_version": "1.0.0",
+                "source_dataset": str(dataset_path),
+                "total_subjects": len(self.combined_subjects),
+                "analysis_groups": list(analysis_datasets.keys()),
+                "data_types_available": ["timeseries", "motion", "phenotype"]
+            },
+            "path_configuration": {
+                "dataset_root": str(dataset_path),
+                "preprocessing_root": str(self.output_dir.parent.parent),
+                "relative_paths": True,
+                "platform_info": "Use config.paths for cross-platform resolution"
+            },
+            "subjects": {},
+            "analysis_groups": {},
+            "file_patterns": {
+                "timeseries": "fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_id}/*_parcellated.h5",
+                "motion": "motion_FD/TCP_FD_*.csv",
+                "phenotype": "phenotype/*.tsv"
+            }
+        }
+        
+        # Build analysis groups mapping
+        for group_name, dataset in analysis_datasets.items():
+            manifest["analysis_groups"][group_name] = dataset['subject_id'].tolist()
+        
+        # Build subject-level manifest
+        for _, subject_row in self.combined_subjects.iterrows():
+            subject_id = subject_row['subject_id']
+            
+            # Convert subject ID to directory format (remove 'sub-' prefix for directory lookup)
+            subject_dir_id = subject_id.replace('sub-', '')
+            
+            subject_manifest = {
+                "demographics": {
+                    "age": subject_row.get('age', None),
+                    "sex": subject_row.get('sex', None),
+                    "site": subject_row.get('Site', None),
+                    "group": subject_row.get('Group', None)
+                },
+                "classifications": {
+                    "anhedonia_class": subject_row.get('anhedonia_class', None),
+                    "anhedonic_status": subject_row.get('anhedonic_status', None),
+                    "mdd_status": subject_row.get('mdd_status', None),
+                    "patient_control": subject_row.get('patient_control', None)
+                },
+                "phenotype_scores": {
+                    "shaps_total": subject_row.get('shaps_total', None)
+                },
+                "files": {
+                    "timeseries": {
+                        "base_path": f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}",
+                        "available": [],  # Will be populated by file scanning
+                        "patterns": ["*_parcellated.h5"]
+                    },
+                    "motion": {
+                        "base_path": "motion_FD",
+                        "available": [],  # Will be populated by file scanning
+                        "patterns": ["TCP_FD_*.csv"]
+                    }
+                },
+                "analysis_group_memberships": [],
+                "data_availability": {
+                    "has_timeseries": False,
+                    "has_motion": False,
+                    "has_phenotype": True  # All subjects have phenotype data
+                },
+                "validation_status": "validated"  # All subjects in this pipeline are validated
+            }
+            
+            # Determine analysis group memberships
+            for group_name, dataset in analysis_datasets.items():
+                if subject_id in dataset['subject_id'].values:
+                    subject_manifest["analysis_group_memberships"].append(group_name)
+            
+            # Check for actual file availability (basic check)
+            timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
+            if timeseries_dir.exists():
+                subject_manifest["data_availability"]["has_timeseries"] = True
+                # List available timeseries files
+                timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+                subject_manifest["files"]["timeseries"]["available"] = [
+                    f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}" 
+                    for f in timeseries_files
+                ]
+            
+            # Check motion data availability
+            motion_dir = dataset_path / "motion_FD"
+            if motion_dir.exists():
+                motion_files = list(motion_dir.glob("TCP_FD_*.csv"))
+                if motion_files:
+                    subject_manifest["data_availability"]["has_motion"] = True
+                    subject_manifest["files"]["motion"]["available"] = [
+                        f"motion_FD/{f.name}" for f in motion_files
+                    ]
+            
+            manifest["subjects"][subject_id] = subject_manifest
+        
+        return manifest
 
     def _export_human_readable_report(self, cross_tabs: Dict, stats: Dict) -> None:
         """Export human-readable text report"""
