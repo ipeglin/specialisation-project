@@ -28,6 +28,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, ERROR
 
 class DataladDataFetcher:
     """Manages selective data fetching for filtered subjects using datalad get
@@ -281,6 +282,7 @@ class DataladDataFetcher:
                     self.logger.info(f"  All files already downloaded for {subject_id}")
                 except (OSError, IOError):
                     print(f"  All files already downloaded for {subject_id}")
+                fetch_results[subject_id] = True
                 continue
 
             try:
@@ -315,31 +317,31 @@ class DataladDataFetcher:
 
                     if result.returncode == 0:
                         try:
-                            self.logger.info(f"    ✓ Downloaded successfully")
+                            self.logger.info(f"    {CHECK} Downloaded successfully")
                         except (OSError, IOError):
-                            print(f"    ✓ Downloaded successfully")
+                            print(f"    {CHECK} Downloaded successfully")
                     else:
                         stderr_msg = result.stderr.strip() if result.stderr else "No error message"
                         stdout_msg = result.stdout.strip() if result.stdout else "No output"
                         try:
-                            self.logger.warning(f"    ✗ Download failed: {stderr_msg}")
+                            self.logger.warning(f"    {CROSS} Download failed: {stderr_msg}")
                         except (OSError, IOError):
-                            print(f"    ✗ Download failed: {stderr_msg}")
+                            print(f"    {CROSS} Download failed: {stderr_msg}")
                         # Don't mark as failure if files don't exist (common for optional data)
                         if "No such file" not in stderr_msg and "not found" not in stderr_msg and "nothing to get" not in stdout_msg.lower():
                             success = False
 
                 except subprocess.TimeoutExpired:
                     try:
-                        self.logger.error(f"    ✗ Timeout downloading {Path(file_path).name}")
+                        self.logger.error(f"    {CROSS} Timeout downloading {Path(file_path).name}")
                     except (OSError, IOError):
-                        print(f"    ✗ Timeout downloading {Path(file_path).name}")
+                        print(f"    {CROSS} Timeout downloading {Path(file_path).name}")
                     success = False
                 except Exception as e:
                     try:
-                        self.logger.error(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                        self.logger.error(f"    {CROSS} Error downloading {Path(file_path).name}: {e}")
                     except (OSError, IOError):
-                        print(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                        print(f"    {CROSS} Error downloading {Path(file_path).name}: {e}")
                     success = False
 
             fetch_results[subject_id] = success
@@ -400,26 +402,26 @@ class DataladDataFetcher:
 
                         if result.returncode == 0:
                             try:
-                                self.logger.info(f"    ✓ Downloaded successfully")
+                                self.logger.info(f"    {CHECK} Downloaded successfully")
                             except (OSError, IOError):
-                                print(f"    ✓ Downloaded successfully")
+                                print(f"    {CHECK} Downloaded successfully")
                         else:
                             stderr_msg = result.stderr.strip() if result.stderr else "No error message"
                             try:
-                                self.logger.warning(f"    ✗ Download failed: {stderr_msg}")
+                                self.logger.warning(f"    {CROSS} Download failed: {stderr_msg}")
                             except (OSError, IOError):
-                                print(f"    ✗ Download failed: {stderr_msg}")
+                                print(f"    {CROSS} Download failed: {stderr_msg}")
 
                     except subprocess.TimeoutExpired:
                         try:
-                            self.logger.error(f"    ✗ Timeout downloading {Path(file_path).name}")
+                            self.logger.error(f"    {CROSS} Timeout downloading {Path(file_path).name}")
                         except (OSError, IOError):
-                            print(f"    ✗ Timeout downloading {Path(file_path).name}")
+                            print(f"    {CROSS} Timeout downloading {Path(file_path).name}")
                     except Exception as e:
                         try:
-                            self.logger.error(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                            self.logger.error(f"    {CROSS} Error downloading {Path(file_path).name}: {e}")
                         except (OSError, IOError):
-                            print(f"    ✗ Error downloading {Path(file_path).name}: {e}")
+                            print(f"    {CROSS} Error downloading {Path(file_path).name}: {e}")
             else:
                 try:
                     self.logger.info(f"  All dataset-wide files already downloaded")
@@ -476,7 +478,7 @@ def detect_file_mapping_path() -> Path:
     mapping_file = mapping_dir / 'subject_file_mapping.json'
 
     if mapping_file.exists():
-        print(f"✓ Found file mapping: {mapping_file}")
+        print(f"{CHECK} Found file mapping: {mapping_file}")
         return mapping_file
 
     # No file mapping found
