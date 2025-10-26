@@ -36,6 +36,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class SubjectSamplingPipeline:
@@ -286,14 +287,14 @@ class SubjectSamplingPipeline:
         # 1. Export sampled subjects for download
         sampled_file = self.output_dir / "sampled_subjects_for_download.csv"
         sampled_subjects.to_csv(sampled_file, index=False)
-        print(f"  ✓ Sampled subjects: {sampled_file}")
+        print(f"  {CHECK} Sampled subjects: {sampled_file}")
 
         # 2. Export subject IDs only (for easy reference)
         subject_ids_file = self.output_dir / "sampled_subject_ids.txt"
         with open(subject_ids_file, 'w') as f:
             for subject_id in sampled_subjects['subject_id'].unique():
                 f.write(f"{subject_id}\n")
-        print(f"  ✓ Subject IDs: {subject_ids_file}")
+        print(f"  {CHECK} Subject IDs: {subject_ids_file}")
 
         # 3. Export detailed sampling strategy
         strategy = {
@@ -314,7 +315,7 @@ class SubjectSamplingPipeline:
         strategy_file = self.output_dir / "sampling_strategy.json"
         with open(strategy_file, 'w') as f:
             json.dump(strategy, f, indent=2)
-        print(f"  ✓ Strategy: {strategy_file}")
+        print(f"  {CHECK} Strategy: {strategy_file}")
 
         # 4. Export sampling breakdown by category
         if 'sampling_category' in sampled_subjects.columns:
@@ -322,7 +323,7 @@ class SubjectSamplingPipeline:
             breakdown_file = self.output_dir / "sampling_breakdown.json"
             with open(breakdown_file, 'w') as f:
                 json.dump(breakdown, f, indent=2)
-            print(f"  ✓ Breakdown: {breakdown_file}")
+            print(f"  {CHECK} Breakdown: {breakdown_file}")
 
     def print_summary(self, sampled_subjects: pd.DataFrame, sampling_details: Dict) -> None:
         """Print sampling summary to console"""
@@ -342,7 +343,7 @@ class SubjectSamplingPipeline:
         unique_count = len(sampled_subjects['subject_id'].unique())
         estimated_gb = unique_count * 1.5
         print(f"\nEstimated storage requirements:")
-        print(f"  {unique_count} subjects × 1.5 GB ≈ {estimated_gb:.1f} GB")
+        print(f"  {unique_count} subjects x 1.5 GB ~ {estimated_gb:.1f} GB")
 
         if 'sampling_category' in sampled_subjects.columns:
             print(f"\nSampling breakdown:")
@@ -426,7 +427,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during subject sampling: {e}")
+        print(f"{ERROR} Error during subject sampling: {e}")
         import traceback
         traceback.print_exc()
         return 1

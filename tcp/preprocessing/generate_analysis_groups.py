@@ -36,6 +36,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class AnalysisGroupsGenerator:
@@ -276,7 +277,7 @@ class AnalysisGroupsGenerator:
         for group_name, group_data in analysis_groups.items():
             group_file = self.output_dir / f"{group_name}_analysis_subjects.csv"
             group_data.to_csv(group_file, index=False)
-            print(f"  ✓ {group_name.upper()} analysis group: {group_file}")
+            print(f"  {CHECK} {group_name.upper()} analysis group: {group_file}")
 
         # 2. Export combined dataset with all classifications
         merged_subjects = pd.merge(
@@ -287,7 +288,7 @@ class AnalysisGroupsGenerator:
         )
         combined_file = self.output_dir / "all_subjects_with_classifications.csv"
         merged_subjects.to_csv(combined_file, index=False)
-        print(f"  ✓ Combined classifications: {combined_file}")
+        print(f"  {CHECK} Combined classifications: {combined_file}")
 
         # 3. Export analysis groups summary
         summary = {
@@ -323,7 +324,7 @@ class AnalysisGroupsGenerator:
         summary_file = self.output_dir / "analysis_groups_summary.json"
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: {summary_file}")
+        print(f"  {CHECK} Summary: {summary_file}")
 
     def print_summary(self, analysis_groups: Dict[str, pd.DataFrame], statistics: Dict) -> None:
         """Print comprehensive summary to console"""
@@ -342,7 +343,7 @@ class AnalysisGroupsGenerator:
                 if group1 != group2:
                     total1 = statistics['group_sizes'].get(group1, 0)
                     percentage = (count / total1) * 100 if total1 > 0 else 0
-                    print(f"  {group1.upper()} ∩ {group2.upper()}: {count} subjects ({percentage:.1f}%)")
+                    print(f"  {group1.upper()} AND {group2.upper()}: {count} subjects ({percentage:.1f}%)")
 
         # Print cross-tabulations if available
         if 'anhedonia_by_diagnosis' in statistics:
@@ -426,7 +427,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during analysis groups generation: {e}")
+        print(f"{ERROR} Error during analysis groups generation: {e}")
         import traceback
         traceback.print_exc()
         return 1
