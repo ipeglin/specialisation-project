@@ -21,6 +21,8 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, WARNING, SUCCESS, ERROR, ARROW_RIGHT
+from tcp.preprocessing.utils.git_annex_utils import is_git_annex_pointer
 
 class GlobalDataFetcher:
     """Fetches global dataset files needed for subject filtering"""
@@ -69,15 +71,15 @@ class GlobalDataFetcher:
     def validate_dataset(self) -> bool:
         """Validate that dataset is properly initialized"""
         if not self.dataset_path.exists():
-            print(f"✗ Dataset directory does not exist: {self.dataset_path}")
+            print(f"{CROSS} Dataset directory does not exist: {self.dataset_path}")
             return False
-        
+
         git_dir = self.dataset_path / '.git'
         if not git_dir.exists():
-            print(f"✗ Dataset is not a git repository: {self.dataset_path}")
+            print(f"{CROSS} Dataset is not a git repository: {self.dataset_path}")
             return False
-        
-        print(f"✓ Dataset directory validated: {self.dataset_path}")
+
+        print(f"{CHECK} Dataset directory validated: {self.dataset_path}")
         return True
     
     def check_datalad_available(self) -> bool:
@@ -94,21 +96,19 @@ class GlobalDataFetcher:
             return False
     
     def is_file_downloaded(self, file_path: Path) -> bool:
-        """Check if a file has been downloaded (not a git-annex symlink)"""
+        """Check if a file has been downloaded (not a git-annex pointer/symlink)"""
         full_path = self.dataset_path / file_path
         
         if not full_path.exists():
             return False
         
-        # Check if it's a symlink pointing to git-annex
-        if full_path.is_symlink():
-            link_target = str(full_path.readlink())
-            if '.git/annex/objects' in link_target:
-                return False
+        # Use git-annex utility to check if it's a pointer file (works on Windows and Unix)
+        if is_git_annex_pointer(full_path):
+            return False
         
         # Check if it has actual content
         try:
-            return full_path.stat().st_size > 0
+            return full_path.stat().st_size > 100  # Actual data files should be larger than pointers
         except (OSError, IOError):
             return False
     
@@ -121,17 +121,17 @@ class GlobalDataFetcher:
         
         # Check if already downloaded
         if self.is_file_downloaded(Path(file_path)):
-            print(f"    ✓ Already downloaded")
+            print(f"    {CHECK} Already downloaded")
             return True, "Already downloaded"
-        
+
         # Check if file exists in repository (including symlinks)
         if not full_path.exists() and not full_path.is_symlink():
             message = f"File does not exist in repository: {file_path}"
             if file_info['required']:
-                print(f"    ✗ {message}")
+                print(f"    {CROSS} {message}")
                 return False, message
             else:
-                print(f"    ⚠ {message} (optional file)")
+                print(f"    {WARNING} {message} (optional file)")
                 return True, message
         
         try:
@@ -146,20 +146,20 @@ class GlobalDataFetcher:
             )
             
             if result.returncode == 0:
-                print(f"    ✓ Downloaded successfully")
+                print(f"    {CHECK} Downloaded successfully")
                 return True, "Downloaded successfully"
             else:
                 error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                print(f"    ✗ Download failed: {error_msg}")
+                print(f"    {CROSS} Download failed: {error_msg}")
                 return False, f"Download failed: {error_msg}"
-                
+
         except subprocess.TimeoutExpired:
             message = f"Download timed out for {file_path}"
-            print(f"    ✗ {message}")
+            print(f"    {CROSS} {message}")
             return False, message
         except Exception as e:
             message = f"Download error for {file_path}: {e}"
-            print(f"    ✗ {message}")
+            print(f"    {CROSS} {message}")
             return False, message
     
     def validate_fetched_files(self) -> Dict[str, Dict]:
@@ -212,8 +212,8 @@ class GlobalDataFetcher:
                         # Get full row count
                         full_df = pd.read_csv(file_path, sep='\t')
                         validation_result['row_count'] = len(full_df)
-                        
-                        print(f"    ✓ Valid TSV: {validation_result['row_count']} rows, {validation_result['column_count']} columns")
+
+                        print(f"    {CHECK} Valid TSV: {validation_result['row_count']} rows, {validation_result['column_count']} columns")
                     else:
                         # Fallback validation without pandas
                         try:
@@ -228,7 +228,7 @@ class GlobalDataFetcher:
                                 # If all else fails, just check file exists
                                 validation_result['readable'] = True
                                 validation_result['valid_format'] = True
-                                print(f"    ✓ File exists (encoding issues, but readable)")
+                                print(f"    {CHECK} File exists (encoding issues, but readable)")
                                 validation_results[file_key] = validation_result
                                 continue
                         
@@ -238,7 +238,7 @@ class GlobalDataFetcher:
                         if lines:
                             validation_result['columns'] = lines[0].strip().split('\t')
                             validation_result['column_count'] = len(validation_result['columns'])
-                        print(f"    ✓ Valid TSV: {validation_result['row_count']} rows, {validation_result['column_count']} columns")
+                        print(f"    {CHECK} Valid TSV: {validation_result['row_count']} rows, {validation_result['column_count']} columns")
                     
                 elif file_path.suffix == '.json':
                     # Read JSON file
@@ -246,7 +246,7 @@ class GlobalDataFetcher:
                         data = json.load(f)
                     validation_result['readable'] = True
                     validation_result['valid_format'] = True
-                    print(f"    ✓ Valid JSON file")
+                    print(f"    {CHECK} Valid JSON file")
                     
                 else:
                     # Read as text file
@@ -254,11 +254,11 @@ class GlobalDataFetcher:
                         content = f.read(1000)  # Read first 1000 chars
                     validation_result['readable'] = True
                     validation_result['valid_format'] = len(content) > 0
-                    print(f"    ✓ Readable text file")
+                    print(f"    {CHECK} Readable text file")
                 
             except Exception as e:
                 validation_result['error'] = str(e)
-                print(f"    ✗ Validation failed: {e}")
+                print(f"    {CROSS} Validation failed: {e}")
             
             validation_results[file_key] = validation_result
         
@@ -319,7 +319,7 @@ class GlobalDataFetcher:
         
         with open(report_file, 'w') as f:
             json.dump(report, f, indent=2)
-        print(f"  ✓ Fetch report: {report_file}")
+        print(f"  {CHECK} Fetch report: {report_file}")
         
         # Create simple status file for pipeline
         status_file = self.output_dir / 'fetch_status.json'
@@ -332,7 +332,7 @@ class GlobalDataFetcher:
         
         with open(status_file, 'w') as f:
             json.dump(status, f, indent=2)
-        print(f"  ✓ Status file: {status_file}")
+        print(f"  {CHECK} Status file: {status_file}")
         
         return self.output_dir
     
@@ -352,24 +352,24 @@ class GlobalDataFetcher:
         for file_key, file_info in self.global_files.items():
             success = report['fetch_results'].get(file_key, False)
             required = " (required)" if file_info['required'] else " (optional)"
-            status = "✓" if success else "✗"
+            status = CHECK if success else CROSS
             print(f"  {status} {file_key}: {file_info['path']}{required}")
-            
+
             # Show validation info if available
             if file_key in report['validation_results']:
                 validation = report['validation_results'][file_key]
                 if validation.get('readable', False):
                     if validation.get('row_count', 0) > 0:
-                        print(f"      → {validation['row_count']} rows, {validation['column_count']} columns")
+                        print(f"      {ARROW_RIGHT} {validation['row_count']} rows, {validation['column_count']} columns")
                     elif validation.get('valid_format', False):
-                        print(f"      → Valid file format")
+                        print(f"      {ARROW_RIGHT} Valid file format")
                 elif validation.get('error'):
-                    print(f"      → Error: {validation['error']}")
-        
+                    print(f"      {ARROW_RIGHT} Error: {validation['error']}")
+
         if report['all_required_files_fetched']:
-            print(f"\n✅ All required files successfully fetched!")
+            print(f"\n{SUCCESS} All required files successfully fetched!")
         else:
-            print(f"\n❌ Some required files failed to fetch.")
+            print(f"\n{ERROR} Some required files failed to fetch.")
             failed_required = [k for k in ['participants', 'phenotype_demos'] 
                              if not report['fetch_results'].get(k, False)]
             if failed_required:
@@ -385,7 +385,7 @@ def main():
     
     # Validate dataset
     if not fetcher.validate_dataset():
-        print("❌ Dataset validation failed. Please run initialize_dataset.py first.")
+        print(f"{ERROR} Dataset validation failed. Please run initialize_dataset.py first.")
         return 1
     
     try:
@@ -415,12 +415,12 @@ def main():
             print(f"  2. Run the anhedonia classification pipeline (filter_base_subjects.py, classify_anhedonia.py, etc.)")
             return 0
         else:
-            print(f"\n⚠ Some required files could not be fetched.")
+            print(f"\n{WARNING} Some required files could not be fetched.")
             print(f"You may need to check dataset connectivity or file availability.")
             return 1
-            
+
     except Exception as e:
-        print(f"❌ Error during global data fetching: {e}")
+        print(f"{ERROR} Error during global data fetching: {e}")
         return 1
 
 if __name__ == "__main__":

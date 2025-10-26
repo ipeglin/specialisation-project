@@ -6,7 +6,7 @@ Applies universal inclusion criteria that must be met by ALL subjects
 across all analysis groups:
 1. Valid BIDS directory structure (from validate_subjects.py)
 2. Has at least one task-based scan (hammer OR stroop)
-3. Has completed SHAPS questionnaire (shaps_total ≠ 999)
+3. Has completed SHAPS questionnaire (shaps_total != 999)
 
 This creates the foundational subject pool for all subsequent analysis groups.
 
@@ -30,6 +30,8 @@ from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.phenotype_filters import (
     PhenotypeFilter, PhenotypeFilterResult, ShapsCompletionFilter
 )
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
+from tcp.preprocessing.utils.git_annex_utils import read_tsv_with_annex_support
 
 
 class BaseSubjectFilterPipeline:
@@ -100,7 +102,8 @@ class BaseSubjectFilterPipeline:
 
             if full_path.exists():
                 try:
-                    df = pd.read_csv(full_path, sep='\t', encoding='utf-8')
+                    # Use git-annex-aware TSV reader to handle pointer files on Windows
+                    df = read_tsv_with_annex_support(full_path, dataset_root=self.dataset_path)
                     self.phenotype_data[file_key] = df
                     print(f"  Loaded {file_key}: {df.shape[0]} rows, {df.shape[1]} columns")
 
@@ -184,14 +187,14 @@ class BaseSubjectFilterPipeline:
         # 1. Export base filtered subjects
         base_subjects_file = self.output_dir / "base_filtered_subjects.csv"
         base_subjects.to_csv(base_subjects_file, index=False)
-        print(f"  ✓ Base subjects: {base_subjects_file}")
+        print(f"  {CHECK} Base subjects: {base_subjects_file}")
 
         # 2. Export excluded subjects (from SHAPS filter)
         shaps_result = self.apply_shaps_completion_filter()
         if len(shaps_result.excluded_subjects) > 0:
             excluded_file = self.output_dir / "base_excluded_subjects.csv"
             shaps_result.excluded_subjects.to_csv(excluded_file, index=False)
-            print(f"  ✓ Excluded subjects: {excluded_file}")
+            print(f"  {CHECK} Excluded subjects: {excluded_file}")
 
         # 3. Export filtering summary
         summary = {
@@ -204,7 +207,7 @@ class BaseSubjectFilterPipeline:
             'universal_criteria': [
                 'Valid BIDS directory structure',
                 'Has at least one task-based scan (hammer OR stroop)',
-                'Has completed SHAPS questionnaire (shaps_total ≠ 999)'
+                'Has completed SHAPS questionnaire (shaps_total != 999)'
             ],
             'statistics': statistics,
             'note': 'Base subject pool for all subsequent analysis groups'
@@ -213,7 +216,7 @@ class BaseSubjectFilterPipeline:
         summary_file = self.output_dir / "base_filtering_summary.json"
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: {summary_file}")
+        print(f"  {CHECK} Summary: {summary_file}")
 
     def print_summary(self, statistics: Dict) -> None:
         """Print summary to console"""
@@ -222,9 +225,9 @@ class BaseSubjectFilterPipeline:
         print(f"{'=' * 60}")
         
         print(f"\nUniversal inclusion criteria:")
-        print(f"  ✓ Valid BIDS directory structure")
-        print(f"  ✓ Has at least one task-based scan (hammer OR stroop)")
-        print(f"  ✓ Has completed SHAPS questionnaire (shaps_total ≠ 999)")
+        print(f"  {CHECK} Valid BIDS directory structure")
+        print(f"  {CHECK} Has at least one task-based scan (hammer OR stroop)")
+        print(f"  {CHECK} Has completed SHAPS questionnaire (shaps_total != 999)")
 
         print(f"\nSubject flow:")
         print(f"  Input subjects: {statistics['input_subjects']}")
@@ -288,7 +291,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during base subject filtering: {e}")
+        print(f"{ERROR} Error during base subject filtering: {e}")
         import traceback
         traceback.print_exc()
         return 1
