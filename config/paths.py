@@ -391,6 +391,10 @@ def get_tcp_output_path(subpath: str = 'tcp_analysis') -> Path:
     """Get path for TCP analysis outputs (uses preprocessing category)"""
     return get_script_output_path('tcp_preprocessing', subpath=subpath)
 
+def get_tcp_processing_path(subpath: str = '') -> Path:
+    """Get path for TCP processing pipeline outputs (uses analysis category)"""
+    return get_script_output_path('tcp_processing', subpath=subpath)
+
 def get_mdd_analysis_path(subpath: str = 'mdd_analysis') -> Path:
     """Get path for MDD analysis outputs (uses analysis category)"""
     return get_script_output_path('mdd_analysis', subpath=subpath)
@@ -415,6 +419,7 @@ if __name__ == "__main__":
     print("\nTCP-specific paths:")
     print(f"  TCP Dataset: {get_tcp_dataset_path()}")
     print(f"  TCP Output: {get_tcp_output_path()}")
+    print(f"  TCP Processing: {get_tcp_processing_path()}")
     print(f"  MDD Analysis: {get_mdd_analysis_path()}")
 
     print("\nExample flexible output paths:")

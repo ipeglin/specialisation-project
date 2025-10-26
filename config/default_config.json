@@ -61,6 +61,10 @@
       "category": "preprocessing",
       "subdir": "tcp"
     },
+    "tcp_processing": {
+      "category": "analysis", 
+      "subdir": "tcp"
+    },
     "tcp_analysis": {
       "category": "analysis",
       "subdir": "tcp"
