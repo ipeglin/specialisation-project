@@ -30,6 +30,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class DiagnosisClassificationPipeline:
@@ -261,7 +262,7 @@ class DiagnosisClassificationPipeline:
         # 1. Export all classified subjects
         classified_file = self.output_dir / "diagnosis_classified_subjects.csv"
         classified_subjects.to_csv(classified_file, index=False)
-        print(f"  ✓ Classified subjects: {classified_file}")
+        print(f"  {CHECK} Classified subjects: {classified_file}")
 
         # 2. Export subjects by MDD status
         for status in classified_subjects['mdd_status'].unique():
@@ -269,13 +270,13 @@ class DiagnosisClassificationPipeline:
                 status_subjects = classified_subjects[classified_subjects['mdd_status'] == status]
                 status_file = self.output_dir / f"{status.lower()}_subjects.csv"
                 status_subjects.to_csv(status_file, index=False)
-                print(f"  ✓ {status} subjects: {status_file}")
+                print(f"  {CHECK} {status} subjects: {status_file}")
 
         # 3. Export analysis groups
         for group_name, group_subjects in analysis_groups.items():
             group_file = self.output_dir / f"{group_name}_analysis_subjects.csv"
             group_subjects.to_csv(group_file, index=False)
-            print(f"  ✓ {group_name.title()} analysis group: {group_file}")
+            print(f"  {CHECK} {group_name.title()} analysis group: {group_file}")
 
         # 4. Export classification summary
         summary = {
@@ -300,7 +301,7 @@ class DiagnosisClassificationPipeline:
         summary_file = self.output_dir / "diagnosis_classification_summary.json"
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: {summary_file}")
+        print(f"  {CHECK} Summary: {summary_file}")
 
     def print_summary(self, statistics: Dict, analysis_groups: Dict[str, pd.DataFrame]) -> None:
         """Print summary to console"""
@@ -377,7 +378,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during diagnosis classification: {e}")
+        print(f"{ERROR} Error during diagnosis classification: {e}")
         import traceback
         traceback.print_exc()
         return 1

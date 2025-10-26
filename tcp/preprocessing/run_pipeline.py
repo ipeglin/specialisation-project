@@ -32,6 +32,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, SKIP, RUNNING, SUCCESS, ERROR, PARTY
 
 class PipelineStep(Enum):
     """Pipeline step identifiers"""
@@ -185,11 +186,11 @@ class TCPPipeline:
             if 'pipeline_start_time' in state:
                 self.pipeline_start_time = datetime.fromisoformat(state['pipeline_start_time'])
             
-            print(f"✓ Loaded existing pipeline state")
+            print(f"{CHECK} Loaded existing pipeline state")
             return True
-            
+
         except Exception as e:
-            print(f"⚠ Could not load pipeline state: {e}")
+            print(f"WARNING: Could not load pipeline state: {e}")
             return False
     
     def save_pipeline_state(self) -> None:
@@ -293,7 +294,7 @@ class TCPPipeline:
             if self.step_status[step] == StepStatus.NOT_STARTED:
                 if self.check_step_completed(step):
                     self.step_status[step] = StepStatus.COMPLETED
-                    print(f"  ✓ {step.value}: Already completed")
+                    print(f"  {CHECK} {step.value}: Already completed")
     
     def run_step(self, step: PipelineStep, dry_run: bool = False, **kwargs) -> bool:
         """Run a single pipeline step"""
@@ -377,27 +378,27 @@ class TCPPipeline:
                 }
             
             self.step_results[step.value] = step_result
-            
+
             if result.returncode == 0:
-                print(f"✓ Step completed successfully")
+                print(f"{CHECK} Step completed successfully")
                 self.step_status[step] = StepStatus.COMPLETED
                 self.save_pipeline_state()
                 return True
             else:
-                print(f"✗ Step failed with return code {result.returncode}")
+                print(f"{CROSS} Step failed with return code {result.returncode}")
                 print(f"STDERR: {result.stderr}")
                 self.step_status[step] = StepStatus.FAILED
                 self.save_pipeline_state()
                 return False
-                
+
         except subprocess.TimeoutExpired:
             step_timeout = step_info.get('timeout', 7200)
-            print(f"✗ Step timed out after {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
+            print(f"{CROSS} Step timed out after {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
             self.step_status[step] = StepStatus.FAILED
             self.save_pipeline_state()
             return False
         except Exception as e:
-            print(f"✗ Step failed with exception: {e}")
+            print(f"{CROSS} Step failed with exception: {e}")
             self.step_status[step] = StepStatus.FAILED
             self.save_pipeline_state()
             return False
@@ -442,7 +443,7 @@ class TCPPipeline:
         for i, step in enumerate(steps_to_run, 1):
             status = self.step_status[step]
             required = "Required" if self.steps[step]['required'] else "Optional"
-            status_symbol = "✓" if status == StepStatus.COMPLETED else "○"
+            status_symbol = CHECK if status == StepStatus.COMPLETED else "o"
             print(f"  {i}. {status_symbol} {step.value} ({required}) - {status.value}")
         
         if dry_run:
@@ -456,25 +457,25 @@ class TCPPipeline:
         for step in steps_to_run:
             # Skip completed steps
             if self.step_status[step] == StepStatus.COMPLETED:
-                print(f"\n⏭ Skipping {step.value} (already completed)")
+                print(f"\n{SKIP} Skipping {step.value} (already completed)")
                 continue
-            
+
             # Skip optional steps if requested
             if skip_optional and not self.steps[step]['required']:
-                print(f"\n⏭ Skipping {step.value} (optional step)")
+                print(f"\n{SKIP} Skipping {step.value} (optional step)")
                 self.step_status[step] = StepStatus.SKIPPED
                 continue
-            
+
             # Run the step
             step_success = self.run_step(step, dry_run=False, **kwargs)
-            
+
             if not step_success:
                 if self.steps[step]['required']:
-                    print(f"\n❌ Required step {step.value} failed. Pipeline cannot continue.")
+                    print(f"\n{ERROR} Required step {step.value} failed. Pipeline cannot continue.")
                     success = False
                     break
                 else:
-                    print(f"\n⚠ Optional step {step.value} failed. Continuing pipeline.")
+                    print(f"\nWARNING: Optional step {step.value} failed. Continuing pipeline.")
                     self.step_status[step] = StepStatus.FAILED
         
         # Mark pipeline completion
@@ -510,22 +511,22 @@ class TCPPipeline:
         for step in PipelineStep:
             status = self.step_status[step]
             status_symbol = {
-                StepStatus.COMPLETED: "✅",
-                StepStatus.FAILED: "❌",
-                StepStatus.SKIPPED: "⏭",
-                StepStatus.NOT_STARTED: "○",
-                StepStatus.RUNNING: "🔄"
+                StepStatus.COMPLETED: SUCCESS,
+                StepStatus.FAILED: ERROR,
+                StepStatus.SKIPPED: SKIP,
+                StepStatus.NOT_STARTED: "o",
+                StepStatus.RUNNING: RUNNING
             }.get(status, "?")
-            
+
             print(f"  {status_symbol} {step.value}: {status.value}")
-        
+
         # Show next steps
         if failed_steps == 0:
-            print(f"\n🎉 Pipeline completed successfully!")
+            print(f"\n{PARTY} Pipeline completed successfully!")
             print(f"Your TCP dataset is ready for analysis.")
             print(f"Check the output directories for filtered subjects and downloaded data.")
         else:
-            print(f"\n⚠ Pipeline completed with {failed_steps} failed steps.")
+            print(f"\nWARNING: Pipeline completed with {failed_steps} failed steps.")
             print(f"Check the logs and re-run failed steps if needed.")
 
 def main():

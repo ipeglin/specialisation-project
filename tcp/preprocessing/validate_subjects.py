@@ -22,6 +22,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS
 
 class SubjectValidator:
     """Validates TCP dataset subjects and their basic structure"""
@@ -40,14 +41,14 @@ class SubjectValidator:
     def validate_dataset_exists(self) -> bool:
         """Check if dataset directory exists"""
         if not self.dataset_path.exists():
-            print(f"✗ Dataset directory does not exist: {self.dataset_path}")
+            print(f"{CROSS} Dataset directory does not exist: {self.dataset_path}")
             return False
-        
+
         if not self.dataset_path.is_dir():
-            print(f"✗ Dataset path is not a directory: {self.dataset_path}")
+            print(f"{CROSS} Dataset path is not a directory: {self.dataset_path}")
             return False
-        
-        print(f"✓ Dataset directory found: {self.dataset_path}")
+
+        print(f"{CHECK} Dataset directory found: {self.dataset_path}")
         return True
     
     def get_expected_subjects_from_participants(self) -> List[str]:
@@ -255,9 +256,9 @@ class SubjectValidator:
                     invalid_subjects.append(validation_result)
         
         print(f"\nValidation complete:")
-        print(f"  ✓ Valid subjects: {len(valid_subjects)}")
-        print(f"  ✗ Invalid subjects: {len(invalid_subjects)}")
-        print(f"  📁 Missing directories: {len(missing_dirs)}")
+        print(f"  {CHECK} Valid subjects: {len(valid_subjects)}")
+        print(f"  {CROSS} Invalid subjects: {len(invalid_subjects)}")
+        print(f"  Missing directories: {len(missing_dirs)}")
         
         return valid_subjects, invalid_subjects
     
@@ -343,32 +344,32 @@ class SubjectValidator:
         # Export valid subjects
         valid_file = self.output_dir / "valid_subjects.csv"
         valid_df.to_csv(valid_file, index=False)
-        print(f"  ✓ Valid subjects: {valid_file}")
-        
+        print(f"  {CHECK} Valid subjects: {valid_file}")
+
         # Export invalid subjects
         invalid_file = self.output_dir / "invalid_subjects.csv"
         invalid_df.to_csv(invalid_file, index=False)
-        print(f"  ✓ Invalid subjects: {invalid_file}")
-        
+        print(f"  {CHECK} Invalid subjects: {invalid_file}")
+
         # Generate and export summary
         summary = self.generate_validation_summary(valid_subjects, invalid_subjects)
         summary_file = self.output_dir / "validation_summary.json"
-        
+
         with open(summary_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: {summary_file}")
-        
+        print(f"  {CHECK} Summary: {summary_file}")
+
         # Export detailed validation results
         detailed_results = {
             'valid_subjects': valid_subjects,
             'invalid_subjects': invalid_subjects,
             'summary': summary
         }
-        
+
         detailed_file = self.output_dir / "detailed_validation_results.json"
         with open(detailed_file, 'w') as f:
             json.dump(detailed_results, f, indent=2)
-        print(f"  ✓ Detailed results: {detailed_file}")
+        print(f"  {CHECK} Detailed results: {detailed_file}")
         
         return self.output_dir
     

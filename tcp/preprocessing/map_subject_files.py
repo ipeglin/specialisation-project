@@ -27,6 +27,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class SubjectFileMapper:
@@ -284,7 +285,7 @@ class SubjectFileMapper:
 
         with open(self.output_dir / "subject_file_mapping.json", 'w') as f:
             json.dump(mapping_output, f, indent=2)
-        print(f"  ✓ File mapping: subject_file_mapping.json")
+        print(f"  {CHECK} File mapping: subject_file_mapping.json")
 
         # 2. Export statistics summary
         summary = {
@@ -299,7 +300,7 @@ class SubjectFileMapper:
 
         with open(self.output_dir / "file_mapping_summary.json", 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary: file_mapping_summary.json")
+        print(f"  {CHECK} Summary: file_mapping_summary.json")
 
         # 3. Export missing files report
         self._export_missing_files_report(subject_file_mapping)
@@ -326,9 +327,9 @@ class SubjectFileMapper:
         if missing_data:
             missing_df = pd.DataFrame(missing_data)
             missing_df.to_csv(self.output_dir / "missing_files_report.csv", index=False)
-            print(f"  ✓ Missing files report: missing_files_report.csv ({len(missing_data)} subjects)")
+            print(f"  {CHECK} Missing files report: missing_files_report.csv ({len(missing_data)} subjects)")
         else:
-            print(f"  ✓ No missing files detected")
+            print(f"  {CHECK} No missing files detected")
 
     def print_summary(self, stats: Dict) -> None:
         """Print summary to console"""
@@ -404,7 +405,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during file mapping: {e}")
+        print(f"{ERROR} Error during file mapping: {e}")
         import traceback
         traceback.print_exc()
         return 1

@@ -25,6 +25,7 @@ sys.path.insert(0, str(project_root))
 from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.filter_pipeline import SubjectFilterPipeline
 from tcp.preprocessing.utils.subject_filters import TaskAvailabilityFilter
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, ERROR
 import pandas as pd
 
 def detect_input_source() -> Path:
@@ -35,9 +36,9 @@ def detect_input_source() -> Path:
     # Use valid subjects from validation step (standard in new pipeline)
     validation_dir = get_script_output_path('tcp_preprocessing', 'validate_subjects')
     validation_subjects_file = validation_dir / 'valid_subjects.csv'
-    
+
     if validation_subjects_file.exists():
-        print(f"✓ Found validated subjects: {validation_dir}")
+        print(f"{CHECK} Found validated subjects: {validation_dir}")
         return validation_dir
     
     # No valid input found
@@ -245,8 +246,8 @@ class NewSubjectFilterPipeline:
         # Export subject lists
         included_subjects.to_csv(self.output_dir / "task_filtered_subjects.csv", index=False)
         excluded_subjects.to_csv(self.output_dir / "task_excluded_subjects.csv", index=False)
-        print(f"  ✓ Included subjects: {len(included_subjects)}")
-        print(f"  ✓ Excluded subjects: {len(excluded_subjects)}")
+        print(f"  {CHECK} Included subjects: {len(included_subjects)}")
+        print(f"  {CHECK} Excluded subjects: {len(excluded_subjects)}")
 
         # Export inclusion/exclusion reasons
         reasons_data = {
@@ -255,7 +256,7 @@ class NewSubjectFilterPipeline:
         }
         with open(self.output_dir / "filtering_reasons.json", 'w') as f:
             json.dump(reasons_data, f, indent=2)
-        print(f"  ✓ Filtering reasons exported")
+        print(f"  {CHECK} Filtering reasons exported")
 
         # Create summary report
         summary = {
@@ -272,7 +273,7 @@ class NewSubjectFilterPipeline:
 
         with open(self.output_dir / "task_filtering_summary.json", 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"  ✓ Summary report: task_filtering_summary.json")
+        print(f"  {CHECK} Summary report: task_filtering_summary.json")
 
 def main():
     """Main execution function"""
@@ -360,7 +361,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during task filtering: {e}")
+        print(f"{ERROR} Error during task filtering: {e}")
         import traceback
         traceback.print_exc()
         return 1

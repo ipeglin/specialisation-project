@@ -22,6 +22,11 @@ sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
 
+# Import unicode compatibility utilities for cross-platform support
+utils_dir = Path(__file__).parent / 'utils'
+sys.path.insert(0, str(utils_dir))
+from unicode_compat import CHECK, CROSS, WARNING, SUCCESS, ERROR, RUNNING, SEARCH, DOWNLOAD, DOCUMENT, LIGHTBULB, ARROW_RIGHT
+
 class DatasetInitializer:
     """Manages TCP dataset initialization and validation"""
     
@@ -56,16 +61,16 @@ class DatasetInitializer:
                 timeout=30
             )
             if result.returncode == 0:
-                print(f"✓ DataLad available: {result.stdout.strip()}")
+                print(f"{CHECK} DataLad available: {result.stdout.strip()}")
                 return True
             else:
-                print(f"✗ DataLad check failed: {result.stderr}")
+                print(f"{CROSS} DataLad check failed: {result.stderr}")
                 return False
         except FileNotFoundError:
-            print("✗ DataLad not found. Please install datalad: pip install datalad")
+            print(f"{CROSS} DataLad not found. Please install datalad: pip install datalad")
             return False
         except subprocess.TimeoutExpired:
-            print("✗ DataLad check timed out")
+            print(f"{CROSS} DataLad check timed out")
             return False
     
     def check_git_available(self) -> bool:
@@ -78,29 +83,31 @@ class DatasetInitializer:
                 timeout=30
             )
             if result.returncode == 0:
-                print(f"✓ Git available: {result.stdout.strip()}")
+                print(f"{CHECK} Git available: {result.stdout.strip()}")
                 return True
             else:
-                print(f"✗ Git check failed: {result.stderr}")
+                print(f"{CROSS} Git check failed: {result.stderr}")
                 return False
         except FileNotFoundError:
-            print("✗ Git not found. Please install git")
+            print(f"{CROSS} Git not found. Please install git")
             return False
         except subprocess.TimeoutExpired:
-            print("✗ Git check timed out")
+            print(f"{CROSS} Git check timed out")
             return False
     
     def dataset_exists(self) -> bool:
         """Check if dataset directory exists"""
         exists = self.dataset_path.exists()
-        print(f"{'✓' if exists else '✗'} Dataset directory exists: {exists}")
+        symbol = CHECK if exists else CROSS
+        print(f"{symbol} Dataset directory exists: {exists}")
         return exists
     
     def is_git_repository(self) -> bool:
         """Check if dataset is a git repository"""
         git_dir = self.dataset_path / '.git'
         is_git = git_dir.exists()
-        print(f"{'✓' if is_git else '✗'} Is git repository: {is_git}")
+        symbol = CHECK if is_git else CROSS
+        print(f"{symbol} Is git repository: {is_git}")
         return is_git
     
     def is_datalad_dataset(self) -> bool:
@@ -117,15 +124,16 @@ class DatasetInitializer:
                 timeout=30
             )
             is_datalad = result.returncode == 0
-            print(f"{'✓' if is_datalad else '✗'} Is datalad dataset: {is_datalad}")
+            symbol = CHECK if is_datalad else CROSS
+            print(f"{symbol} Is datalad dataset: {is_datalad}")
             if not is_datalad and result.stderr:
                 print(f"    Error: {result.stderr.strip()}")
             return is_datalad
         except subprocess.TimeoutExpired:
-            print("✗ Datalad status check timed out")
+            print(f"{CROSS} Datalad status check timed out")
             return False
         except Exception as e:
-            print(f"✗ Datalad status check failed: {e}")
+            print(f"{CROSS} Datalad status check failed: {e}")
             return False
     
     def check_dataset_structure(self) -> Dict[str, bool]:
@@ -139,19 +147,23 @@ class DatasetInitializer:
             file_path = self.dataset_path / file_name
             exists = file_path.exists()
             structure_status[f"file_{file_name}"] = exists
-            print(f"  {'✓' if exists else '✗'} {file_name}: {exists}")
-        
+            symbol = CHECK if exists else CROSS
+            print(f"  {symbol} {file_name}: {exists}")
+
         # Check required directories
         for dir_name in self.required_dirs:
             dir_path = self.dataset_path / dir_name
             exists = dir_path.exists() and dir_path.is_dir()
             structure_status[f"dir_{dir_name}"] = exists
-            print(f"  {'✓' if exists else '✗'} {dir_name}/: {exists}")
-        
+            symbol = CHECK if exists else CROSS
+            print(f"  {symbol} {dir_name}/: {exists}")
+
         # Check for subject directories
         subject_dirs = list(self.dataset_path.glob("sub-*"))
         structure_status["has_subjects"] = len(subject_dirs) > 0
-        print(f"  {'✓' if len(subject_dirs) > 0 else '✗'} Subject directories: {len(subject_dirs)} found")
+        has_subjects = len(subject_dirs) > 0
+        symbol = CHECK if has_subjects else CROSS
+        print(f"  {symbol} Subject directories: {len(subject_dirs)} found")
         
         return structure_status
     
@@ -180,7 +192,9 @@ class DatasetInitializer:
             all(validation_results["structure_check"].values())
         )
         
-        print(f"\n{'✓' if is_valid else '✗'} Dataset validation: {'PASSED' if is_valid else 'FAILED'}")
+        symbol = CHECK if is_valid else CROSS
+        status = 'PASSED' if is_valid else 'FAILED'
+        print(f"\n{symbol} Dataset validation: {status}")
         return is_valid, validation_results
     
     def clone_dataset(self) -> bool:
@@ -205,19 +219,19 @@ class DatasetInitializer:
             )
 
             if result.returncode == 0:
-                print("✓ Dataset cloned successfully")
+                print(f"{CHECK} Dataset cloned successfully")
                 print(f"Output: {result.stdout}")
                 return True
             else:
-                print(f"✗ Dataset cloning failed")
+                print(f"{CROSS} Dataset cloning failed")
                 print(f"Error: {result.stderr}")
                 return False
 
         except subprocess.TimeoutExpired:
-            print("✗ Dataset cloning timed out (>5 minutes)")
+            print(f"{CROSS} Dataset cloning timed out (>5 minutes)")
             return False
         except Exception as e:
-            print(f"✗ Dataset cloning failed with exception: {e}")
+            print(f"{CROSS} Dataset cloning failed with exception: {e}")
             return False
 
     def reinstall_dataset_content(self) -> bool:
@@ -227,12 +241,12 @@ class DatasetInitializer:
         print(f"Dataset directory: {self.dataset_path}")
 
         if not self.dataset_exists():
-            print(f"✗ Dataset directory does not exist: {self.dataset_path}")
+            print(f"{CROSS} Dataset directory does not exist: {self.dataset_path}")
             print(f"Cannot reinstall content. Please run without --force-reinstall to clone the dataset first.")
             return False
 
         if not self.is_git_repository():
-            print(f"✗ Dataset is not a git repository: {self.dataset_path}")
+            print(f"{CROSS} Dataset is not a git repository: {self.dataset_path}")
             print(f"Cannot reinstall content. Directory exists but is not a valid git repository.")
             return False
 
@@ -255,34 +269,34 @@ class DatasetInitializer:
             )
 
             if result.returncode == 0:
-                print("✓ Dataset content reinstalled successfully")
+                print(f"{CHECK} Dataset content reinstalled successfully")
                 if result.stdout:
                     # Print summary of what was fetched
                     lines = result.stdout.strip().split('\n')
                     fetched_count = sum(1 for line in lines if 'get(ok)' in line.lower())
                     if fetched_count > 0:
-                        print(f"  → Fetched {fetched_count} missing files")
+                        print(f"  {ARROW_RIGHT} Fetched {fetched_count} missing files")
                     else:
-                        print(f"  → All files were already present")
+                        print(f"  {ARROW_RIGHT} All files were already present")
                 return True
             else:
-                print(f"✗ Dataset content reinstall failed")
+                print(f"{CROSS} Dataset content reinstall failed")
                 if result.stderr:
                     print(f"Error: {result.stderr}")
                 # Even if some files fail, this might be acceptable for optional files
                 # Check if it's a partial success
                 if result.stdout and 'get(ok)' in result.stdout.lower():
-                    print(f"⚠ Some files were fetched, but the operation completed with errors")
+                    print(f"{WARNING} Some files were fetched, but the operation completed with errors")
                     print(f"This may be acceptable if only optional files failed")
                     return True
                 return False
 
         except subprocess.TimeoutExpired:
-            print("✗ Dataset content reinstall timed out (>2 hours)")
+            print(f"{CROSS} Dataset content reinstall timed out (>2 hours)")
             print("The dataset may be very large. Consider fetching specific subdirectories instead.")
             return False
         except Exception as e:
-            print(f"✗ Dataset content reinstall failed with exception: {e}")
+            print(f"{CROSS} Dataset content reinstall failed with exception: {e}")
             return False
     
     def initialize_dataset(self, force_reinstall: bool = False) -> Tuple[bool, Dict]:
@@ -301,7 +315,7 @@ class DatasetInitializer:
 
         # Handle force reinstall mode
         if force_reinstall:
-            print("\n🔄 Force reinstall mode enabled")
+            print(f"\n{RUNNING} Force reinstall mode enabled")
 
             if not self.dataset_exists():
                 print("Dataset does not exist. Cloning first...")
@@ -319,14 +333,14 @@ class DatasetInitializer:
                 }
 
             # Re-validate after reinstall
-            print(f"\n🔍 Validating dataset after reinstall...")
+            print(f"\n{SEARCH} Validating dataset after reinstall...")
             is_valid, validation_results = self.validate_existing_dataset()
 
             if is_valid:
-                print("\n✅ Dataset reinstallation completed successfully!")
+                print(f"\n{SUCCESS} Dataset reinstallation completed successfully!")
                 return True, validation_results
             else:
-                print("\n⚠ Dataset reinstalled but validation has warnings")
+                print(f"\n{WARNING} Dataset reinstalled but validation has warnings")
                 print("This may be acceptable if only optional files are missing")
                 return True, {
                     "warning": "Validation incomplete but reinstall succeeded",
@@ -335,13 +349,13 @@ class DatasetInitializer:
 
         # Normal mode (not force reinstall)
         if is_valid:
-            print("\n✓ Dataset is already properly initialized!")
+            print(f"\n{CHECK} Dataset is already properly initialized!")
             print("Tip: Use --force-reinstall to re-fetch any missing files")
             return True, validation_results
 
         # If dataset exists but is invalid, ask for action
         if self.dataset_exists():
-            print(f"\n⚠ Dataset directory exists but is invalid: {self.dataset_path}")
+            print(f"\n{WARNING} Dataset directory exists but is invalid: {self.dataset_path}")
             print("This could be:")
             print("- A partial/failed installation")
             print("- A different dataset")
@@ -356,21 +370,21 @@ class DatasetInitializer:
             }
 
         # Clone the dataset
-        print(f"\n📥 Dataset not found. Installing...")
+        print(f"\n{DOWNLOAD} Dataset not found. Installing...")
         clone_success = self.clone_dataset()
 
         if not clone_success:
             return False, {"error": "Dataset cloning failed"}
 
         # Validate the newly cloned dataset
-        print(f"\n🔍 Validating newly installed dataset...")
+        print(f"\n{SEARCH} Validating newly installed dataset...")
         is_valid, validation_results = self.validate_existing_dataset()
 
         if is_valid:
-            print("\n✅ Dataset initialization completed successfully!")
+            print(f"\n{SUCCESS} Dataset initialization completed successfully!")
             return True, validation_results
         else:
-            print("\n❌ Dataset initialization failed - validation failed after cloning")
+            print(f"\n{ERROR} Dataset initialization failed - validation failed after cloning")
             return False, {
                 "error": "Post-clone validation failed",
                 "validation_results": validation_results
@@ -393,8 +407,8 @@ class DatasetInitializer:
         
         with open(report_file, 'w') as f:
             json.dump(report, f, indent=2)
-        
-        print(f"\n📄 Report saved to: {report_file}")
+
+        print(f"\n{DOCUMENT} Report saved to: {report_file}")
         return report_file
 
 def main():
@@ -441,19 +455,19 @@ def main():
     print(f"{'=' * 50}")
     
     if success:
-        print(f"✅ Dataset is ready at: {initializer.dataset_path}")
-        print(f"📄 Report: {report_file}")
+        print(f"{SUCCESS} Dataset is ready at: {initializer.dataset_path}")
+        print(f"{DOCUMENT} Report: {report_file}")
         print(f"\nNext steps:")
         print(f"  1. Run validate_subjects.py to check subject data")
         print(f"  2. Run fetch_global_data.py to get participants.tsv")
         return 0
     else:
-        print(f"❌ Initialization failed")
-        print(f"📄 Error report: {report_file}")
-        
+        print(f"{ERROR} Initialization failed")
+        print(f"{DOCUMENT} Error report: {report_file}")
+
         if "recommendation" in results:
-            print(f"\n💡 Recommendation: {results['recommendation']}")
-        
+            print(f"\n{LIGHTBULB} Recommendation: {results['recommendation']}")
+
         return 1
 
 if __name__ == "__main__":

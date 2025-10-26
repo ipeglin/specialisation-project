@@ -42,6 +42,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class CrossAnalysisIntegrator:
@@ -95,7 +96,7 @@ class CrossAnalysisIntegrator:
             margins=True
         )
         cross_tabs['anhedonia_by_mdd_detailed'] = anhedonia_mdd_detailed.to_dict()
-        print(f"  ✓ Anhedonia × MDD status (detailed)")
+        print(f"  {CHECK} Anhedonia × MDD status (detailed)")
 
         # 2. Anhedonic status × Patient/Control (binary)
         anhedonic_patient_binary = pd.crosstab(
@@ -104,7 +105,7 @@ class CrossAnalysisIntegrator:
             margins=True
         )
         cross_tabs['anhedonic_by_patient_binary'] = anhedonic_patient_binary.to_dict()
-        print(f"  ✓ Anhedonic status × Patient/Control (binary)")
+        print(f"  {CHECK} Anhedonic status × Patient/Control (binary)")
 
         # 3. Analysis group membership overlap
         analysis_groups = ['primary', 'secondary', 'tertiary', 'quaternary']
@@ -128,7 +129,7 @@ class CrossAnalysisIntegrator:
                 overlap_matrix[group1][group2] = overlap
 
         cross_tabs['group_overlap_matrix'] = overlap_matrix
-        print(f"  ✓ Analysis group overlap matrix")
+        print(f"  {CHECK} Analysis group overlap matrix")
 
         # 4. Anhedonia distribution within each MDD group
         anhedonia_within_mdd = {}
@@ -139,7 +140,7 @@ class CrossAnalysisIntegrator:
                 anhedonia_within_mdd[mdd_status] = anhedonia_dist
 
         cross_tabs['anhedonia_within_mdd_groups'] = anhedonia_within_mdd
-        print(f"  ✓ Anhedonia distribution within MDD groups")
+        print(f"  {CHECK} Anhedonia distribution within MDD groups")
 
         return cross_tabs
 
@@ -207,27 +208,27 @@ class CrossAnalysisIntegrator:
         anhedonic_comparison = self.combined_subjects.copy()
         anhedonic_comparison['analysis_focus'] = 'anhedonic_comparison'
         datasets['anhedonic_vs_non_anhedonic'] = anhedonic_comparison
-        print(f"  ✓ Anhedonic vs Non-anhedonic: {len(anhedonic_comparison)} subjects")
+        print(f"  {CHECK} Anhedonic vs Non-anhedonic: {len(anhedonic_comparison)} subjects")
 
         # 2. Anhedonic patients vs Controls
         anhedonic_patients_controls = self.combined_subjects[
-            ((self.combined_subjects['anhedonic_status'] == 'anhedonic') & 
+            ((self.combined_subjects['anhedonic_status'] == 'anhedonic') &
              (self.combined_subjects['patient_control'] == 'Patient')) |
             (self.combined_subjects['patient_control'] == 'Control')
         ].copy()
         anhedonic_patients_controls['analysis_focus'] = 'anhedonic_patients_vs_controls'
         datasets['anhedonic_patients_vs_controls'] = anhedonic_patients_controls
-        print(f"  ✓ Anhedonic patients vs Controls: {len(anhedonic_patients_controls)} subjects")
+        print(f"  {CHECK} Anhedonic patients vs Controls: {len(anhedonic_patients_controls)} subjects")
 
         # 3. Non-anhedonic patients vs Controls
         non_anhedonic_patients_controls = self.combined_subjects[
-            ((self.combined_subjects['anhedonic_status'] == 'non-anhedonic') & 
+            ((self.combined_subjects['anhedonic_status'] == 'non-anhedonic') &
              (self.combined_subjects['patient_control'] == 'Patient')) |
             (self.combined_subjects['patient_control'] == 'Control')
         ].copy()
         non_anhedonic_patients_controls['analysis_focus'] = 'non_anhedonic_patients_vs_controls'
         datasets['non_anhedonic_patients_vs_controls'] = non_anhedonic_patients_controls
-        print(f"  ✓ Non-anhedonic patients vs Controls: {len(non_anhedonic_patients_controls)} subjects")
+        print(f"  {CHECK} Non-anhedonic patients vs Controls: {len(non_anhedonic_patients_controls)} subjects")
 
         # 4. Anhedonic vs Non-anhedonic within patients only
         patients_only_anhedonia = self.combined_subjects[
@@ -235,7 +236,7 @@ class CrossAnalysisIntegrator:
         ].copy()
         patients_only_anhedonia['analysis_focus'] = 'patients_anhedonic_comparison'
         datasets['patients_anhedonic_comparison'] = patients_only_anhedonia
-        print(f"  ✓ Anhedonic vs Non-anhedonic (patients only): {len(patients_only_anhedonia)} subjects")
+        print(f"  {CHECK} Anhedonic vs Non-anhedonic (patients only): {len(patients_only_anhedonia)} subjects")
 
         # 5. Anhedonic vs Non-anhedonic within controls only
         controls_only_anhedonia = self.combined_subjects[
@@ -243,7 +244,7 @@ class CrossAnalysisIntegrator:
         ].copy()
         controls_only_anhedonia['analysis_focus'] = 'controls_anhedonic_comparison'
         datasets['controls_anhedonic_comparison'] = controls_only_anhedonia
-        print(f"  ✓ Anhedonic vs Non-anhedonic (controls only): {len(controls_only_anhedonia)} subjects")
+        print(f"  {CHECK} Anhedonic vs Non-anhedonic (controls only): {len(controls_only_anhedonia)} subjects")
 
         return datasets
 
@@ -257,19 +258,19 @@ class CrossAnalysisIntegrator:
         cross_tabs_file = self.output_dir / "cross_tabulation_analysis.json"
         with open(cross_tabs_file, 'w') as f:
             json.dump(cross_tabs, f, indent=2, cls=NumpyEncoder)
-        print(f"  ✓ Cross-tabulations: {cross_tabs_file}")
+        print(f"  {CHECK} Cross-tabulations: {cross_tabs_file}")
 
         # 2. Export comprehensive statistics
         stats_file = self.output_dir / "comprehensive_statistics.json"
         with open(stats_file, 'w') as f:
             json.dump(stats, f, indent=2, cls=NumpyEncoder)
-        print(f"  ✓ Statistics: {stats_file}")
+        print(f"  {CHECK} Statistics: {stats_file}")
 
         # 3. Export analysis-ready datasets
         for dataset_name, dataset in analysis_datasets.items():
             dataset_file = self.output_dir / f"{dataset_name}_analysis_ready.csv"
             dataset.to_csv(dataset_file, index=False)
-            print(f"  ✓ {dataset_name} dataset: {dataset_file}")
+            print(f"  {CHECK} {dataset_name} dataset: {dataset_file}")
 
         # 4. Export human-readable summary report
         self._export_human_readable_report(cross_tabs, stats)
@@ -290,7 +291,7 @@ class CrossAnalysisIntegrator:
         master_file = self.output_dir / "cross_analysis_master_summary.json"
         with open(master_file, 'w') as f:
             json.dump(master_summary, f, indent=2, cls=NumpyEncoder)
-        print(f"  ✓ Master summary: {master_file}")
+        print(f"  {CHECK} Master summary: {master_file}")
         
         # 6. Export comprehensive data manifest for processing pipeline
         self._export_data_manifest(analysis_datasets)
@@ -306,7 +307,7 @@ class CrossAnalysisIntegrator:
         manifest_file = self.output_dir / "processing_data_manifest.json"
         with open(manifest_file, 'w') as f:
             json.dump(manifest_data, f, indent=2, cls=NumpyEncoder)
-        print(f"  ✓ Processing data manifest: {manifest_file}")
+        print(f"  {CHECK} Processing data manifest: {manifest_file}")
         
     def _build_comprehensive_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> Dict:
         """Build comprehensive data manifest with subject files and metadata"""
@@ -457,7 +458,7 @@ class CrossAnalysisIntegrator:
             for group, size in stats['analysis_group_sizes'].items():
                 f.write(f"  {group.upper()}: {size} subjects\n")
 
-        print(f"  ✓ Human-readable report: {report_file}")
+        print(f"  {CHECK} Human-readable report: {report_file}")
 
     def print_summary(self, cross_tabs: Dict, stats: Dict, analysis_datasets: Dict) -> None:
         """Print comprehensive summary to console"""
@@ -540,7 +541,7 @@ def main():
         return 0
 
     except Exception as e:
-        print(f"❌ Error during cross-analysis integration: {e}")
+        print(f"{ERROR} Error during cross-analysis integration: {e}")
         import traceback
         traceback.print_exc()
         return 1
