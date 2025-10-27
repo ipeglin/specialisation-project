@@ -26,7 +26,7 @@ except Exception as e:
 
 # Test data loader
 try:
-    from tcp.processing.data_loader import DataLoader
+    from tcp.processing import DataLoader
     
     # Check if manifest exists
     config = ProcessingConfig()
@@ -44,6 +44,12 @@ try:
         print(f"    Expected at: {manifest_path}")
         print("    Run preprocessing pipeline first to generate manifest")
         
+except ImportError as e:
+    if "pandas" in str(e):
+        print("⚠️  DataLoader test skipped - pandas required")
+        print("    Activate conda environment to enable full functionality")
+    else:
+        print(f"❌ DataLoader failed: {e}")
 except Exception as e:
     print(f"❌ DataLoader failed: {e}")
 
