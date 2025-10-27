@@ -22,6 +22,7 @@ sys.path.insert(0, str(project_root))
 from .data_loader import DataLoader
 from .config.processing_config import ProcessingConfig
 from .utils.error_handling import ValidationError, DataNotFoundError
+from .utils.downloaded_data import get_downloaded_subjects, get_download_status_report
 
 
 class SubjectManager:
@@ -104,6 +105,18 @@ class SubjectManager:
         
         return matching_subjects
     
+    def get_downloaded_subjects(self) -> List[str]:
+        """
+        Get list of subjects that have been downloaded locally.
+        
+        Returns:
+            List of subject IDs with locally downloaded data
+        """
+        try:
+            return get_downloaded_subjects()
+        except FileNotFoundError:
+            return []  # Return empty list if no downloaded subjects file exists
+    
     def get_subjects_with_data(self, 
                               data_types: Union[str, List[str]], 
                               require_all: bool = True) -> List[str]:
@@ -148,6 +161,7 @@ class SubjectManager:
                        classifications: Optional[Dict[str, Any]] = None,
                        data_requirements: Optional[List[str]] = None,
                        demographics: Optional[Dict[str, Any]] = None,
+                       downloaded_only: bool = False,
                        custom_filter: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[str]:
         """
         Apply multiple filters to select subjects.
@@ -158,6 +172,7 @@ class SubjectManager:
             classifications: Classification criteria
             data_requirements: Required data types
             demographics: Demographic criteria (e.g., {'sex': 'F', 'age': (18, 65)})
+            downloaded_only: If True, only include subjects with downloaded data
             custom_filter: Custom filter function that takes subject metadata
             
         Returns:
@@ -186,6 +201,11 @@ class SubjectManager:
         if data_requirements:
             data_subjects = set(self.get_subjects_with_data(data_requirements, require_all=True))
             filtered_subjects &= data_subjects
+        
+        # Apply downloaded-only filter
+        if downloaded_only:
+            downloaded_subjects = set(self.get_downloaded_subjects())
+            filtered_subjects &= downloaded_subjects
         
         # Apply demographic filters
         if demographics:
@@ -232,6 +252,51 @@ class SubjectManager:
             filtered_subjects &= custom_filtered
         
         return sorted(list(filtered_subjects))
+    
+    def get_subject_files_by_task(self, subject_id: str, data_type: str = 'timeseries',
+                                 task_filter: Optional[Union[str, List[str]]] = None) -> List[str]:
+        """
+        Get file paths for subject filtered by task type.
+        
+        Args:
+            subject_id: Subject identifier
+            data_type: Type of data ('timeseries', 'motion')
+            task_filter: Task name(s) to filter by (e.g., 'hammer', ['hammer', 'rest'])
+            
+        Returns:
+            List of file paths matching the task filter
+        """
+        return self.data_loader.get_subject_files_by_task(subject_id, data_type, task_filter)
+    
+    def filter_subjects_by_task_availability(self, 
+                                           task_filter: Union[str, List[str]],
+                                           data_type: str = 'timeseries',
+                                           base_subjects: Optional[List[str]] = None) -> List[str]:
+        """
+        Filter subjects that have data available for specific tasks.
+        
+        Args:
+            task_filter: Task name(s) to filter by (e.g., 'hammer', ['hammer', 'rest'])
+            data_type: Type of data to check ('timeseries', 'motion')
+            base_subjects: Starting set of subjects (all if None)
+            
+        Returns:
+            List of subject IDs that have data for the specified tasks
+        """
+        if base_subjects is None:
+            base_subjects = self.get_all_subjects()
+        
+        subjects_with_task_data = []
+        
+        for subject_id in base_subjects:
+            try:
+                task_files = self.get_subject_files_by_task(subject_id, data_type, task_filter)
+                if task_files:  # Subject has at least one file for the specified task(s)
+                    subjects_with_task_data.append(subject_id)
+            except Exception:
+                continue  # Skip subjects with missing data
+        
+        return subjects_with_task_data
     
     def get_subject_metadata(self, subject_id: str) -> Dict[str, Any]:
         """
@@ -524,3 +589,60 @@ class SubjectManager:
                 validation_report['demographic_summary']['sex_distribution'] = df['sex'].value_counts().to_dict()
         
         return validation_report
+    
+    def get_download_status(self) -> Dict[str, Any]:
+        """
+        Get status of downloaded data.
+        
+        Returns:
+            Dictionary with download status and data availability
+        """
+        try:
+            return get_download_status_report()
+        except Exception as e:
+            return {
+                'error': str(e),
+                'download_summary': {'total_downloaded': 0},
+                'data_availability': {'timeseries_available': 0, 'raw_nifti_available': 0}
+            }
+    
+    def get_subjects_availability_summary(self, subject_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Get summary of subject availability (total vs downloaded vs with data).
+        
+        Args:
+            subject_ids: Specific subjects to analyze (all if None)
+            
+        Returns:
+            Dictionary with availability breakdown
+        """
+        if subject_ids is None:
+            subject_ids = self.get_all_subjects()
+        
+        downloaded_subjects = set(self.get_downloaded_subjects())
+        timeseries_subjects = set(self.get_subjects_with_data('timeseries'))
+        
+        summary = {
+            'total_subjects': len(subject_ids),
+            'downloaded_subjects': len(downloaded_subjects & set(subject_ids)),
+            'with_timeseries_data': len(timeseries_subjects & set(subject_ids)),
+            'downloaded_with_timeseries': len(downloaded_subjects & timeseries_subjects & set(subject_ids)),
+            'breakdown': {
+                'available_in_manifest': len(set(subject_ids)),
+                'downloaded_locally': len(downloaded_subjects & set(subject_ids)),
+                'has_timeseries_metadata': len(timeseries_subjects & set(subject_ids)),
+                'ready_for_processing': len(downloaded_subjects & timeseries_subjects & set(subject_ids))
+            }
+        }
+        
+        # Calculate percentages
+        if summary['total_subjects'] > 0:
+            summary['percentages'] = {
+                'downloaded': (summary['downloaded_subjects'] / summary['total_subjects']) * 100,
+                'with_timeseries': (summary['with_timeseries_data'] / summary['total_subjects']) * 100,
+                'ready_for_processing': (summary['breakdown']['ready_for_processing'] / summary['total_subjects']) * 100
+            }
+        else:
+            summary['percentages'] = {'downloaded': 0, 'with_timeseries': 0, 'ready_for_processing': 0}
+        
+        return summary
