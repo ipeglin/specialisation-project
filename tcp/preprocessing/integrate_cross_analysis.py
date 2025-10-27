@@ -43,6 +43,7 @@ sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
+from tcp.preprocessing.utils.subject_id_transform import manifest_to_directory_id
 
 
 class CrossAnalysisIntegrator:
@@ -348,8 +349,8 @@ class CrossAnalysisIntegrator:
         for _, subject_row in self.combined_subjects.iterrows():
             subject_id = subject_row['subject_id']
             
-            # Convert subject ID to directory format (remove 'sub-' prefix for directory lookup)
-            subject_dir_id = subject_id.replace('sub-', '')
+            # Convert subject ID to directory format using utility function
+            subject_dir_id = manifest_to_directory_id(subject_id)
             
             subject_manifest = {
                 "demographics": {
@@ -396,13 +397,20 @@ class CrossAnalysisIntegrator:
             # Check for actual file availability (basic check)
             timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
             if timeseries_dir.exists():
-                subject_manifest["data_availability"]["has_timeseries"] = True
                 # List available timeseries files
                 timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
-                subject_manifest["files"]["timeseries"]["available"] = [
-                    f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}" 
-                    for f in timeseries_files
-                ]
+                if timeseries_files:
+                    subject_manifest["data_availability"]["has_timeseries"] = True
+                    subject_manifest["files"]["timeseries"]["available"] = [
+                        f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}" 
+                        for f in timeseries_files
+                    ]
+                else:
+                    # Directory exists but no files found - log for debugging
+                    print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
+            else:
+                # Directory doesn't exist - this might be expected for some subjects
+                pass  # Keep has_timeseries as False
             
             # Check motion data availability
             motion_dir = dataset_path / "motion_FD"
@@ -413,6 +421,12 @@ class CrossAnalysisIntegrator:
                     subject_manifest["files"]["motion"]["available"] = [
                         f"motion_FD/{f.name}" for f in motion_files
                     ]
+                else:
+                    # Directory exists but no motion files found
+                    print(f"    Warning: {subject_id} - motion directory exists but no TCP_FD_*.csv files found: {motion_dir}")
+            else:
+                # Motion directory doesn't exist
+                pass  # Keep has_motion as False
             
             manifest["subjects"][subject_id] = subject_manifest
         
