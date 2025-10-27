@@ -210,6 +210,49 @@ class DataLoader:
         
         return files_info[data_type].get('available', [])
     
+    def get_subject_files_by_task(self, subject_id: str, data_type: str = 'timeseries', 
+                                 task_filter: Optional[Union[str, List[str]]] = None) -> List[str]:
+        """
+        Get file paths for subject and data type, optionally filtered by task.
+        
+        Args:
+            subject_id: Subject identifier
+            data_type: Type of data ('timeseries', 'motion')
+            task_filter: Task name(s) to filter by (e.g., 'hammer', ['hammer', 'rest'])
+            
+        Returns:
+            List of file paths matching the task filter
+            
+        Raises:
+            DataNotFoundError: If subject or data type not found
+        """
+        # Get all files for the subject and data type
+        all_files = self.get_subject_files(subject_id, data_type)
+        
+        # If no task filter specified, return all files
+        if task_filter is None:
+            return all_files
+        
+        # Normalize task_filter to a list
+        if isinstance(task_filter, str):
+            task_filter = [task_filter]
+        
+        # Filter files based on task names in the file paths
+        filtered_files = []
+        for file_path in all_files:
+            # Extract task information from filename
+            # Look for patterns like "task-hammer", "task-stroop", "task-rest"
+            filename = Path(file_path).name.lower()
+            
+            # Check if any of the requested tasks appear in the filename
+            for task in task_filter:
+                task_pattern = f"task-{task.lower()}"
+                if task_pattern in filename:
+                    filtered_files.append(file_path)
+                    break  # Don't add the same file multiple times
+        
+        return filtered_files
+    
     def resolve_file_path(self, relative_path: str) -> Path:
         """
         Resolve relative file path to absolute path.
