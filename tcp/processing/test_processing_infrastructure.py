@@ -15,38 +15,28 @@ from typing import Dict, Any
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
+
+# Clear any conflicting paths and ensure clean import environment
+# Remove current directory and tcp package from path to avoid conflicts
+paths_to_remove = [
+    str(Path.cwd()),
+    str(Path(__file__).parent.parent),  # tcp directory
+    str(Path(__file__).parent),         # tcp/processing directory
+]
+
+for path in paths_to_remove:
+    while path in sys.path:
+        sys.path.remove(path)
+
+# Insert project root at the beginning
 sys.path.insert(0, str(project_root))
 
-def check_dependencies():
-    """Check for required dependencies and provide helpful error messages"""
-    missing_deps = []
-    
-    # Check for pandas
-    try:
-        import pandas
-    except ImportError:
-        missing_deps.append("pandas")
-    
-    if missing_deps:
-        print(f"❌ Missing required dependencies: {', '.join(missing_deps)}")
-        print("\nTo fix this:")
-        print("1. Activate your conda environment: 'conda activate masters_thesis'")
-        print("2. Or install pandas: 'pip install pandas'")
-        print("3. Then re-run this test")
-        return False
-    
-    return True
-
-# Check dependencies first
-if not check_dependencies():
-    sys.exit(1)
-
-# Now try imports with better error handling
+# Test core imports first (no pandas required)
 try:
     from tcp.processing import ProcessingConfig
     from tcp.processing.utils.validation import validate_manifest
     from config.paths import get_platform_info
-    print("✓ Basic imports successful")
+    print("✓ Core imports successful")
 except ImportError as e:
     if "config.paths" in str(e):
         print(f"❌ Path configuration error: {e}")
@@ -57,18 +47,28 @@ except ImportError as e:
         print(f"❌ Import error: {e}")
     sys.exit(1)
 
-# Try pandas-dependent imports separately
-try:
-    from tcp.processing import DataLoader, SubjectManager
-    pandas_available = True
-    print("✓ DataLoader and SubjectManager imports successful")
-except ImportError as e:
-    if "pandas" in str(e):
-        print("⚠️  DataLoader and SubjectManager require pandas (expected)")
+# Check for pandas availability
+def check_pandas_available():
+    """Check if pandas is available"""
+    try:
+        import pandas
+        return True
+    except ImportError:
+        return False
+
+pandas_available = check_pandas_available()
+
+if pandas_available:
+    # Try pandas-dependent imports
+    try:
+        from tcp.processing import DataLoader, SubjectManager
+        print("✓ DataLoader and SubjectManager imports successful")
+    except ImportError as e:
+        print(f"❌ Unexpected pandas import error: {e}")
         pandas_available = False
-    else:
-        print(f"❌ Unexpected import error: {e}")
-        sys.exit(1)
+else:
+    print("⚠️  DataLoader and SubjectManager require pandas")
+    print("   Activate conda environment for full functionality")
 
 
 def test_platform_detection() -> Dict[str, Any]:

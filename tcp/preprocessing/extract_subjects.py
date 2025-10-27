@@ -17,11 +17,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
-
 import h5py
 import numpy as np
 import pandas as pd
+
+from config.paths import get_script_output_path, get_tcp_dataset_path
 
 warnings.filterwarnings('ignore')
 

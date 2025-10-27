@@ -13,8 +13,8 @@ Author: Ian Philip Eglin
 Date: 2025-09-23
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -22,11 +22,13 @@ from typing import Optional
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+import pandas as pd
+
 from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.filter_pipeline import SubjectFilterPipeline
 from tcp.preprocessing.utils.subject_filters import TaskAvailabilityFilter
 from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, ERROR
-import pandas as pd
+
 
 def detect_input_source() -> Path:
     """Automatically detect input source from new pipeline steps"""
@@ -67,9 +69,10 @@ class NewSubjectFilterPipeline:
     
     def load_and_convert_data(self):
         """Load data from new pipeline format - unified subject list (group-agnostic)"""
-        import pandas as pd
         import json
         from pathlib import Path
+
+        import pandas as pd
 
         # Check input format and load accordingly
         phenotype_file = self.input_dir / 'phenotype_filtered_subjects.csv'
