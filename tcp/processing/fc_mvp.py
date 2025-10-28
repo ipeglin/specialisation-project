@@ -29,6 +29,50 @@ from tcp.processing import DataLoader, SubjectManager
 from tcp.processing.roi import CorticalAtlasLookup, ROIExtractionService
 
 
+def is_actual_file(file_path: Path) -> bool:
+    """
+    Check if a file is actually downloaded (not a git-annex symlink).
+
+    Works cross-platform (Windows, macOS, Linux) by checking:
+    1. File exists
+    2. If it's a symlink, verify the target exists
+    3. File has actual content (size > 1KB, symlinks are tiny)
+
+    Args:
+        file_path: Path to check
+
+    Returns:
+        True if file is actually available for reading, False if it's a symlink stub
+    """
+    if not file_path.exists():
+        return False
+
+    # Check if it's a symlink
+    if file_path.is_symlink():
+        # On Windows, symlinks might point to git-annex objects
+        try:
+            # Check if symlink target exists and is accessible
+            resolved = file_path.resolve(strict=True)
+            # Verify it's not just a symlink to an annex object path
+            if '.git/annex/objects' in str(resolved):
+                # This is a git-annex symlink, check if target actually exists
+                if not resolved.exists():
+                    return False
+        except (OSError, RuntimeError):
+            return False
+
+    # Check file size - git-annex symlinks are very small (<1KB)
+    # Real H5 files should be much larger
+    try:
+        size = file_path.stat().st_size
+        if size < 1024:  # Less than 1KB = likely a symlink or empty
+            return False
+    except OSError:
+        return False
+
+    return True
+
+
 def main():
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
@@ -37,7 +81,7 @@ def main():
     loader = DataLoader()
     manager = SubjectManager(data_loader=loader)
     
-    print(f"✓ Loaded manifest with {len(loader.get_all_subject_ids())} subjects")
+    print(f"[OK] Loaded manifest with {len(loader.get_all_subject_ids())} subjects")
     
     # Get available analysis groups
     groups = loader.get_analysis_groups()
@@ -105,12 +149,12 @@ def main():
             # Get only hammer task files
             hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
             if hammer_files:
-                # Check if at least one hammer file actually exists
+                # Check if at least one hammer file is actually downloaded (not a git-annex symlink)
                 first_file = loader.resolve_file_path(hammer_files[0])
-                if first_file.exists():
+                if is_actual_file(first_file):
                     accessible_anhedonic.append(subject_id)
                 else:
-                    print(f"    Warning: {subject_id} - hammer files listed but not accessible")
+                    print(f"    Warning: {subject_id} - hammer file exists but not downloaded (git-annex symlink)")
             else:
                 print(f"    Warning: {subject_id} - no hammer task files available")
         except Exception as e:
@@ -123,10 +167,10 @@ def main():
             hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
             if hammer_files:
                 first_file = loader.resolve_file_path(hammer_files[0])
-                if first_file.exists():
+                if is_actual_file(first_file):
                     accessible_non_anhedonic.append(subject_id)
                 else:
-                    print(f"    Warning: {subject_id} - hammer files listed but not accessible")
+                    print(f"    Warning: {subject_id} - hammer file exists but not downloaded (git-annex symlink)")
             else:
                 print(f"    Warning: {subject_id} - no hammer task files available")
         except Exception as e:
@@ -137,6 +181,21 @@ def main():
     print(f"  Anhedonic subjects (accessible): {len(accessible_anhedonic)}")
     print(f"  Non-anhedonic subjects (accessible): {len(accessible_non_anhedonic)}")
     print(f"  Total ready for FC analysis (hammer task only): {len(accessible_anhedonic) + len(accessible_non_anhedonic)}")
+
+    # Check if we have any accessible subjects
+    if len(accessible_anhedonic) == 0 and len(accessible_non_anhedonic) == 0:
+        print(f"\n[ERROR] No subjects have actually downloaded timeseries files!")
+        print(f"   The files exist as git-annex symlinks but haven't been fetched yet.")
+        print(f"\n   To download timeseries data, run:")
+        print(f"   cd {loader.base_path}")
+        print(f"   datalad get fMRI_timeseries_clean_denoised_GSR_parcellated/")
+        print(f"\n   Or use the preprocessing pipeline with timeseries data type enabled.")
+        return {
+            'error': 'No downloaded timeseries files',
+            'anhedonic_subjects': [],
+            'non_anhedonic_subjects': [],
+            'processing_mode': 'downloaded_only' if use_downloaded_only else 'all_available',
+        }
     
     # Show example hammer task file paths for first few accessible subjects
     if accessible_anhedonic:

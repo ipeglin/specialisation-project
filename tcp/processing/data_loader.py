@@ -94,8 +94,8 @@ class DataLoader:
         else:
             self.base_path = self.config.get_dataset_path()
         
-        print(f"✓ Loaded manifest with {len(self.manifest['subjects'])} subjects")
-        print(f"✓ Base data path: {self.base_path}")
+        print(f"[OK] Loaded manifest with {len(self.manifest['subjects'])} subjects")
+        print(f"[OK] Base data path: {self.base_path}")
     
     def get_manifest_info(self) -> Dict[str, Any]:
         """
