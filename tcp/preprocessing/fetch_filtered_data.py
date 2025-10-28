@@ -37,10 +37,11 @@ class DataladDataFetcher:
     eliminating runtime file discovery and improving efficiency.
     """
 
-    def __init__(self, dataset_path: Path, file_mapping_path: Path, dry_run: bool = False):
+    def __init__(self, dataset_path: Path, file_mapping_path: Path, dry_run: bool = False, tasks: Optional[List[str]] = None):
         self.dataset_path = Path(dataset_path)
         self.file_mapping_path = Path(file_mapping_path)
         self.dry_run = dry_run
+        self.tasks = tasks  # Task filter (e.g., ['hammer'] to only fetch hammer task data)
         self.logger = self._setup_logging()
 
         # Data type mapping for filtering which files to fetch
@@ -72,7 +73,7 @@ class DataladDataFetcher:
 
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             log_file = log_dir / f'fetch_data_{timestamp}.log'
-            file_handler = logging.FileHandler(log_file)
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
             file_handler.setLevel(logging.INFO)
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
@@ -143,7 +144,14 @@ class DataladDataFetcher:
         return True
 
     def is_file_downloaded(self, file_path: Path) -> bool:
-        """Check if a file has been downloaded (not a git-annex symlink)"""
+        """
+        Check if a file has been downloaded (not a git-annex symlink).
+
+        Works cross-platform (Windows, macOS, Linux) by checking:
+        1. File exists
+        2. If it's a symlink, verify the target exists
+        3. File has actual content (size > 1KB for H5 files, symlinks are tiny)
+        """
         try:
             full_path = self.dataset_path / file_path
             if not full_path.exists():
@@ -151,27 +159,44 @@ class DataladDataFetcher:
 
             # Check if it's a symlink pointing to git-annex
             if full_path.is_symlink():
-                link_target = str(full_path.readlink())
-                if '.git/annex/objects' in link_target:
-                    # It's still a git-annex symlink, not downloaded
+                # On Windows, symlinks might point to git-annex objects
+                try:
+                    # Check if symlink target exists and is accessible
+                    resolved = full_path.resolve(strict=True)
+                    # Verify it's not just a symlink to an annex object path
+                    if '.git/annex/objects' in str(resolved):
+                        # This is a git-annex symlink, check if target actually exists
+                        if not resolved.exists():
+                            return False
+                except (OSError, RuntimeError):
                     return False
 
-            # Check if it's an actual file with content
-            return full_path.stat().st_size > 0
+            # Check file size - git-annex symlinks/pointers are very small (<1KB)
+            # Real data files should be much larger
+            try:
+                size = full_path.stat().st_size
+                if size < 1024:  # Less than 1KB = likely a symlink/pointer or empty
+                    return False
+            except OSError:
+                return False
+
+            return True
 
         except (OSError, IOError):
             return False
 
     def filter_files_by_data_types(self, subject_file_mapping: Dict,
-                                    data_types: List[str]) -> Dict[str, List[str]]:
-        """Filter the file mapping based on requested data types
+                                    data_types: List[str],
+                                    tasks: Optional[List[str]] = None) -> Dict[str, List[str]]:
+        """Filter the file mapping based on requested data types and tasks
 
         Args:
             subject_file_mapping: Complete file mapping for all subjects
             data_types: List of data type categories to include
+            tasks: Optional list of tasks to include (e.g., ['hammer']). If None, includes all tasks.
 
         Returns:
-            Filtered mapping with only requested data types
+            Filtered mapping with only requested data types and tasks
         """
         filtered_mapping = {}
 
@@ -183,7 +208,9 @@ class DataladDataFetcher:
                     # Handle nested structure (hammer/stroop or t1w/t2w)
                     if isinstance(file_map[data_type], dict):
                         for task_or_scan, file_list in file_map[data_type].items():
-                            files.extend(file_list)
+                            # If tasks filter is specified, only include matching tasks
+                            if tasks is None or task_or_scan in tasks:
+                                files.extend(file_list)
                     else:
                         files.extend(file_map[data_type])
 
@@ -217,8 +244,8 @@ class DataladDataFetcher:
         if self.dry_run:
             self.logger.info("DRY RUN MODE - No actual data will be fetched")
 
-        # Filter files by requested data types
-        subject_files = self.filter_files_by_data_types(subject_file_mapping, data_types)
+        # Filter files by requested data types and tasks
+        subject_files = self.filter_files_by_data_types(subject_file_mapping, data_types, tasks=self.tasks)
         fetch_results = {}
 
         # Calculate overall statistics
@@ -510,6 +537,10 @@ def main():
                        choices=available_data_types,
                        default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
                        help='Data type categories to fetch (default: ALL data types - raw NIFTI, events, JSON metadata, anatomical scans, and timeseries). Use this flag to restrict to specific data types only.')
+    parser.add_argument('--tasks', nargs='+',
+                       choices=['hammer', 'stroop', 't1w', 't2w'],
+                       default=['hammer'],
+                       help='Tasks to include in fetch (default: hammer only). Use this to include stroop or other tasks.')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,
@@ -534,11 +565,12 @@ def main():
     print(f"Dataset path: {dataset_path}")
     print(f"File mapping: {file_mapping_path}")
     print(f"Data types: {', '.join(args.data_types)}")
+    print(f"Tasks: {', '.join(args.tasks)}")
     print(f"Dry run: {args.dry_run}")
     print()
 
     # Initialize fetcher
-    fetcher = DataladDataFetcher(dataset_path, file_mapping_path, dry_run=args.dry_run)
+    fetcher = DataladDataFetcher(dataset_path, file_mapping_path, dry_run=args.dry_run, tasks=args.tasks)
 
     # Check dataset status
     if not fetcher.check_dataset_status():
