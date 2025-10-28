@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_root))
 
 import h5py
 import matplotlib.pyplot as plt
+import numpy as np
 
 from tcp.processing import DataLoader, SubjectManager
 
@@ -150,19 +151,59 @@ def main():
             except Exception as e:
                 print(f"    Error: {e}")
     
+    """
+    MVP: Only check data for a single subject.
+    After completing the data extraction for a single subject, this may be implemented in a way that loops over all downloaded subjects
+    """
     # Read data from .h5 files
     first_subject_id = accessible_anhedonic[0]
     hammer_files = manager.get_subject_files_by_task(first_subject_id, 'timeseries', 'hammer')
     first_subject_id_hammer_file = loader.resolve_file_path(hammer_files[0])
+    
+    data = None
     with h5py.File(first_subject_id_hammer_file, 'r') as file:
       a_group_key = list(file.keys())[0]
     
       # Getting the data
-      data = list(file[a_group_key])
-      print(len(data))
-      with open('test.txt', 'w') as f:
-        f.write(str(data))
-        f.close()
+      data = np.asarray(file[a_group_key])
+      print(f"Found data with shape: {data.shape}")
+      
+      # Segmenting into timeseries groups (cortical, subcortical, cerebellum; samples [1-400], [401-432] and [433-434], respectively)
+      cortical_timeseries = data[:400] # using hMRF atlas (https://www.sciencedirect.com/science/article/pii/S1053811923001568?via%3Dihub)
+      cortical_L, cortical_R = cortical_timeseries[:200], cortical_timeseries[200:]
+      cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R))) # Combine into L/R homotopic pairs of ROIs
+      subcortical_timeseries = data[400:432] # “scale II” resolution atlas by Tian and colleagues (https://www.nature.com/articles/s41593-020-00711-6#code-availability)
+      cerebellum_timeseries = data[432:] # using Buckner et al. atlas (https://journals.physiology.org/doi/full/10.1152/jn.00339.2011)
+      print("Found parcels:")
+      print(f"Cortical: {cortical_timeseries.shape}\n\tLEFT Hemisphere: {cortical_L.shape}\n\tRIGHT Hemisphere: {cortical_R.shape}\n\tHomotopic Pairs: {cortical_homotopic_pairs.shape}\nSubcortical: {subcortical_timeseries.shape}\nCerebellum: {cerebellum_timeseries.shape}")
+      print('PAIR:', cortical_homotopic_pairs[0])
+      print('LEFT:', cortical_L[0])
+      print('RIGHT:', cortical_R[0])
+      
+      """
+        Get ROI parcel indeces by searching for ROIs by lines in cortical LUT file
+        
+        ROI format for each timeseries spans two lines:
+        ```
+        <7|17>networks_<L|R>H_<network_name>_<ROI_abbreviation>[_subarea_number] # first line
+        <parcel_idx> <red> <green> <blue> <redundant_value> # second line
+        ```
+        
+        Example:
+        ```
+        17networks_LH_TempPar_IPL_1
+        1 12 48 255 255
+        ```
+        Meaning that parcel 1 (parcel_idx) for a space matches to Yeo17 (17networks) is on the left hemisphere (LH) and is assigned to the TemporalPariental network. The data point contains the first subarea (_1) for the Inferior Parietal Lobule (IPL). This datapoint is visually coloured with RGB (12,48,255) when opened in a viewing program.
+      """
+      # Fetching specific ROIs from LUT
+      cortical_lut_file = Path(__file__) / 'parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt' # should be 'tcp/processing/parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt' relative to project root
+      cortical_ROIs = [
+        'PFCm', # medial PFC
+        'PFCv', # ventral PFC
+        ]
+      
+      # TODO: Get <parcel_idx> for ROIs from cortical lookup table
       
     
     return {
