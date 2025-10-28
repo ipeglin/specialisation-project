@@ -70,8 +70,8 @@ class TCPPipeline:
                 'script': 'initialize_dataset.py',
                 'description': 'Initialize and clone TCP dataset',
                 'required': True,
-                'estimated_time': '5-10 minutes',
-                'timeout': 1800  # 30 minutes
+                'estimated_time': '10-15 minutes',
+                'timeout': 900  # 15 minutes
             },
             PipelineStep.VALIDATE_SUBJECTS: {
                 'script': 'validate_subjects.py',
@@ -334,6 +334,8 @@ class TCPPipeline:
                 # Add data fetching arguments if provided
                 if 'data_types' in kwargs:
                     cmd.extend(['--data-types'] + kwargs['data_types'])
+                if 'tasks' in kwargs:
+                    cmd.extend(['--tasks'] + kwargs['tasks'])
                 if kwargs.get('fetch_dry_run', False):
                     cmd.append('--dry-run')
             
@@ -342,10 +344,15 @@ class TCPPipeline:
             print(f"Executing: {' '.join(cmd)}")
             print(f"Timeout: {step_timeout} seconds ({step_timeout/3600:.1f} hours)")
             
-            # Use real-time output for long-running steps (especially data fetching)
-            if step == PipelineStep.FETCH_FILTERED_DATA:
-                # Allow real-time output for data fetching to show progress
-                print("Starting data fetch with real-time output...")
+            # Use real-time output for long-running steps (initialization and data fetching)
+            if step in [PipelineStep.INITIALIZE_DATASET, PipelineStep.FETCH_FILTERED_DATA]:
+                # Allow real-time output to show progress during long operations
+                if step == PipelineStep.INITIALIZE_DATASET:
+                    print("Starting dataset initialization with real-time output...")
+                    print("(This may take 10-15 minutes for cloning...)")
+                else:
+                    print("Starting data fetch with real-time output...")
+
                 result = subprocess.run(
                     cmd,
                     capture_output=False,  # Show real-time output
@@ -386,7 +393,9 @@ class TCPPipeline:
                 return True
             else:
                 print(f"{CROSS} Step failed with return code {result.returncode}")
-                print(f"STDERR: {result.stderr}")
+                # Only show stderr if it was captured (not in real-time mode)
+                if step_result.get('stderr') and step_result['stderr'] != "Real-time output mode - errors shown in console":
+                    print(f"STDERR: {step_result['stderr']}")
                 self.step_status[step] = StepStatus.FAILED
                 self.save_pipeline_state()
                 return False
@@ -567,6 +576,10 @@ def main():
     parser.add_argument('--data-types', nargs='+',
                        default=['raw_nifti', 'events', 'json_metadata', 'anatomical', 'anatomical_json', 'timeseries'],
                        help='Data types to fetch (default: ALL data types). Use this flag to restrict to specific data types only.')
+    parser.add_argument('--tasks', nargs='+',
+                       choices=['hammer', 'stroop'],
+                       default=['hammer'],
+                       help='Tasks to fetch (default: hammer only). Use this to include stroop or other tasks.')
     parser.add_argument('--fetch-dry-run', action='store_true',
                        help='Dry run for data fetching step')
     
@@ -588,6 +601,7 @@ def main():
         'sample_mode': args.sample_mode,
         'analysis_groups': args.analysis_groups,
         'data_types': args.data_types,
+        'tasks': args.tasks,
         'fetch_dry_run': args.fetch_dry_run
     }
     
