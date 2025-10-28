@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from tcp.processing import DataLoader, SubjectManager
+from tcp.processing.roi import CorticalAtlasLookup, ROIExtractionService
 
 
 def main():
@@ -176,9 +177,6 @@ def main():
       cerebellum_timeseries = data[432:] # using Buckner et al. atlas (https://journals.physiology.org/doi/full/10.1152/jn.00339.2011)
       print("Found parcels:")
       print(f"Cortical: {cortical_timeseries.shape}\n\tLEFT Hemisphere: {cortical_L.shape}\n\tRIGHT Hemisphere: {cortical_R.shape}\n\tHomotopic Pairs: {cortical_homotopic_pairs.shape}\nSubcortical: {subcortical_timeseries.shape}\nCerebellum: {cerebellum_timeseries.shape}")
-      print('PAIR:', cortical_homotopic_pairs[0])
-      print('LEFT:', cortical_L[0])
-      print('RIGHT:', cortical_R[0])
       
       """
         Get ROI parcel indeces by searching for ROIs by lines in cortical LUT file
@@ -196,14 +194,88 @@ def main():
         ```
         Meaning that parcel 1 (parcel_idx) for a space matches to Yeo17 (17networks) is on the left hemisphere (LH) and is assigned to the TemporalPariental network. The data point contains the first subarea (_1) for the Inferior Parietal Lobule (IPL). This datapoint is visually coloured with RGB (12,48,255) when opened in a viewing program.
       """
-      # Fetching specific ROIs from LUT
-      cortical_lut_file = Path(__file__) / 'parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt' # should be 'tcp/processing/parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt' relative to project root
-      cortical_ROIs = [
-        'PFCm', # medial PFC
-        'PFCv', # ventral PFC
-        ]
+      # Initialize modular ROI extraction system
+      cortical_lut_file = Path(__file__).parent / 'parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
+      cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
+      roi_extractor = ROIExtractionService(cortical_atlas)
       
-      # TODO: Get <parcel_idx> for ROIs from cortical lookup table
+      # Define ROIs of interest
+      cortical_ROIs = [
+        'PFCm',  # medial PFC
+        'PFCv',  # ventral PFC
+      ]
+      
+      # Validate ROI coverage before extraction
+      validation_result = roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
+      print(f"\nROI Validation Results:")
+      print(f"  Valid ROIs: {validation_result['valid_rois']}")
+      print(f"  Invalid ROIs: {validation_result['invalid_rois']}")
+      print(f"  Coverage issues: {validation_result['coverage_issues']}")
+      print(f"  Atlas: {validation_result['atlas_info']['name']} ({validation_result['atlas_info']['total_parcels']} parcels)")
+      
+      # Extract ROI timeseries data
+      if validation_result['valid_rois'] and not validation_result['coverage_issues']:
+          roi_timeseries = roi_extractor.extract_roi_timeseries(
+              cortical_timeseries, 
+              cortical_ROIs, 
+              aggregation_method='all'
+          )
+          
+          # Display extraction results
+          extraction_summary = roi_extractor.get_extraction_summary(cortical_ROIs, roi_timeseries)
+          print(f"\nROI Extraction Summary:")
+          print(f"  Requested: {extraction_summary['requested_rois']}")
+          print(f"  Extracted: {extraction_summary['extracted_rois']}")
+          print(f"  Atlas indexing: {extraction_summary['atlas_indexing']}")
+          
+          # Show details for each extracted ROI
+          for roi_name, details in extraction_summary['roi_details'].items():
+              print(f"\n  {roi_name}:")
+              print(f"    Timeseries shape: {details['timeseries_shape']}")
+              print(f"    Parcel count: {details['parcel_count']}")
+              print(f"    Hemispheres: {details['hemispheres']}")
+              print(f"    Networks: {details['networks']}")
+              
+              # Show first few timepoints as example
+              timeseries_data = roi_timeseries[roi_name]
+              print(f"    Sample timepoints: {timeseries_data[:5]}")
+              
+          # Demonstrate network-specific extraction if supported
+          if roi_extractor.supports_network_queries():
+              print(f"\n=== Network-Specific Analysis ===")
+              
+              # Get available networks
+              available_networks = roi_extractor.atlas_lookup.get_available_networks()
+              print(f"Available networks: {sorted(available_networks)}")
+              
+              # Get network breakdown for our ROIs
+              network_breakdown = roi_extractor.get_network_breakdown_summary(cortical_ROIs)
+              if network_breakdown:
+                  print(f"\nNetwork breakdown:")
+                  for roi_name, networks in network_breakdown.items():
+                      print(f"  {roi_name}:")
+                      for network, details in networks.items():
+                          print(f"    {network}: {details['parcel_count']} parcels")
+              
+              # Extract network-specific timeseries (default: keep all parcels)
+              network_timeseries = roi_extractor.extract_roi_timeseries_by_network(
+                  cortical_timeseries, 
+                  cortical_ROIs,
+                  aggregation_method='all'
+              )
+              
+              print(f"\nNetwork-specific extraction results:")
+              for roi_name, networks in network_timeseries.items():
+                  print(f"  {roi_name}:")
+                  for network, timeseries in networks.items():
+                      # Show just first 3 timepoints from first parcel for consistent output
+                      if timeseries.ndim == 1:
+                          sample_data = timeseries[:3]
+                      else:
+                          sample_data = timeseries[0, :3]  # First parcel, first 3 timepoints
+                      print(f"    {network}: shape {timeseries.shape}, sample: {sample_data}")
+      else:
+          print("ROI extraction skipped due to validation issues")
       
     
     return {
