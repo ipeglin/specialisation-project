@@ -36,6 +36,7 @@ dependencies:
   - yarl
   - sniffio
   - anyio
+  - h5py
   
   # Development tools
   - debugpy
