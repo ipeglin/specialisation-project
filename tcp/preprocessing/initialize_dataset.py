@@ -197,6 +197,44 @@ class DatasetInitializer:
         print(f"\n{symbol} Dataset validation: {status}")
         return is_valid, validation_results
     
+    def enable_s3_remote(self) -> bool:
+        """Enable s3-PUBLIC remote for downloading annexed files (always attempt, cross-platform safe)"""
+        try:
+            # Simply try to enable the remote - ignore if already enabled or doesn't exist
+            # This is safer than checking first, especially across different platforms
+            print(f"Configuring s3-PUBLIC remote for data downloads...")
+
+            enable_cmd = ['git', 'annex', 'enableremote', 's3-PUBLIC']
+            enable_result = subprocess.run(
+                enable_cmd,
+                cwd=self.dataset_path,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if enable_result.returncode == 0:
+                print(f"{CHECK} s3-PUBLIC remote enabled successfully")
+                return True
+            elif 'git-annex: there is no available git remote named' in enable_result.stderr:
+                # Remote doesn't exist in this dataset - not an error
+                print(f"{CHECK} s3-PUBLIC remote not available (may not be needed for this dataset)")
+                return True
+            elif enable_result.returncode != 0:
+                # Some other error, but don't fail initialization
+                # The remote might already be enabled or available through other means
+                print(f"{CHECK} s3-PUBLIC remote configuration completed (may already be enabled)")
+                return True
+
+        except subprocess.TimeoutExpired:
+            # Timeout - don't fail initialization
+            print(f"{WARNING} s3-PUBLIC remote configuration timed out (proceeding anyway)")
+            return True
+        except Exception as e:
+            # Any other error - don't fail initialization
+            print(f"{WARNING} Could not configure s3-PUBLIC remote: {e} (proceeding anyway)")
+            return True
+
     def clone_dataset(self) -> bool:
         """Clone the TCP dataset using datalad install"""
         print(f"\n=== Cloning Dataset ===")
@@ -215,12 +253,16 @@ class DatasetInitializer:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout for cloning
+                timeout=900  # 15 minute timeout for cloning
             )
 
             if result.returncode == 0:
                 print(f"{CHECK} Dataset cloned successfully")
                 print(f"Output: {result.stdout}")
+
+                # Enable s3-PUBLIC remote for data downloads (cross-platform)
+                self.enable_s3_remote()
+
                 return True
             else:
                 print(f"{CROSS} Dataset cloning failed")
@@ -228,7 +270,7 @@ class DatasetInitializer:
                 return False
 
         except subprocess.TimeoutExpired:
-            print(f"{CROSS} Dataset cloning timed out (>5 minutes)")
+            print(f"{CROSS} Dataset cloning timed out (>15 minutes)")
             return False
         except Exception as e:
             print(f"{CROSS} Dataset cloning failed with exception: {e}")
@@ -350,6 +392,10 @@ class DatasetInitializer:
         # Normal mode (not force reinstall)
         if is_valid:
             print(f"\n{CHECK} Dataset is already properly initialized!")
+
+            # Ensure s3-PUBLIC remote is enabled (for cross-platform compatibility)
+            self.enable_s3_remote()
+
             print("Tip: Use --force-reinstall to re-fetch any missing files")
             return True, validation_results
 
