@@ -290,7 +290,7 @@ def main():
       ]
       
       subcortical_ROIs = [
-        'AMY',  # amygdala
+        'AMY',  # whole amygdala
         ]
       
       # Validate ROI coverage before extraction - CORTICAL
