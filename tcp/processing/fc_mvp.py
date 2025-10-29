@@ -238,8 +238,9 @@ def main():
       print(f"Cortical: {cortical_timeseries.shape}\n\tLEFT Hemisphere: {cortical_L.shape}\n\tRIGHT Hemisphere: {cortical_R.shape}\n\tHomotopic Pairs: {cortical_homotopic_pairs.shape}\nSubcortical: {subcortical_timeseries.shape}\nCerebellum: {cerebellum_timeseries.shape}")
       
       """
-        Get ROI parcel indeces by searching for ROIs by lines in cortical LUT file
+        Get ROI parcel indeces by searching for ROIs by lines in LUT file
         
+        CORTICAL ATLAS:
         ROI format for each timeseries spans two lines:
         ```
         <7|17>networks_<L|R>H_<network_name>_<ROI_abbreviation>[_subarea_number] # first line
@@ -254,7 +255,7 @@ def main():
         Meaning that parcel 1 (parcel_idx) for a space matches to Yeo17 (17networks) is on the left hemisphere (LH) and is assigned to the TemporalPariental network. The data point contains the first subarea (_1) for the Inferior Parietal Lobule (IPL). This datapoint is visually coloured with RGB (12,48,255) when opened in a viewing program.
       """
       # Initialize modular ROI extraction system
-      cortical_lut_file = Path(__file__).parent / 'parcellations/hcp/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
+      cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
       cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
       roi_extractor = ROIExtractionService(cortical_atlas)
       
