@@ -12,9 +12,11 @@ Date: 2025-10-28
 from .atlas_lookup_interface import AtlasLookupInterface
 from .cortical_atlas_lookup import CorticalAtlasLookup
 from .roi_extraction_service import ROIExtractionService
+from .subcortical_atlas_lookup import SubCorticalAtlasLookup
 
 __all__ = [
     'AtlasLookupInterface',
-    'CorticalAtlasLookup', 
-    'ROIExtractionService'
+    'CorticalAtlasLookup',
+    'ROIExtractionService',
+    'SubCorticalAtlasLookup',
 ]

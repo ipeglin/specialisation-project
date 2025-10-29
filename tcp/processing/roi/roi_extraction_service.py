@@ -185,8 +185,21 @@ class ROIExtractionService:
                 'timeseries_shape': timeseries.shape,
                 'parcel_count': roi_metadata['parcel_count'] if roi_metadata else 'unknown',
                 'hemispheres': roi_metadata['hemispheres'] if roi_metadata else 'unknown',
-                'networks': roi_metadata['networks'] if roi_metadata else 'unknown'
             }
+            
+            # Add atlas-specific metadata fields
+            if roi_metadata:
+                # Cortical atlases have 'networks'
+                if 'networks' in roi_metadata:
+                    roi_details[roi_name]['networks'] = roi_metadata['networks']
+                
+                # Subcortical atlases have 'structures' and 'subdivisions'
+                if 'structures' in roi_metadata:
+                    roi_details[roi_name]['structures'] = roi_metadata['structures']
+                if 'subdivisions' in roi_metadata:
+                    roi_details[roi_name]['subdivisions'] = roi_metadata['subdivisions']
+            else:
+                roi_details[roi_name]['networks'] = 'unknown'
         
         summary['roi_details'] = roi_details
         return summary
