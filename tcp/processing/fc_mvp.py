@@ -26,7 +26,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from tcp.processing import DataLoader, SubjectManager
-from tcp.processing.roi import CorticalAtlasLookup, ROIExtractionService
+from tcp.processing.roi import (CorticalAtlasLookup, ROIExtractionService,
+                                SubCorticalAtlasLookup)
 
 
 def is_actual_file(file_path: Path) -> bool:
@@ -253,11 +254,34 @@ def main():
         1 12 48 255 255
         ```
         Meaning that parcel 1 (parcel_idx) for a space matches to Yeo17 (17networks) is on the left hemisphere (LH) and is assigned to the TemporalPariental network. The data point contains the first subarea (_1) for the Inferior Parietal Lobule (IPL). This datapoint is visually coloured with RGB (12,48,255) when opened in a viewing program.
+        
+        SUBCORTICAL ATLAS:
+        The Tian Scale II parcellation uses a simple label.txt file where line number = array index.
+        ROI format: {subdivision}{structure}-{hemisphere}
+        
+        Examples:
+        ```
+        aHIP-rh    # anterior hippocampus, right hemisphere  → index 0
+        pHIP-rh    # posterior hippocampus, right hemisphere → index 1
+        THA-DP-lh  # thalamus dorsal posterior, left hemisphere → index 21
+        NAc-shell-rh # nucleus accumbens shell, right hemisphere → index 8
+        ```
+        
+        Supports hierarchical queries:
+        - 'HIP' → all hippocampus subdivisions (both hemispheres)
+        - 'HIP-lh' → left hippocampus subdivisions only  
+        - 'aHIP' → anterior hippocampus (both hemispheres)
+        - 'aHIP-rh' → specific anterior hippocampus right hemisphere
+        
+        32 total subcortical parcels covering: AMY, HIP, THA, NAc, GP, PUT, CAU
       """
       # Initialize modular ROI extraction system
       cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
+      subcortical_lut_file = Path(__file__).parent / 'parcellations/subcortical/tian/Tian_Subcortex_S2_3T_label.txt'
       cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
-      roi_extractor = ROIExtractionService(cortical_atlas)
+      subcortical_atlas = SubCorticalAtlasLookup(subcortical_lut_file)
+      cortical_roi_extractor = ROIExtractionService(cortical_atlas)
+      subcortical_roi_extractor = ROIExtractionService(subcortical_atlas)
       
       # Define ROIs of interest
       cortical_ROIs = [
@@ -265,31 +289,54 @@ def main():
         'PFCv',  # ventral PFC
       ]
       
-      # Validate ROI coverage before extraction
-      validation_result = roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
-      print(f"\nROI Validation Results:")
-      print(f"  Valid ROIs: {validation_result['valid_rois']}")
-      print(f"  Invalid ROIs: {validation_result['invalid_rois']}")
-      print(f"  Coverage issues: {validation_result['coverage_issues']}")
-      print(f"  Atlas: {validation_result['atlas_info']['name']} ({validation_result['atlas_info']['total_parcels']} parcels)")
+      subcortical_ROIs = [
+        'AMY',  # amygdala
+        ]
       
-      # Extract ROI timeseries data
-      if validation_result['valid_rois'] and not validation_result['coverage_issues']:
-          roi_timeseries = roi_extractor.extract_roi_timeseries(
+      # Validate ROI coverage before extraction - CORTICAL
+      cortical_validation_result = cortical_roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
+      print(f"\nCORTICAL ROI Validation Results:")
+      print(f"  Valid ROIs: {cortical_validation_result['valid_rois']}")
+      print(f"  Invalid ROIs: {cortical_validation_result['invalid_rois']}")
+      print(f"  Coverage issues: {cortical_validation_result['coverage_issues']}")
+      print(f"  Atlas: {cortical_validation_result['atlas_info']['name']} ({cortical_validation_result['atlas_info']['total_parcels']} parcels)")
+      
+      # Validate ROI coverage before extraction - SUBCORTICAL
+      subcortical_validation_result = subcortical_roi_extractor.validate_roi_coverage(subcortical_timeseries, subcortical_ROIs)
+      print(f"\nSUBCORTICAL ROI Validation Results:")
+      print(f"  Valid ROIs: {subcortical_validation_result['valid_rois']}")
+      print(f"  Invalid ROIs: {subcortical_validation_result['invalid_rois']}")
+      print(f"  Coverage issues: {subcortical_validation_result['coverage_issues']}")
+      print(f"  Atlas: {subcortical_validation_result['atlas_info']['name']} ({subcortical_validation_result['atlas_info']['total_parcels']} parcels)")
+      
+      # Extract ROI timeseries data - CORTICAL
+      cortical_roi_timeseries = None
+      if cortical_validation_result['valid_rois'] and not cortical_validation_result['coverage_issues']:
+          cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
               cortical_timeseries, 
               cortical_ROIs, 
               aggregation_method='all'
           )
-          
-          # Display extraction results
-          extraction_summary = roi_extractor.get_extraction_summary(cortical_ROIs, roi_timeseries)
-          print(f"\nROI Extraction Summary:")
-          print(f"  Requested: {extraction_summary['requested_rois']}")
-          print(f"  Extracted: {extraction_summary['extracted_rois']}")
-          print(f"  Atlas indexing: {extraction_summary['atlas_indexing']}")
+      
+      # Extract ROI timeseries data - SUBCORTICAL  
+      subcortical_roi_timeseries = None
+      if subcortical_validation_result['valid_rois'] and not subcortical_validation_result['coverage_issues']:
+          subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
+              subcortical_timeseries,
+              subcortical_ROIs,
+              aggregation_method='all'
+          )
+      
+      # Display extraction results - CORTICAL
+      if cortical_roi_timeseries:
+          cortical_extraction_summary = cortical_roi_extractor.get_extraction_summary(cortical_ROIs, cortical_roi_timeseries)
+          print(f"\nCORTICAL ROI Extraction Summary:")
+          print(f"  Requested: {cortical_extraction_summary['requested_rois']}")
+          print(f"  Extracted: {cortical_extraction_summary['extracted_rois']}")
+          print(f"  Atlas indexing: {cortical_extraction_summary['atlas_indexing']}")
           
           # Show details for each extracted ROI
-          for roi_name, details in extraction_summary['roi_details'].items():
+          for roi_name, details in cortical_extraction_summary['roi_details'].items():
               print(f"\n  {roi_name}:")
               print(f"    Timeseries shape: {details['timeseries_shape']}")
               print(f"    Parcel count: {details['parcel_count']}")
@@ -297,45 +344,74 @@ def main():
               print(f"    Networks: {details['networks']}")
               
               # Show first few timepoints as example
-              timeseries_data = roi_timeseries[roi_name]
+              timeseries_data = cortical_roi_timeseries[roi_name]
               print(f"    Sample timepoints: {timeseries_data[:5]}")
               
-          # Demonstrate network-specific extraction if supported
-          if roi_extractor.supports_network_queries():
-              print(f"\n=== Network-Specific Analysis ===")
+      # Display extraction results - SUBCORTICAL
+      if subcortical_roi_timeseries:
+          subcortical_extraction_summary = subcortical_roi_extractor.get_extraction_summary(subcortical_ROIs, subcortical_roi_timeseries)
+          print(f"\nSUBCORTICAL ROI Extraction Summary:")
+          print(f"  Requested: {subcortical_extraction_summary['requested_rois']}")
+          print(f"  Extracted: {subcortical_extraction_summary['extracted_rois']}")
+          print(f"  Atlas indexing: {subcortical_extraction_summary['atlas_indexing']}")
+          
+          # Show details for each extracted ROI
+          for roi_name, details in subcortical_extraction_summary['roi_details'].items():
+              print(f"\n  {roi_name}:")
+              print(f"    Timeseries shape: {details['timeseries_shape']}")
+              print(f"    Parcel count: {details['parcel_count']}")
+              print(f"    Hemispheres: {details['hemispheres']}")
+              print(f"    Structures: {details.get('structures', 'N/A')}")
+              print(f"    Subdivisions: {details.get('subdivisions', 'N/A')}")
               
-              # Get available networks
-              available_networks = roi_extractor.atlas_lookup.get_available_networks()
-              print(f"Available networks: {sorted(available_networks)}")
-              
-              # Get network breakdown for our ROIs
-              network_breakdown = roi_extractor.get_network_breakdown_summary(cortical_ROIs)
-              if network_breakdown:
-                  print(f"\nNetwork breakdown:")
-                  for roi_name, networks in network_breakdown.items():
-                      print(f"  {roi_name}:")
-                      for network, details in networks.items():
-                          print(f"    {network}: {details['parcel_count']} parcels")
-              
-              # Extract network-specific timeseries (default: keep all parcels)
-              network_timeseries = roi_extractor.extract_roi_timeseries_by_network(
-                  cortical_timeseries, 
-                  cortical_ROIs,
-                  aggregation_method='all'
-              )
-              
-              print(f"\nNetwork-specific extraction results:")
-              for roi_name, networks in network_timeseries.items():
+              # Show first few timepoints as example
+              timeseries_data = subcortical_roi_timeseries[roi_name]
+              print(f"    Sample timepoints: {timeseries_data[:5]}")
+      
+      # Demonstrate network-specific extraction if supported (cortical only)
+      if cortical_roi_timeseries and cortical_roi_extractor.supports_network_queries():
+          print(f"\n=== CORTICAL Network-Specific Analysis ===")
+          
+          # Get available networks
+          available_networks = cortical_roi_extractor.atlas_lookup.get_available_networks()
+          print(f"Available networks: {sorted(available_networks)}")
+          
+          # Get network breakdown for our ROIs
+          network_breakdown = cortical_roi_extractor.get_network_breakdown_summary(cortical_ROIs)
+          if network_breakdown:
+              print(f"\nNetwork breakdown:")
+              for roi_name, networks in network_breakdown.items():
                   print(f"  {roi_name}:")
-                  for network, timeseries in networks.items():
-                      # Show just first 3 timepoints from first parcel for consistent output
-                      if timeseries.ndim == 1:
-                          sample_data = timeseries[:3]
-                      else:
-                          sample_data = timeseries[0, :3]  # First parcel, first 3 timepoints
-                      print(f"    {network}: shape {timeseries.shape}, sample: {sample_data}")
+                  for network, details in networks.items():
+                      print(f"    {network}: {details['parcel_count']} parcels")
+          
+          # Extract network-specific timeseries (default: keep all parcels)
+          network_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_network(
+              cortical_timeseries, 
+              cortical_ROIs,
+              aggregation_method='all'
+          )
+          
+          print(f"\nNetwork-specific extraction results:")
+          for roi_name, networks in network_timeseries.items():
+              print(f"  {roi_name}:")
+              for network, timeseries in networks.items():
+                  # Show just first 3 timepoints from first parcel for consistent output
+                  if timeseries.ndim == 1:
+                      sample_data = timeseries[:3]
+                  else:
+                      sample_data = timeseries[0, :3]  # First parcel, first 3 timepoints
+                  print(f"    {network}: shape {timeseries.shape}, sample: {sample_data}")
+      
+      # Report extraction status
+      if not cortical_roi_timeseries and not subcortical_roi_timeseries:
+          print("\n[WARNING] No ROI extraction completed due to validation issues")
+      elif not cortical_roi_timeseries:
+          print("\n[WARNING] Cortical ROI extraction skipped due to validation issues")
+      elif not subcortical_roi_timeseries:
+          print("\n[WARNING] Subcortical ROI extraction skipped due to validation issues")
       else:
-          print("ROI extraction skipped due to validation issues")
+          print(f"\n[SUCCESS] Both cortical and subcortical ROI extraction completed successfully")
       
     
     return {
@@ -346,6 +422,20 @@ def main():
             'total_accessible': len(accessible_anhedonic) + len(accessible_non_anhedonic),
             'anhedonic_count': len(accessible_anhedonic),
             'non_anhedonic_count': len(accessible_non_anhedonic)
+        },
+        'roi_extraction_results': {
+            'cortical': {
+                'atlas_name': cortical_atlas.atlas_name if 'cortical_atlas' in locals() else None,
+                'roi_timeseries': cortical_roi_timeseries,
+                'requested_rois': cortical_ROIs if 'cortical_ROIs' in locals() else [],
+                'extraction_successful': cortical_roi_timeseries is not None
+            },
+            'subcortical': {
+                'atlas_name': subcortical_atlas.atlas_name if 'subcortical_atlas' in locals() else None,
+                'roi_timeseries': subcortical_roi_timeseries,
+                'requested_rois': subcortical_ROIs if 'subcortical_ROIs' in locals() else [],
+                'extraction_successful': subcortical_roi_timeseries is not None
+            }
         }
     }
 
