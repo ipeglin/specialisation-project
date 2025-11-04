@@ -24,6 +24,8 @@ sys.path.insert(0, str(project_root))
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+from scipy import stats
 
 from tcp.processing import DataLoader, SubjectManager
 from tcp.processing.roi import (CorticalAtlasLookup, ROIExtractionService,
@@ -72,6 +74,459 @@ def is_actual_file(file_path: Path) -> bool:
         return False
 
     return True
+
+
+def compute_fc_matrix(timeseries_dict, roi_names=None):
+    """
+    Compute functional connectivity (Pearson correlation) matrix between ROI timeseries.
+    
+    Args:
+        timeseries_dict: Dictionary mapping ROI names to timeseries arrays
+        roi_names: Optional list to specify order of ROIs in matrix
+        
+    Returns:
+        tuple: (correlation_matrix, roi_labels, p_values_matrix)
+    """
+    if roi_names is None:
+        roi_names = list(timeseries_dict.keys())
+    
+    # Collect all timeseries
+    timeseries_list = []
+    roi_labels = []
+    
+    for roi_name in roi_names:
+        if roi_name in timeseries_dict:
+            ts = timeseries_dict[roi_name]
+            if ts.size > 0:  # Check if timeseries is not empty
+                timeseries_list.append(ts)
+                roi_labels.append(roi_name)
+    
+    if len(timeseries_list) < 2:
+        print(f"[WARNING] Need at least 2 ROI timeseries for FC computation, got {len(timeseries_list)}")
+        return None, roi_labels, None
+    
+    # Stack timeseries for correlation computation
+    stacked_timeseries = np.vstack(timeseries_list)
+    
+    # Compute correlation matrix
+    corr_matrix = np.corrcoef(stacked_timeseries)
+    
+    # Compute p-values for correlations
+    n_rois = len(roi_labels)
+    p_values = np.ones((n_rois, n_rois))
+    
+    for i in range(n_rois):
+        for j in range(i+1, n_rois):
+            # Compute p-value for correlation
+            corr_coef, p_val = stats.pearsonr(timeseries_list[i], timeseries_list[j])
+            p_values[i, j] = p_val
+            p_values[j, i] = p_val  # Symmetric matrix
+    
+    return corr_matrix, roi_labels, p_values
+
+
+def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=0.05):
+    """
+    Extract and analyze specific connectivity patterns from correlation matrix.
+    
+    Args:
+        corr_matrix: Correlation matrix
+        roi_labels: ROI labels corresponding to matrix rows/columns  
+        p_values: Optional p-values matrix for significance testing
+        alpha: Significance threshold
+        
+    Returns:
+        dict: Dictionary with different connectivity pattern results
+    """
+    results = {
+        'interhemispheric': {},
+        'cross_regional': {},
+        'ipsilateral': {},
+        'contralateral': {},
+        'all_pairwise': {}
+    }
+    
+    n_rois = len(roi_labels)
+    
+    # Extract all pairwise correlations
+    for i in range(n_rois):
+        for j in range(i+1, n_rois):
+            roi1, roi2 = roi_labels[i], roi_labels[j]
+            corr_val = corr_matrix[i, j]
+            p_val = p_values[i, j] if p_values is not None else None
+            is_significant = p_val < alpha if p_val is not None else None
+            
+            pair_key = f"{roi1}_{roi2}"
+            results['all_pairwise'][pair_key] = {
+                'correlation': corr_val,
+                'p_value': p_val,
+                'significant': is_significant
+            }
+            
+            # Categorize by connectivity pattern
+            
+            # Extract hemisphere and region info
+            roi1_parts = roi1.split('_')
+            roi2_parts = roi2.split('_')
+            
+            # Interhemispheric (same region, different hemispheres)
+            if len(roi1_parts) >= 2 and len(roi2_parts) >= 2:
+                roi1_region = roi1_parts[0]
+                roi1_hemi = roi1_parts[1] if len(roi1_parts) > 1 else 'unknown'
+                roi2_region = roi2_parts[0] 
+                roi2_hemi = roi2_parts[1] if len(roi2_parts) > 1 else 'unknown'
+                
+                if roi1_region == roi2_region and roi1_hemi != roi2_hemi:
+                    results['interhemispheric'][pair_key] = {
+                        'correlation': corr_val,
+                        'p_value': p_val,
+                        'significant': is_significant,
+                        'region': roi1_region
+                    }
+                
+                # Cross-regional (different regions)
+                elif roi1_region != roi2_region:
+                    results['cross_regional'][pair_key] = {
+                        'correlation': corr_val,
+                        'p_value': p_val,
+                        'significant': is_significant,
+                        'regions': f"{roi1_region}_{roi2_region}"
+                    }
+                    
+                    # Ipsilateral (same hemisphere, different regions)
+                    if roi1_hemi == roi2_hemi:
+                        results['ipsilateral'][pair_key] = {
+                            'correlation': corr_val,
+                            'p_value': p_val,
+                            'significant': is_significant,
+                            'hemisphere': roi1_hemi,
+                            'regions': f"{roi1_region}_{roi2_region}"
+                        }
+                    
+                    # Contralateral (different hemisphere, different regions)
+                    elif roi1_hemi != roi2_hemi:
+                        results['contralateral'][pair_key] = {
+                            'correlation': corr_val,
+                            'p_value': p_val,
+                            'significant': is_significant,
+                            'hemispheres': f"{roi1_hemi}_{roi2_hemi}",
+                            'regions': f"{roi1_region}_{roi2_region}"
+                        }
+    
+    return results
+
+
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, alpha=0.05):
+    """
+    Create visualizations for functional connectivity results.
+    
+    Args:
+        corr_matrix: Correlation matrix
+        roi_labels: ROI labels
+        p_values: Optional p-values matrix
+        connectivity_patterns: Optional results from analyze_connectivity_patterns
+        alpha: Significance threshold for marking significant correlations
+    """
+    fig = plt.figure(figsize=(15, 10))
+    
+    # 1. Correlation matrix heatmap
+    ax1 = plt.subplot(2, 3, (1, 4))
+    
+    # Create significance mask if p-values available
+    if p_values is not None:
+        mask = p_values >= alpha
+    else:
+        mask = None
+    
+    sns.heatmap(corr_matrix, 
+                annot=True, 
+                fmt='.3f',
+                xticklabels=roi_labels,
+                yticklabels=roi_labels,
+                center=0,
+                cmap='RdBu_r',
+                vmin=-1, vmax=1,
+                mask=mask,
+                ax=ax1)
+    ax1.set_title('Functional Connectivity Matrix\n(Pearson Correlations)')
+    
+    if connectivity_patterns is not None:
+        # 2. Interhemispheric connectivity
+        ax2 = plt.subplot(2, 3, 2)
+        inter_corrs = [v['correlation'] for v in connectivity_patterns['interhemispheric'].values()]
+        inter_labels = [k.replace('_', '\n') for k in connectivity_patterns['interhemispheric'].keys()]
+        
+        if inter_corrs:
+            bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color='lightblue', edgecolor='navy')
+            ax2.set_xticks(range(len(inter_labels)))
+            ax2.set_xticklabels(inter_labels, rotation=45, ha='right')
+            ax2.set_ylabel('Correlation')
+            ax2.set_title('Interhemispheric\nConnectivity')
+            ax2.set_ylim(-1, 1)
+            ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            
+            # Mark significant correlations
+            if p_values is not None:
+                for i, (k, v) in enumerate(connectivity_patterns['interhemispheric'].items()):
+                    if v['significant']:
+                        bars[i].set_color('red')
+                        bars[i].set_alpha(0.8)
+        else:
+            ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found', 
+                    ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Interhemispheric\nConnectivity')
+        
+        # 3. Cross-regional connectivity
+        ax3 = plt.subplot(2, 3, 3)
+        cross_corrs = [v['correlation'] for v in connectivity_patterns['cross_regional'].values()]
+        cross_labels = [k.replace('_', '\n') for k in connectivity_patterns['cross_regional'].keys()]
+        
+        if cross_corrs:
+            bars = ax3.bar(range(len(cross_corrs)), cross_corrs, color='lightgreen', edgecolor='darkgreen')
+            ax3.set_xticks(range(len(cross_labels)))
+            ax3.set_xticklabels(cross_labels, rotation=45, ha='right')
+            ax3.set_ylabel('Correlation')
+            ax3.set_title('Cross-Regional\nConnectivity')
+            ax3.set_ylim(-1, 1)
+            ax3.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            
+            # Mark significant correlations
+            if p_values is not None:
+                for i, (k, v) in enumerate(connectivity_patterns['cross_regional'].items()):
+                    if v['significant']:
+                        bars[i].set_color('red')
+                        bars[i].set_alpha(0.8)
+        else:
+            ax3.text(0.5, 0.5, 'No cross-regional\nconnections found', 
+                    ha='center', va='center', transform=ax3.transAxes)
+            ax3.set_title('Cross-Regional\nConnectivity')
+        
+        # 4. Ipsilateral vs Contralateral
+        ax4 = plt.subplot(2, 3, 5)
+        ipsi_corrs = [v['correlation'] for v in connectivity_patterns['ipsilateral'].values()]
+        contra_corrs = [v['correlation'] for v in connectivity_patterns['contralateral'].values()]
+        
+        if ipsi_corrs or contra_corrs:
+            width = 0.35
+            ipsi_mean = np.mean(ipsi_corrs) if ipsi_corrs else 0
+            contra_mean = np.mean(contra_corrs) if contra_corrs else 0
+            
+            bars = ax4.bar(['Ipsilateral', 'Contralateral'], 
+                          [ipsi_mean, contra_mean],
+                          color=['orange', 'purple'], 
+                          alpha=0.7)
+            ax4.set_ylabel('Mean Correlation')
+            ax4.set_title('Ipsilateral vs\nContralateral Connectivity')
+            ax4.set_ylim(-1, 1)
+            ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            
+            # Add error bars if multiple connections
+            if len(ipsi_corrs) > 1:
+                ax4.errorbar([0], [ipsi_mean], yerr=[np.std(ipsi_corrs)], 
+                           color='black', capsize=5)
+            if len(contra_corrs) > 1:
+                ax4.errorbar([1], [contra_mean], yerr=[np.std(contra_corrs)], 
+                           color='black', capsize=5)
+        else:
+            ax4.text(0.5, 0.5, 'No ipsilateral/contralateral\nconnections found', 
+                    ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('Ipsilateral vs\nContralateral Connectivity')
+        
+        # 5. Summary statistics
+        ax5 = plt.subplot(2, 3, 6)
+        ax5.axis('off')
+        
+        summary_text = "FC Summary Statistics:\n\n"
+        summary_text += f"Total connections: {len(connectivity_patterns['all_pairwise'])}\n"
+        summary_text += f"Interhemispheric: {len(connectivity_patterns['interhemispheric'])}\n"
+        summary_text += f"Cross-regional: {len(connectivity_patterns['cross_regional'])}\n"
+        summary_text += f"Ipsilateral: {len(connectivity_patterns['ipsilateral'])}\n"
+        summary_text += f"Contralateral: {len(connectivity_patterns['contralateral'])}\n\n"
+        
+        if p_values is not None:
+            sig_count = sum(1 for v in connectivity_patterns['all_pairwise'].values() 
+                           if v['significant'])
+            summary_text += f"Significant (p<{alpha}): {sig_count}\n"
+        
+        # Strongest connections
+        all_pairs = connectivity_patterns['all_pairwise']
+        if all_pairs:
+            strongest = max(all_pairs.items(), key=lambda x: abs(x[1]['correlation']))
+            summary_text += f"\nStrongest connection:\n{strongest[0]}: r={strongest[1]['correlation']:.3f}"
+        
+        ax5.text(0.1, 0.9, summary_text, transform=ax5.transAxes, 
+                verticalalignment='top', fontsize=10, family='monospace')
+    
+    plt.tight_layout()
+    return fig
+
+
+def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name="Group1", group2_name="Group2"):
+    """
+    Compare functional connectivity patterns between two groups.
+    
+    Args:
+        group1_fc_results: List of FC results dictionaries for group 1
+        group2_fc_results: List of FC results dictionaries for group 2  
+        group1_name: Name for group 1 (e.g., "Anhedonic")
+        group2_name: Name for group 2 (e.g., "Non-anhedonic")
+        
+    Returns:
+        dict: Statistical comparison results
+    """
+    from scipy import stats as scipy_stats
+
+    # Extract connectivity patterns for each group
+    def extract_group_connectivity(fc_results_list):
+        group_patterns = {
+            'interhemispheric': [],
+            'cross_regional': [],
+            'ipsilateral': [], 
+            'contralateral': [],
+            'all_pairwise': []
+        }
+        
+        for fc_result in fc_results_list:
+            if fc_result and 'connectivity_patterns' in fc_result:
+                patterns = fc_result['connectivity_patterns']
+                for pattern_type in group_patterns.keys():
+                    if pattern_type in patterns:
+                        correlations = [v['correlation'] for v in patterns[pattern_type].values()]
+                        group_patterns[pattern_type].extend(correlations)
+        
+        return group_patterns
+    
+    group1_patterns = extract_group_connectivity(group1_fc_results)
+    group2_patterns = extract_group_connectivity(group2_fc_results)
+    
+    # Perform statistical comparisons
+    comparison_results = {}
+    
+    for pattern_type in group1_patterns.keys():
+        g1_values = group1_patterns[pattern_type]
+        g2_values = group2_patterns[pattern_type]
+        
+        if len(g1_values) > 0 and len(g2_values) > 0:
+            # Perform t-test
+            t_stat, p_val = scipy_stats.ttest_ind(g1_values, g2_values)
+            
+            # Effect size (Cohen's d)
+            pooled_std = np.sqrt(((len(g1_values)-1)*np.var(g1_values) + (len(g2_values)-1)*np.var(g2_values)) / (len(g1_values)+len(g2_values)-2))
+            cohens_d = (np.mean(g1_values) - np.mean(g2_values)) / pooled_std if pooled_std > 0 else 0
+            
+            comparison_results[pattern_type] = {
+                'group1_mean': np.mean(g1_values),
+                'group1_std': np.std(g1_values),
+                'group1_n': len(g1_values),
+                'group2_mean': np.mean(g2_values),
+                'group2_std': np.std(g2_values), 
+                'group2_n': len(g2_values),
+                'ttest_statistic': t_stat,
+                'ttest_pvalue': p_val,
+                'cohens_d': cohens_d,
+                'significant': p_val < 0.05
+            }
+        else:
+            comparison_results[pattern_type] = {
+                'group1_mean': np.mean(g1_values) if g1_values else np.nan,
+                'group1_std': np.std(g1_values) if g1_values else np.nan,
+                'group1_n': len(g1_values),
+                'group2_mean': np.mean(g2_values) if g2_values else np.nan,
+                'group2_std': np.std(g2_values) if g2_values else np.nan,
+                'group2_n': len(g2_values),
+                'ttest_statistic': np.nan,
+                'ttest_pvalue': np.nan,
+                'cohens_d': np.nan,
+                'significant': False,
+                'note': 'Insufficient data for comparison'
+            }
+    
+    return {
+        'group1_name': group1_name,
+        'group2_name': group2_name,
+        'comparisons': comparison_results,
+        'group1_patterns': group1_patterns,
+        'group2_patterns': group2_patterns
+    }
+
+
+def create_research_summary(fc_results, subject_info=None):
+    """
+    Create a structured summary for research reporting.
+    
+    Args:
+        fc_results: FC analysis results
+        subject_info: Optional subject information
+        
+    Returns:
+        dict: Structured research summary
+    """
+    if not fc_results:
+        return {'error': 'No FC results available'}
+    
+    summary = {
+        'sample_info': subject_info if subject_info else {},
+        'methodology': {
+            'roi_extraction': 'Hemisphere-specific extraction using atlas-based parcellation',
+            'fc_computation': 'Pearson correlation between ROI mean timeseries',
+            'significance_testing': 'Two-tailed correlation with p<0.05 threshold'
+        },
+        'results': {}
+    }
+    
+    if 'connectivity_patterns' in fc_results:
+        patterns = fc_results['connectivity_patterns']
+        
+        # Key findings
+        summary['results']['key_findings'] = {
+            'total_connections_tested': len(patterns.get('all_pairwise', {})),
+            'significant_connections': sum(1 for v in patterns.get('all_pairwise', {}).values() 
+                                         if v.get('significant', False)),
+            'strongest_connection': None,
+            'interhemispheric_connectivity': {},
+            'cross_regional_connectivity': {}
+        }
+        
+        # Find strongest connection
+        all_pairs = patterns.get('all_pairwise', {})
+        if all_pairs:
+            strongest = max(all_pairs.items(), key=lambda x: abs(x[1]['correlation']))
+            summary['results']['key_findings']['strongest_connection'] = {
+                'pair': strongest[0],
+                'correlation': strongest[1]['correlation'],
+                'p_value': strongest[1]['p_value'],
+                'significant': strongest[1]['significant']
+            }
+        
+        # Interhemispheric summary
+        inter_connections = patterns.get('interhemispheric', {})
+        if inter_connections:
+            summary['results']['key_findings']['interhemispheric_connectivity'] = {
+                'vmPFC_hemispheric_correlation': inter_connections.get('vmPFC_RH_vmPFC_LH', {}).get('correlation'),
+                'AMY_hemispheric_correlation': inter_connections.get('AMY_rh_AMY_lh', {}).get('correlation'),
+                'significant_interhemispheric': sum(1 for v in inter_connections.values() if v.get('significant', False))
+            }
+        
+        # Cross-regional summary
+        cross_connections = patterns.get('cross_regional', {})
+        if cross_connections:
+            summary['results']['key_findings']['cross_regional_connectivity'] = {
+                'vmPFC_AMY_connections': {pair: stats_dict['correlation'] 
+                                        for pair, stats_dict in cross_connections.items()},
+                'significant_cross_regional': sum(1 for v in cross_connections.values() if v.get('significant', False))
+            }
+        
+        # Statistical summary
+        all_correlations = [v['correlation'] for v in all_pairs.values()]
+        if all_correlations:
+            summary['results']['statistical_summary'] = {
+                'mean_correlation': np.mean(all_correlations),
+                'std_correlation': np.std(all_correlations),
+                'range': [np.min(all_correlations), np.max(all_correlations)],
+                'median_correlation': np.median(all_correlations)
+            }
+    
+    return summary
 
 
 def main():
@@ -231,7 +686,7 @@ def main():
       
       # Segmenting into timeseries groups (cortical, subcortical, cerebellum; samples [1-400], [401-432] and [433-434], respectively)
       cortical_timeseries = data[:400] # using hMRF atlas (https://www.sciencedirect.com/science/article/pii/S1053811923001568?via%3Dihub)
-      cortical_L, cortical_R = cortical_timeseries[:200], cortical_timeseries[200:]
+      cortical_R, cortical_L = cortical_timeseries[:200], cortical_timeseries[200:]
       cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R))) # Combine into L/R homotopic pairs of ROIs
       subcortical_timeseries = data[400:432] # “scale II” resolution atlas by Tian and colleagues (https://www.nature.com/articles/s41593-020-00711-6#code-availability)
       cerebellum_timeseries = data[432:] # using Buckner et al. atlas (https://journals.physiology.org/doi/full/10.1152/jn.00339.2011)
@@ -412,6 +867,213 @@ def main():
           print("\n[WARNING] Subcortical ROI extraction skipped due to validation issues")
       else:
           print(f"\n[SUCCESS] Both cortical and subcortical ROI extraction completed successfully")
+          
+    """
+    Construct averaged signals for activity and functional connectivity computation.
+    Different approaches, ranging from naïve to sparse, are used to accumulate 
+        timeseries into different regions
+        
+    Approach
+        1) Naïve single-signal
+            Cortical: Average all 12+12 (L/R) parcel timeseries from cortical mPFC and vPFC into single vmPFC signal per hemisphere.
+            Subcortical: Average lAMY and mAMY into a single AMY signal. One for each of L and R hemisphere.
+        2) Cortical region accumulation
+            Cortical: Average all timeseries within mPFC and vPFC, respectively. Yielding one signal for each subregion of the PFC for each hemisphere.
+                ? NB: Should signals be weighted by the amount of signals originating from which network?
+            Subcortical: Keep separate timeseries as is, which corresponds to mAMY, lAMY for L and R hemisphere, 4 in total.
+        3) Network-spesific granulation
+            Cortical: Average signals within the same associated cortical network. 
+                This will yield a single averaged cortical BOLD signal for each associated network within mPFC and vPFC.
+                I.e.: PFCm-limbicB, PFCv-DefaultA
+            Subcortical: Same as approach 2)
+        4) Keep all timeseries separate as a 2D matrix
+            This approach assumes all signals contain information of interest and computes activity and connectivity for all BOLD-signals.
+    """
+    
+    # Extract hemisphere-specific timeseries for cortical ROIs
+    cortical_valid_rois = cortical_validation_result['valid_rois']
+    
+    # Check if cortical atlas supports hemisphere queries
+    if cortical_roi_extractor.supports_hemisphere_queries():
+        print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
+        
+        # Extract mean of right hemisphere timeseries for all valid cortical ROIs
+        cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            cortical_timeseries, 
+            cortical_valid_rois, 
+            hemisphere='RH',
+            aggregation_method='all' # ? will use of 'mean' result in a lower variance estimator here
+        )
+        
+        # Extract mean of left hemisphere timeseries for all valid cortical ROIs
+        cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            cortical_timeseries, 
+            cortical_valid_rois, 
+            hemisphere='LH',
+            aggregation_method='all' # ? will use of 'mean' result in a lower variance estimator here
+        )
+        
+        print(f"RIGHT mean hemisphere extraction results:")
+        for roi_name, timeseries in cortical_right_timeseries.items():
+            if timeseries.size > 0:
+                print(f"  {roi_name}: shape {timeseries.shape}")
+            else:
+                print(f"  {roi_name}: no parcels in right hemisphere")
+        
+        print(f"LEFT mean hemisphere extraction results:")
+        for roi_name, timeseries in cortical_left_timeseries.items():
+            if timeseries.size > 0:
+                print(f"  {roi_name}: shape {timeseries.shape}")
+            else:
+                print(f"  {roi_name}: no parcels in left hemisphere")
+                
+        # Construct mean vmPFC signal from all PFCm and PFCv timeseries
+        vmPFC_right = np.mean(np.vstack([cortical_right_timeseries['PFCm'], 
+                                         cortical_right_timeseries['PFCv']]), 
+                              axis=0)
+        vmPFC_left = np.mean(np.vstack([cortical_left_timeseries['PFCm'], 
+                                        cortical_left_timeseries['PFCv']]),
+                             axis=0)
+        print(f"Mean vmPFC signal extraction results:")
+        print(f"  RIGHT: shape {vmPFC_right.shape}")
+        print(f"  LEFT: shape {vmPFC_left.shape}")
+        
+        # Plot mean vmPFC signal
+        fig, ax = plt.subplots(2, 1, sharex=True)
+        ax[0].plot(vmPFC_right)
+        ax[0].set_title("Right Hemisphere")
+        ax[0].set_ylabel("Amplitude")
+        ax[1].plot(vmPFC_left)
+        ax[1].set_title("Left Hemisphere")
+        ax[1].set_ylabel("Amplitude")
+        fig.suptitle("Mean vmPFC BOLD-signals (L/R) of 12 timeseries")
+        fig.tight_layout()
+        
+        
+    else:
+        print(f"[INFO] Cortical atlas does not support hemisphere-specific queries")
+        cortical_right_timeseries = None
+        cortical_left_timeseries = None
+    
+    # Demonstrate hemisphere-specific extraction for subcortical ROIs as well
+    subcortical_valid_rois = subcortical_validation_result['valid_rois']
+    
+    if subcortical_roi_extractor.supports_hemisphere_queries():
+        print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
+        
+        # Extract right hemisphere timeseries for all valid subcortical ROIs  
+        subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            subcortical_timeseries,
+            subcortical_valid_rois,
+            hemisphere='rh',
+            aggregation_method='all'
+        )
+        
+        # Extract left hemisphere timeseries for all valid subcortical ROIs
+        subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            subcortical_timeseries,
+            subcortical_valid_rois,
+            hemisphere='lh', 
+            aggregation_method='all'
+        )
+        
+        print(f"RIGHT hemisphere extraction results:")
+        for roi_name, timeseries in subcortical_right_timeseries.items():
+            if timeseries.size > 0:
+                print(f"  {roi_name}: shape {timeseries.shape}")
+            else:
+                print(f"  {roi_name}: no parcels in right hemisphere")
+                
+        print(f"LEFT hemisphere extraction results:")
+        for roi_name, timeseries in subcortical_left_timeseries.items():
+            if timeseries.size > 0:
+                print(f"  {roi_name}: shape {timeseries.shape}")
+            else:
+                print(f"  {roi_name}: no parcels in left hemisphere")
+                
+        # Construct mean vmPFC signal from all PFCm and PFCv timeseries
+        amy_right = np.mean(subcortical_right_timeseries['AMY'], axis=0)
+        amy_left = np.mean(subcortical_left_timeseries['AMY'], axis=0)
+        print(f"Mean AMY signal extraction results:")
+        print(f"  RIGHT: shape {amy_right.shape}")
+        print(f"  LEFT: shape {amy_left.shape}")
+        
+        # Plot mean AMY signal
+        fig, ax = plt.subplots(2, 1, sharex=True)
+        ax[0].plot(amy_right)
+        ax[0].set_title("Right Hemisphere")
+        ax[0].set_ylabel("Amplitude")
+        ax[1].plot(amy_left)
+        ax[1].set_title("Left Hemisphere")
+        ax[1].set_ylabel("Amplitude")
+        fig.suptitle("Mean AMY BOLD-signals (L/R) of 2 timeseries")
+        fig.tight_layout()
+    else:
+        print(f"[INFO] Subcortical atlas does not support hemisphere-specific queries")
+        subcortical_right_timeseries = None
+        subcortical_left_timeseries = None
+        
+    # Compute functional connectivity between brain regions using proper Pearson correlation
+    missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries, subcortical_right_timeseries, subcortical_left_timeseries]])
+    
+    if not missing_timeseries:
+        print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
+        
+        # Prepare timeseries dictionary with hemisphere-specific labels
+        fc_timeseries = {
+            'vmPFC_RH': vmPFC_right,
+            'vmPFC_LH': vmPFC_left,
+            'AMY_rh': amy_right,
+            'AMY_lh': amy_left
+        }
+        
+        # Compute functional connectivity matrix
+        fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
+        
+        if fc_matrix is not None:
+            print(f"FC Matrix shape: {fc_matrix.shape}")
+            print(f"ROI labels: {fc_labels}")
+            print(f"FC Matrix:")
+            print(fc_matrix)
+            
+            # Analyze connectivity patterns
+            connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
+            
+            # Print key results
+            print(f"\nConnectivity Pattern Analysis:")
+            print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
+            print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
+            print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
+            print(f"  Ipsilateral connections: {len(connectivity_patterns['ipsilateral'])}")
+            print(f"  Contralateral connections: {len(connectivity_patterns['contralateral'])}")
+            
+            # Show specific connectivity results
+            print(f"\nDetailed Connectivity Results:")
+            for pattern_type, connections in connectivity_patterns.items():
+                if connections and pattern_type != 'all_pairwise':
+                    print(f"\n{pattern_type.upper()}:")
+                    for pair, stats in connections.items():
+                        sig_str = "*" if stats.get('significant', False) else ""
+                        print(f"  {pair}: r={stats['correlation']:.3f}, p={stats['p_value']:.3f}{sig_str}")
+            
+            # Create visualization
+            print(f"\nCreating FC visualization...")
+            fc_fig = plot_fc_results(fc_matrix, fc_labels, fc_pvalues, connectivity_patterns)
+            
+            # Store results for return
+            fc_results = {
+                'fc_matrix': fc_matrix,
+                'fc_labels': fc_labels,
+                'fc_pvalues': fc_pvalues,
+                'connectivity_patterns': connectivity_patterns,
+                'timeseries_used': fc_timeseries
+            }
+        else:
+            print(f"[ERROR] Could not compute FC matrix")
+            fc_results = None
+    else:
+        print(f"[WARNING] Missing timeseries data, skipping FC analysis")
+        fc_results = None
       
     
     return {
@@ -428,17 +1090,32 @@ def main():
                 'atlas_name': cortical_atlas.atlas_name if 'cortical_atlas' in locals() else None,
                 'roi_timeseries': cortical_roi_timeseries,
                 'requested_rois': cortical_ROIs if 'cortical_ROIs' in locals() else [],
-                'extraction_successful': cortical_roi_timeseries is not None
+                'extraction_successful': cortical_roi_timeseries is not None,
+                'hemisphere_specific': {
+                    'right_hemisphere': cortical_right_timeseries if 'vmPFC_right_timeseries' in locals() else None,
+                    'left_hemisphere': cortical_left_timeseries if 'vmPFC_left_timeseries' in locals() else None,
+                    'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries() if 'cortical_roi_extractor' in locals() else False
+                }
             },
             'subcortical': {
                 'atlas_name': subcortical_atlas.atlas_name if 'subcortical_atlas' in locals() else None,
                 'roi_timeseries': subcortical_roi_timeseries,
                 'requested_rois': subcortical_ROIs if 'subcortical_ROIs' in locals() else [],
-                'extraction_successful': subcortical_roi_timeseries is not None
+                'extraction_successful': subcortical_roi_timeseries is not None,
+                'hemisphere_specific': {
+                    'right_hemisphere': subcortical_right_timeseries if 'subcortical_right_timeseries' in locals() else None,
+                    'left_hemisphere': subcortical_left_timeseries if 'subcortical_left_timeseries' in locals() else None,
+                    'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries() if 'subcortical_roi_extractor' in locals() else False
+                }
             }
-        }
+        },
+        'functional_connectivity': fc_results if 'fc_results' in locals() else None
     }
 
 
 if __name__ == '__main__':
+    SHOW_PLOTS = False
     main()
+    
+    if SHOW_PLOTS:
+        plt.show()
