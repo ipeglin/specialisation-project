@@ -45,6 +45,7 @@ class CorticalAtlasLookup(AtlasLookupInterface):
         self._available_rois: Set[str] = set()
         self._network_to_rois: Dict[str, Dict[str, List[int]]] = {}  # network -> roi -> indices
         self._available_networks: Set[str] = set()
+        self._hemisphere_to_rois: Dict[str, Dict[str, List[int]]] = {}  # hemisphere -> roi -> indices
         
         self._parse_lut_file()
     
@@ -86,6 +87,7 @@ class CorticalAtlasLookup(AtlasLookupInterface):
                 specific_roi += f"_{roi_info['subarea']}"
             
             network = roi_info['network']
+            hemisphere = roi_info['hemisphere']
             
             # Store mapping for both base ROI (aggregated) and specific subarea
             # Base ROI aggregates all subareas
@@ -114,6 +116,21 @@ class CorticalAtlasLookup(AtlasLookupInterface):
                 if specific_roi not in self._network_to_rois[network]:
                     self._network_to_rois[network][specific_roi] = []
                 self._network_to_rois[network][specific_roi].append(parcel_index)
+            
+            # Store hemisphere-specific mappings
+            if hemisphere not in self._hemisphere_to_rois:
+                self._hemisphere_to_rois[hemisphere] = {}
+            
+            # Base ROI by hemisphere
+            if base_roi not in self._hemisphere_to_rois[hemisphere]:
+                self._hemisphere_to_rois[hemisphere][base_roi] = []
+            self._hemisphere_to_rois[hemisphere][base_roi].append(parcel_index)
+            
+            # Specific subarea by hemisphere (if exists)
+            if roi_info['subarea']:
+                if specific_roi not in self._hemisphere_to_rois[hemisphere]:
+                    self._hemisphere_to_rois[hemisphere][specific_roi] = []
+                self._hemisphere_to_rois[hemisphere][specific_roi].append(parcel_index)
             
             # Store metadata for full ROI name
             full_roi_name = f"{roi_info['hemisphere']}_{roi_info['network']}_{specific_roi}"
@@ -363,3 +380,58 @@ class CorticalAtlasLookup(AtlasLookupInterface):
                 }
         
         return breakdown
+    
+    def get_roi_indices_by_hemisphere(self, roi_names: List[str], hemisphere: str) -> Dict[str, List[int]]:
+        """
+        Get parcel indices for ROIs filtered by hemisphere (Yeo17-specific).
+        
+        Args:
+            roi_names: List of ROI identifiers to look up
+            hemisphere: Hemisphere to filter by ('LH' or 'RH')
+            
+        Returns:
+            Dictionary mapping ROI names to hemisphere-specific 0-based parcel indices
+            
+        Raises:
+            ValueError: If ROI names are not found or invalid hemisphere specified
+        """
+        if hemisphere not in {'LH', 'RH'}:
+            raise ValueError(f"Invalid hemisphere '{hemisphere}'. Must be 'LH' or 'RH'")
+        
+        result = {}
+        missing_rois = []
+        
+        for roi_name in roi_names:
+            if roi_name not in self._available_rois:
+                missing_rois.append(roi_name)
+                continue
+                
+            # Use precomputed hemisphere mapping
+            if hemisphere in self._hemisphere_to_rois and roi_name in self._hemisphere_to_rois[hemisphere]:
+                # Convert from 1-based to 0-based indexing
+                one_based_indices = sorted(self._hemisphere_to_rois[hemisphere][roi_name])
+                zero_based_indices = [idx - 1 for idx in one_based_indices]
+                result[roi_name] = zero_based_indices
+            else:
+                result[roi_name] = []
+        
+        if missing_rois:
+            available = sorted(self._available_rois)
+            raise ValueError(
+                f"ROI(s) not found in atlas: {missing_rois}. "
+                f"Available ROIs: {available}"
+            )
+        
+        return result
+    
+    def get_available_hemispheres(self) -> Set[str]:
+        """
+        Get all available hemisphere identifiers in this atlas (Yeo17-specific).
+        
+        Returns:
+            Set of available hemisphere identifiers ('LH', 'RH')
+        """
+        hemispheres = set()
+        for metadata in self._roi_metadata.values():
+            hemispheres.add(metadata['hemisphere'])
+        return hemispheres

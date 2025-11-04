@@ -10,7 +10,7 @@ Author: Ian Philip Eglin
 Date: 2025-10-28
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import numpy as np
 
@@ -302,3 +302,90 @@ class ROIExtractionService:
             True if network queries are supported, False otherwise
         """
         return hasattr(self.atlas_lookup, 'get_roi_indices_by_network')
+    
+    def extract_roi_timeseries_by_hemisphere(self, 
+                                           timeseries_data: np.ndarray, 
+                                           roi_names: List[str],
+                                           hemisphere: str,
+                                           aggregation_method: str = 'all') -> Dict[str, np.ndarray]:
+        """
+        Extract timeseries data for ROIs filtered by hemisphere.
+        
+        Args:
+            timeseries_data: 2D array of shape (n_parcels, n_timepoints)
+            roi_names: List of ROI identifiers to extract
+            hemisphere: Hemisphere to filter by ('LH'/'RH' for cortical, 'lh'/'rh' for subcortical)
+            aggregation_method: How to aggregate multiple parcels per ROI
+                              ('mean', 'median', 'first', 'all')
+            
+        Returns:
+            Dictionary mapping ROI names to hemisphere-specific timeseries arrays
+            
+        Raises:
+            ValueError: If atlas doesn't support hemisphere queries or other validation errors
+            AttributeError: If atlas doesn't have hemisphere methods
+        """
+        # Check if atlas supports hemisphere queries
+        if not hasattr(self.atlas_lookup, 'get_roi_indices_by_hemisphere'):
+            raise ValueError(f"Atlas {self.atlas_lookup.atlas_name} does not support hemisphere-specific queries")
+        
+        # Validate inputs
+        if not isinstance(timeseries_data, np.ndarray) or timeseries_data.ndim != 2:
+            raise ValueError("timeseries_data must be 2D numpy array (parcels x timepoints)")
+        
+        if aggregation_method not in ['mean', 'median', 'first', 'all']:
+            raise ValueError(f"aggregation_method must be one of: mean, median, first, all")
+        
+        # Get hemisphere-specific parcel indices
+        roi_hemisphere_indices = self.atlas_lookup.get_roi_indices_by_hemisphere(roi_names, hemisphere)
+        
+        # Extract timeseries for each ROI
+        extracted_timeseries = {}
+        
+        for roi_name, parcel_indices in roi_hemisphere_indices.items():
+            if not parcel_indices:  # Skip ROIs with no parcels in this hemisphere
+                extracted_timeseries[roi_name] = np.array([])
+                continue
+                
+            # Validate indices are within bounds
+            max_index = max(parcel_indices)
+            if max_index >= timeseries_data.shape[0]:
+                raise ValueError(
+                    f"ROI {roi_name} hemisphere {hemisphere} requires parcel index {max_index} "
+                    f"but data only has {timeseries_data.shape[0]} parcels"
+                )
+            
+            # Extract timeseries for this ROI's hemisphere-specific parcels
+            roi_timeseries = timeseries_data[parcel_indices, :]
+            
+            # Apply aggregation method
+            if aggregation_method == 'mean':
+                extracted_timeseries[roi_name] = np.mean(roi_timeseries, axis=0)
+            elif aggregation_method == 'median':
+                extracted_timeseries[roi_name] = np.median(roi_timeseries, axis=0)
+            elif aggregation_method == 'first':
+                extracted_timeseries[roi_name] = roi_timeseries[0, :]
+            elif aggregation_method == 'all':
+                extracted_timeseries[roi_name] = roi_timeseries  # Keep all parcels
+        
+        return extracted_timeseries
+    
+    def supports_hemisphere_queries(self) -> bool:
+        """
+        Check if the current atlas supports hemisphere-specific queries.
+        
+        Returns:
+            True if hemisphere queries are supported, False otherwise
+        """
+        return hasattr(self.atlas_lookup, 'get_roi_indices_by_hemisphere')
+    
+    def get_available_hemispheres(self) -> Optional[Set[str]]:
+        """
+        Get available hemispheres for the current atlas.
+        
+        Returns:
+            Set of available hemisphere identifiers or None if not supported
+        """
+        if hasattr(self.atlas_lookup, 'get_available_hemispheres'):
+            return self.atlas_lookup.get_available_hemispheres()
+        return None

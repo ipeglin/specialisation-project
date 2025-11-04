@@ -95,3 +95,32 @@ class AtlasLookupInterface(ABC):
     def uses_zero_based_indexing(self) -> bool:
         """Return True if the underlying atlas uses 0-based indexing, False for 1-based."""
         pass
+    
+    def get_roi_indices_by_hemisphere(self, roi_names: List[str], hemisphere: str) -> Dict[str, List[int]]:
+        """
+        Get parcel indices for ROIs filtered by hemisphere (optional).
+        
+        Args:
+            roi_names: List of ROI identifiers to look up
+            hemisphere: Hemisphere to filter by (format depends on atlas)
+            
+        Returns:
+            Dictionary mapping ROI names to hemisphere-specific 0-based parcel indices
+            
+        Raises:
+            NotImplementedError: If atlas doesn't support hemisphere-specific queries
+            ValueError: If ROI names are not found or invalid hemisphere specified
+        """
+        raise NotImplementedError(f"Atlas {self.atlas_name} does not support hemisphere-specific queries")
+    
+    def get_available_hemispheres(self) -> Set[str]:
+        """
+        Get all available hemisphere identifiers in this atlas (optional).
+        
+        Returns:
+            Set of available hemisphere identifiers
+            
+        Raises:
+            NotImplementedError: If atlas doesn't support hemisphere queries
+        """
+        raise NotImplementedError(f"Atlas {self.atlas_name} does not support hemisphere queries")

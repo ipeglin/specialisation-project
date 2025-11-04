@@ -285,3 +285,76 @@ class SubCorticalAtlasLookup(AtlasLookupInterface):
     def uses_zero_based_indexing(self) -> bool:
         """Return True if the underlying atlas uses 0-based indexing, False for 1-based."""
         return True  # Label file line numbers correspond to 0-based array indices
+    
+    def get_roi_indices_by_hemisphere(self, roi_names: List[str], hemisphere: str) -> Dict[str, List[int]]:
+        """
+        Get parcel indices for ROIs filtered by hemisphere (Tian-specific).
+        
+        Args:
+            roi_names: List of ROI identifiers to look up
+            hemisphere: Hemisphere to filter by ('lh' or 'rh')
+            
+        Returns:
+            Dictionary mapping ROI names to hemisphere-specific 0-based parcel indices
+            
+        Raises:
+            ValueError: If ROI names are not found or invalid hemisphere specified
+        """
+        if hemisphere not in {'lh', 'rh'}:
+            raise ValueError(f"Invalid hemisphere '{hemisphere}'. Must be 'lh' or 'rh'")
+        
+        result = {}
+        missing_rois = []
+        
+        for roi_name in roi_names:
+            if roi_name not in self._available_rois:
+                missing_rois.append(roi_name)
+                continue
+            
+            # For subcortical atlas, we can use the hierarchical naming system
+            # If roi_name already specifies hemisphere, use it directly
+            if roi_name.endswith(f'-{hemisphere}'):
+                # ROI already specifies the desired hemisphere
+                indices = sorted(self._roi_to_indices[roi_name])
+                result[roi_name] = indices
+            else:
+                # ROI doesn't specify hemisphere, so filter by adding hemisphere suffix
+                hemisphere_roi_name = f"{roi_name}-{hemisphere}"
+                if hemisphere_roi_name in self._roi_to_indices:
+                    indices = sorted(self._roi_to_indices[hemisphere_roi_name])
+                    result[roi_name] = indices
+                else:
+                    # Check if there are any specific subdivisions for this structure in this hemisphere
+                    hemisphere_indices = []
+                    for available_roi in self._available_rois:
+                        if available_roi.endswith(f'-{hemisphere}'):
+                            # Extract structure from available ROI
+                            roi_metadata = self._roi_metadata.get(available_roi)
+                            if roi_metadata and roi_metadata['structure'] == roi_name:
+                                hemisphere_indices.extend(self._roi_to_indices[available_roi])
+                    
+                    if hemisphere_indices:
+                        result[roi_name] = sorted(hemisphere_indices)
+                    else:
+                        result[roi_name] = []
+        
+        if missing_rois:
+            available = sorted(self._available_rois)
+            raise ValueError(
+                f"ROI(s) not found in atlas: {missing_rois}. "
+                f"Available ROIs: {available}"
+            )
+        
+        return result
+    
+    def get_available_hemispheres(self) -> Set[str]:
+        """
+        Get all available hemisphere identifiers in this atlas (Tian-specific).
+        
+        Returns:
+            Set of available hemisphere identifiers ('lh', 'rh')
+        """
+        hemispheres = set()
+        for metadata in self._roi_metadata.values():
+            hemispheres.add(metadata['hemisphere'])
+        return hemispheres
