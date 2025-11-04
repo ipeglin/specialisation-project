@@ -8,6 +8,7 @@ dependencies:
   # Core scientific computing
   - numpy
   - pandas
+  - scipy
   - matplotlib
   - pillow
   
