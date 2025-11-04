@@ -529,9 +529,309 @@ def create_research_summary(fc_results, subject_info=None):
     return summary
 
 
+def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atlas, 
+                   cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
+                   verbose=True):
+    """
+    Process a single subject for ROI extraction and functional connectivity analysis.
+    
+    Args:
+        subject_id: Subject identifier
+        manager: SubjectManager instance
+        loader: DataLoader instance 
+        cortical_atlas: CorticalAtlasLookup instance
+        subcortical_atlas: SubCorticalAtlasLookup instance
+        cortical_roi_extractor: ROIExtractionService for cortical data
+        subcortical_roi_extractor: ROIExtractionService for subcortical data
+        cortical_ROIs: List of cortical ROI names
+        subcortical_ROIs: List of subcortical ROI names
+        verbose: Whether to print detailed output
+        
+    Returns:
+        dict: Subject analysis results
+    """
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Processing Subject: {subject_id}")
+        print(f"{'='*60}")
+    
+    try:
+        # Get subject files
+        hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
+        if not hammer_files:
+            return {
+                'subject_id': subject_id,
+                'error': 'No hammer task files found',
+                'success': False
+            }
+        
+        subject_file = loader.resolve_file_path(hammer_files[0])
+        
+        # Read data from .h5 file
+        data = None
+        with h5py.File(subject_file, 'r') as file:
+            a_group_key = list(file.keys())[0]
+            data = np.asarray(file[a_group_key])
+            
+        if verbose:
+            print(f"Found data with shape: {data.shape}")
+        
+        # Segment into timeseries groups
+        cortical_timeseries = data[:400]
+        cortical_R, cortical_L = cortical_timeseries[:200], cortical_timeseries[200:]
+        cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R)))
+        subcortical_timeseries = data[400:432]
+        cerebellum_timeseries = data[432:]
+        
+        if verbose:
+            print("Found parcels:")
+            print(f"Cortical: {cortical_timeseries.shape}")
+            print(f"\tLEFT Hemisphere: {cortical_L.shape}")
+            print(f"\tRIGHT Hemisphere: {cortical_R.shape}")
+            print(f"\tHomotopic Pairs: {cortical_homotopic_pairs.shape}")
+            print(f"Subcortical: {subcortical_timeseries.shape}")
+            print(f"Cerebellum: {cerebellum_timeseries.shape}")
+        
+        # ROI Validation and Extraction
+        cortical_validation_result = cortical_roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
+        subcortical_validation_result = subcortical_roi_extractor.validate_roi_coverage(subcortical_timeseries, subcortical_ROIs)
+        
+        if verbose:
+            print(f"\nCORTICAL ROI Validation Results:")
+            print(f"  Valid ROIs: {cortical_validation_result['valid_rois']}")
+            print(f"  Invalid ROIs: {cortical_validation_result['invalid_rois']}")
+            
+            print(f"\nSUBCORTICAL ROI Validation Results:")
+            print(f"  Valid ROIs: {subcortical_validation_result['valid_rois']}")
+            print(f"  Invalid ROIs: {subcortical_validation_result['invalid_rois']}")
+        
+        # Extract ROI timeseries
+        cortical_roi_timeseries = None
+        if cortical_validation_result['valid_rois'] and not cortical_validation_result['coverage_issues']:
+            cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
+                cortical_timeseries, 
+                cortical_ROIs, 
+                aggregation_method='all'
+            )
+        
+        subcortical_roi_timeseries = None
+        if subcortical_validation_result['valid_rois'] and not subcortical_validation_result['coverage_issues']:
+            subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
+                subcortical_timeseries,
+                subcortical_ROIs,
+                aggregation_method='all'
+            )
+        
+        # Hemisphere-specific extraction
+        cortical_right_timeseries = None
+        cortical_left_timeseries = None
+        subcortical_right_timeseries = None
+        subcortical_left_timeseries = None
+        vmPFC_right = None
+        vmPFC_left = None
+        amy_right = None
+        amy_left = None
+        
+        cortical_valid_rois = cortical_validation_result['valid_rois']
+        
+        if cortical_roi_extractor.supports_hemisphere_queries() and cortical_valid_rois:
+            if verbose:
+                print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
+            
+            cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+                cortical_timeseries, 
+                cortical_valid_rois, 
+                hemisphere='RH',
+                aggregation_method='mean'
+            )
+            
+            cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+                cortical_timeseries, 
+                cortical_valid_rois, 
+                hemisphere='LH',
+                aggregation_method='mean'
+            )
+            
+            if verbose:
+                print(f"RIGHT hemisphere extraction results:")
+                for roi_name, timeseries in cortical_right_timeseries.items():
+                    if timeseries.size > 0:
+                        print(f"  {roi_name}: shape {timeseries.shape}")
+                
+                print(f"LEFT hemisphere extraction results:")
+                for roi_name, timeseries in cortical_left_timeseries.items():
+                    if timeseries.size > 0:
+                        print(f"  {roi_name}: shape {timeseries.shape}")
+            
+            # Construct mean vmPFC signal - handle both aggregation methods  
+            if cortical_right_timeseries['PFCm'].ndim == 1:
+                # Mean aggregation: PFCm and PFCv are already 1D arrays, average them
+                vmPFC_right = np.mean([cortical_right_timeseries['PFCm'], 
+                                     cortical_right_timeseries['PFCv']], axis=0)
+                vmPFC_left = np.mean([cortical_left_timeseries['PFCm'], 
+                                    cortical_left_timeseries['PFCv']], axis=0)
+            else:
+                # 'All' aggregation: PFCm and PFCv are 2D arrays, stack and average
+                vmPFC_right = np.mean(np.vstack([cortical_right_timeseries['PFCm'], 
+                                               cortical_right_timeseries['PFCv']]), axis=0)
+                vmPFC_left = np.mean(np.vstack([cortical_left_timeseries['PFCm'], 
+                                              cortical_left_timeseries['PFCv']]), axis=0)
+            
+            if verbose:
+                print(f"Mean vmPFC signal extraction results:")
+                print(f"  RIGHT: shape {vmPFC_right.shape}")
+                print(f"  LEFT: shape {vmPFC_left.shape}")
+        
+        subcortical_valid_rois = subcortical_validation_result['valid_rois']
+        
+        if subcortical_roi_extractor.supports_hemisphere_queries() and subcortical_valid_rois:
+            if verbose:
+                print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
+            
+            subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+                subcortical_timeseries,
+                subcortical_valid_rois,
+                hemisphere='rh',
+                aggregation_method='mean'
+            )
+            
+            subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+                subcortical_timeseries,
+                subcortical_valid_rois,
+                hemisphere='lh', 
+                aggregation_method='mean'
+            )
+            
+            if verbose:
+                print(f"RIGHT hemisphere extraction results:")
+                for roi_name, timeseries in subcortical_right_timeseries.items():
+                    if timeseries.size > 0:
+                        print(f"  {roi_name}: shape {timeseries.shape}")
+                        
+                print(f"LEFT hemisphere extraction results:")
+                for roi_name, timeseries in subcortical_left_timeseries.items():
+                    if timeseries.size > 0:
+                        print(f"  {roi_name}: shape {timeseries.shape}")
+            
+            # Construct mean AMY signal - handle both aggregation methods
+            if subcortical_right_timeseries['AMY'].ndim == 1:
+                # Mean aggregation: AMY is already a 1D array (493,), use directly
+                amy_right = subcortical_right_timeseries['AMY']
+                amy_left = subcortical_left_timeseries['AMY']
+            else:
+                # 'All' aggregation: AMY is 2D (N, 493), need to average
+                amy_right = np.mean(subcortical_right_timeseries['AMY'], axis=0)
+                amy_left = np.mean(subcortical_left_timeseries['AMY'], axis=0)
+            
+            if verbose:
+                print(f"Mean AMY signal extraction results:")
+                print(f"  RIGHT: shape {amy_right.shape}")
+                print(f"  LEFT: shape {amy_left.shape}")
+        
+        # Functional connectivity analysis
+        fc_results = None
+        missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries, 
+                                                     subcortical_right_timeseries, subcortical_left_timeseries]])
+        
+        if not missing_timeseries and vmPFC_right is not None and amy_right is not None:
+            if verbose:
+                print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
+            
+            fc_timeseries = {
+                'vmPFC_RH': vmPFC_right,
+                'vmPFC_LH': vmPFC_left,
+                'AMY_rh': amy_right,
+                'AMY_lh': amy_left
+            }
+            
+            fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
+            
+            if fc_matrix is not None:
+                if verbose:
+                    print(f"FC Matrix shape: {fc_matrix.shape}")
+                    print(f"ROI labels: {fc_labels}")
+                
+                connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
+                
+                if verbose:
+                    print(f"\nConnectivity Pattern Analysis:")
+                    print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
+                    print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
+                    print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
+                
+                fc_results = {
+                    'fc_matrix': fc_matrix,
+                    'fc_labels': fc_labels,
+                    'fc_pvalues': fc_pvalues,
+                    'connectivity_patterns': connectivity_patterns,
+                    'timeseries_used': fc_timeseries
+                }
+        
+        return {
+            'subject_id': subject_id,
+            'success': True,
+            'data_shape': data.shape,
+            'roi_extraction_results': {
+                'cortical': {
+                    'atlas_name': cortical_atlas.atlas_name,
+                    'roi_timeseries': cortical_roi_timeseries,
+                    'requested_rois': cortical_ROIs,
+                    'extraction_successful': cortical_roi_timeseries is not None,
+                    'hemisphere_specific': {
+                        'right_hemisphere': cortical_right_timeseries,
+                        'left_hemisphere': cortical_left_timeseries,
+                        'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries()
+                    }
+                },
+                'subcortical': {
+                    'atlas_name': subcortical_atlas.atlas_name,
+                    'roi_timeseries': subcortical_roi_timeseries,
+                    'requested_rois': subcortical_ROIs,
+                    'extraction_successful': subcortical_roi_timeseries is not None,
+                    'hemisphere_specific': {
+                        'right_hemisphere': subcortical_right_timeseries,
+                        'left_hemisphere': subcortical_left_timeseries,
+                        'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries()
+                    }
+                }
+            },
+            'functional_connectivity': fc_results,
+            'mean_signals': {
+                'vmPFC_right': vmPFC_right,
+                'vmPFC_left': vmPFC_left,
+                'amy_right': amy_right,
+                'amy_left': amy_left
+            }
+        }
+        
+    except Exception as e:
+        if verbose:
+            print(f"[ERROR] Failed to process subject {subject_id}: {str(e)}")
+        return {
+            'subject_id': subject_id,
+            'error': str(e),
+            'success': False
+        }
+
+
 def main():
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
+    
+    # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
+    LIMIT_SUBJECTS = True  # Set False for full analysis
+    MAX_SUBJECTS_PER_GROUP = 2  # Limit when testing (only used if LIMIT_SUBJECTS=True)
+    SHOW_INDIVIDUAL_PLOTS = True  # Show individual subject plots
+    VERBOSE_SUBJECT_OUTPUT = True  # Detailed per-subject printing
+    SHOW_GROUP_SUMMARY = True  # Show aggregated group analysis
+    
+    print(f"Configuration:")
+    print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
+    if LIMIT_SUBJECTS:
+        print(f"  Max subjects per group: {MAX_SUBJECTS_PER_GROUP}")
+    print(f"  Individual plots: {'ENABLED' if SHOW_INDIVIDUAL_PLOTS else 'DISABLED'}")
+    print(f"  Verbose output: {'ENABLED' if VERBOSE_SUBJECT_OUTPUT else 'DISABLED'}")
+    print()
     
     # Initialize data infrastructure
     loader = DataLoader()
@@ -667,454 +967,219 @@ def main():
             except Exception as e:
                 print(f"    Error: {e}")
     
-    """
-    MVP: Only check data for a single subject.
-    After completing the data extraction for a single subject, this may be implemented in a way that loops over all downloaded subjects
-    """
-    # Read data from .h5 files
-    first_subject_id = accessible_anhedonic[0]
-    hammer_files = manager.get_subject_files_by_task(first_subject_id, 'timeseries', 'hammer')
-    first_subject_id_hammer_file = loader.resolve_file_path(hammer_files[0])
+    # ===== ATLAS INITIALIZATION =====
+    print(f"\n{'='*50}")
+    print(f"INITIALIZING ATLAS SYSTEMS")
+    print(f"{'='*50}")
     
-    data = None
-    with h5py.File(first_subject_id_hammer_file, 'r') as file:
-      a_group_key = list(file.keys())[0]
+    # Initialize modular ROI extraction system
+    cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
+    subcortical_lut_file = Path(__file__).parent / 'parcellations/subcortical/tian/Tian_Subcortex_S2_3T_label.txt'
+    cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
+    subcortical_atlas = SubCorticalAtlasLookup(subcortical_lut_file)
+    cortical_roi_extractor = ROIExtractionService(cortical_atlas)
+    subcortical_roi_extractor = ROIExtractionService(subcortical_atlas)
     
-      # Getting the data
-      data = np.asarray(file[a_group_key])
-      print(f"Found data with shape: {data.shape}")
-      
-      # Segmenting into timeseries groups (cortical, subcortical, cerebellum; samples [1-400], [401-432] and [433-434], respectively)
-      cortical_timeseries = data[:400] # using hMRF atlas (https://www.sciencedirect.com/science/article/pii/S1053811923001568?via%3Dihub)
-      cortical_R, cortical_L = cortical_timeseries[:200], cortical_timeseries[200:]
-      cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R))) # Combine into L/R homotopic pairs of ROIs
-      subcortical_timeseries = data[400:432] # “scale II” resolution atlas by Tian and colleagues (https://www.nature.com/articles/s41593-020-00711-6#code-availability)
-      cerebellum_timeseries = data[432:] # using Buckner et al. atlas (https://journals.physiology.org/doi/full/10.1152/jn.00339.2011)
-      print("Found parcels:")
-      print(f"Cortical: {cortical_timeseries.shape}\n\tLEFT Hemisphere: {cortical_L.shape}\n\tRIGHT Hemisphere: {cortical_R.shape}\n\tHomotopic Pairs: {cortical_homotopic_pairs.shape}\nSubcortical: {subcortical_timeseries.shape}\nCerebellum: {cerebellum_timeseries.shape}")
-      
-      """
-        Get ROI parcel indeces by searching for ROIs by lines in LUT file
-        
-        CORTICAL ATLAS:
-        ROI format for each timeseries spans two lines:
-        ```
-        <7|17>networks_<L|R>H_<network_name>_<ROI_abbreviation>[_subarea_number] # first line
-        <parcel_idx> <red> <green> <blue> <redundant_value> # second line
-        ```
-        
-        Example:
-        ```
-        17networks_LH_TempPar_IPL_1
-        1 12 48 255 255
-        ```
-        Meaning that parcel 1 (parcel_idx) for a space matches to Yeo17 (17networks) is on the left hemisphere (LH) and is assigned to the TemporalPariental network. The data point contains the first subarea (_1) for the Inferior Parietal Lobule (IPL). This datapoint is visually coloured with RGB (12,48,255) when opened in a viewing program.
-        
-        SUBCORTICAL ATLAS:
-        The Tian Scale II parcellation uses a simple label.txt file where line number = array index.
-        ROI format: {subdivision}{structure}-{hemisphere}
-        
-        Examples:
-        ```
-        aHIP-rh    # anterior hippocampus, right hemisphere  → index 0
-        pHIP-rh    # posterior hippocampus, right hemisphere → index 1
-        THA-DP-lh  # thalamus dorsal posterior, left hemisphere → index 21
-        NAc-shell-rh # nucleus accumbens shell, right hemisphere → index 8
-        ```
-        
-        Supports hierarchical queries:
-        - 'HIP' → all hippocampus subdivisions (both hemispheres)
-        - 'HIP-lh' → left hippocampus subdivisions only  
-        - 'aHIP' → anterior hippocampus (both hemispheres)
-        - 'aHIP-rh' → specific anterior hippocampus right hemisphere
-        
-        32 total subcortical parcels covering: AMY, HIP, THA, NAc, GP, PUT, CAU
-      """
-      # Initialize modular ROI extraction system
-      cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
-      subcortical_lut_file = Path(__file__).parent / 'parcellations/subcortical/tian/Tian_Subcortex_S2_3T_label.txt'
-      cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
-      subcortical_atlas = SubCorticalAtlasLookup(subcortical_lut_file)
-      cortical_roi_extractor = ROIExtractionService(cortical_atlas)
-      subcortical_roi_extractor = ROIExtractionService(subcortical_atlas)
-      
-      # Define ROIs of interest
-      cortical_ROIs = [
+    # Define ROIs of interest
+    cortical_ROIs = [
         'PFCm',  # medial PFC
         'PFCv',  # ventral PFC
-      ]
-      
-      subcortical_ROIs = [
+    ]
+    
+    subcortical_ROIs = [
         'AMY',  # whole amygdala
-        ]
-      
-      # Validate ROI coverage before extraction - CORTICAL
-      cortical_validation_result = cortical_roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
-      print(f"\nCORTICAL ROI Validation Results:")
-      print(f"  Valid ROIs: {cortical_validation_result['valid_rois']}")
-      print(f"  Invalid ROIs: {cortical_validation_result['invalid_rois']}")
-      print(f"  Coverage issues: {cortical_validation_result['coverage_issues']}")
-      print(f"  Atlas: {cortical_validation_result['atlas_info']['name']} ({cortical_validation_result['atlas_info']['total_parcels']} parcels)")
-      
-      # Validate ROI coverage before extraction - SUBCORTICAL
-      subcortical_validation_result = subcortical_roi_extractor.validate_roi_coverage(subcortical_timeseries, subcortical_ROIs)
-      print(f"\nSUBCORTICAL ROI Validation Results:")
-      print(f"  Valid ROIs: {subcortical_validation_result['valid_rois']}")
-      print(f"  Invalid ROIs: {subcortical_validation_result['invalid_rois']}")
-      print(f"  Coverage issues: {subcortical_validation_result['coverage_issues']}")
-      print(f"  Atlas: {subcortical_validation_result['atlas_info']['name']} ({subcortical_validation_result['atlas_info']['total_parcels']} parcels)")
-      
-      # Extract ROI timeseries data - CORTICAL
-      cortical_roi_timeseries = None
-      if cortical_validation_result['valid_rois'] and not cortical_validation_result['coverage_issues']:
-          cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
-              cortical_timeseries, 
-              cortical_ROIs, 
-              aggregation_method='all'
-          )
-      
-      # Extract ROI timeseries data - SUBCORTICAL  
-      subcortical_roi_timeseries = None
-      if subcortical_validation_result['valid_rois'] and not subcortical_validation_result['coverage_issues']:
-          subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
-              subcortical_timeseries,
-              subcortical_ROIs,
-              aggregation_method='all'
-          )
-      
-      # Display extraction results - CORTICAL
-      if cortical_roi_timeseries:
-          cortical_extraction_summary = cortical_roi_extractor.get_extraction_summary(cortical_ROIs, cortical_roi_timeseries)
-          print(f"\nCORTICAL ROI Extraction Summary:")
-          print(f"  Requested: {cortical_extraction_summary['requested_rois']}")
-          print(f"  Extracted: {cortical_extraction_summary['extracted_rois']}")
-          print(f"  Atlas indexing: {cortical_extraction_summary['atlas_indexing']}")
-          
-          # Show details for each extracted ROI
-          for roi_name, details in cortical_extraction_summary['roi_details'].items():
-              print(f"\n  {roi_name}:")
-              print(f"    Timeseries shape: {details['timeseries_shape']}")
-              print(f"    Parcel count: {details['parcel_count']}")
-              print(f"    Hemispheres: {details['hemispheres']}")
-              print(f"    Networks: {details['networks']}")
-              
-              # Show first few timepoints as example
-              timeseries_data = cortical_roi_timeseries[roi_name]
-              print(f"    Sample timepoints: {timeseries_data[:5]}")
-              
-      # Display extraction results - SUBCORTICAL
-      if subcortical_roi_timeseries:
-          subcortical_extraction_summary = subcortical_roi_extractor.get_extraction_summary(subcortical_ROIs, subcortical_roi_timeseries)
-          print(f"\nSUBCORTICAL ROI Extraction Summary:")
-          print(f"  Requested: {subcortical_extraction_summary['requested_rois']}")
-          print(f"  Extracted: {subcortical_extraction_summary['extracted_rois']}")
-          print(f"  Atlas indexing: {subcortical_extraction_summary['atlas_indexing']}")
-          
-          # Show details for each extracted ROI
-          for roi_name, details in subcortical_extraction_summary['roi_details'].items():
-              print(f"\n  {roi_name}:")
-              print(f"    Timeseries shape: {details['timeseries_shape']}")
-              print(f"    Parcel count: {details['parcel_count']}")
-              print(f"    Hemispheres: {details['hemispheres']}")
-              print(f"    Structures: {details.get('structures', 'N/A')}")
-              print(f"    Subdivisions: {details.get('subdivisions', 'N/A')}")
-              
-              # Show first few timepoints as example
-              timeseries_data = subcortical_roi_timeseries[roi_name]
-              print(f"    Sample timepoints: {timeseries_data[:5]}")
-      
-      # Demonstrate network-specific extraction if supported (cortical only)
-      if cortical_roi_timeseries and cortical_roi_extractor.supports_network_queries():
-          print(f"\n=== CORTICAL Network-Specific Analysis ===")
-          
-          # Get available networks
-          available_networks = cortical_roi_extractor.atlas_lookup.get_available_networks()
-          print(f"Available networks: {sorted(available_networks)}")
-          
-          # Get network breakdown for our ROIs
-          network_breakdown = cortical_roi_extractor.get_network_breakdown_summary(cortical_ROIs)
-          if network_breakdown:
-              print(f"\nNetwork breakdown:")
-              for roi_name, networks in network_breakdown.items():
-                  print(f"  {roi_name}:")
-                  for network, details in networks.items():
-                      print(f"    {network}: {details['parcel_count']} parcels")
-          
-          # Extract network-specific timeseries (default: keep all parcels)
-          network_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_network(
-              cortical_timeseries, 
-              cortical_ROIs,
-              aggregation_method='all'
-          )
-          
-          print(f"\nNetwork-specific extraction results:")
-          for roi_name, networks in network_timeseries.items():
-              print(f"  {roi_name}:")
-              for network, timeseries in networks.items():
-                  # Show just first 3 timepoints from first parcel for consistent output
-                  if timeseries.ndim == 1:
-                      sample_data = timeseries[:3]
-                  else:
-                      sample_data = timeseries[0, :3]  # First parcel, first 3 timepoints
-                  print(f"    {network}: shape {timeseries.shape}, sample: {sample_data}")
-      
-      # Report extraction status
-      if not cortical_roi_timeseries and not subcortical_roi_timeseries:
-          print("\n[WARNING] No ROI extraction completed due to validation issues")
-      elif not cortical_roi_timeseries:
-          print("\n[WARNING] Cortical ROI extraction skipped due to validation issues")
-      elif not subcortical_roi_timeseries:
-          print("\n[WARNING] Subcortical ROI extraction skipped due to validation issues")
-      else:
-          print(f"\n[SUCCESS] Both cortical and subcortical ROI extraction completed successfully")
-          
-    """
-    Construct averaged signals for activity and functional connectivity computation.
-    Different approaches, ranging from naïve to sparse, are used to accumulate 
-        timeseries into different regions
-        
-    Approach
-        1) Naïve single-signal
-            Cortical: Average all 12+12 (L/R) parcel timeseries from cortical mPFC and vPFC into single vmPFC signal per hemisphere.
-            Subcortical: Average lAMY and mAMY into a single AMY signal. One for each of L and R hemisphere.
-        2) Cortical region accumulation
-            Cortical: Average all timeseries within mPFC and vPFC, respectively. Yielding one signal for each subregion of the PFC for each hemisphere.
-                ? NB: Should signals be weighted by the amount of signals originating from which network?
-            Subcortical: Keep separate timeseries as is, which corresponds to mAMY, lAMY for L and R hemisphere, 4 in total.
-        3) Network-spesific granulation
-            Cortical: Average signals within the same associated cortical network. 
-                This will yield a single averaged cortical BOLD signal for each associated network within mPFC and vPFC.
-                I.e.: PFCm-limbicB, PFCv-DefaultA
-            Subcortical: Same as approach 2)
-        4) Keep all timeseries separate as a 2D matrix
-            This approach assumes all signals contain information of interest and computes activity and connectivity for all BOLD-signals.
-    """
+    ]
     
-    # Extract hemisphere-specific timeseries for cortical ROIs
-    cortical_valid_rois = cortical_validation_result['valid_rois']
+    print(f"Initialized atlases:")
+    print(f"  Cortical: {cortical_atlas.atlas_name} ({cortical_atlas.total_parcels} parcels)")
+    print(f"  Subcortical: {subcortical_atlas.atlas_name} ({subcortical_atlas.total_parcels} parcels)")
+    print(f"ROIs of interest:")
+    print(f"  Cortical: {cortical_ROIs}")
+    print(f"  Subcortical: {subcortical_ROIs}")
     
-    # Check if cortical atlas supports hemisphere queries
-    if cortical_roi_extractor.supports_hemisphere_queries():
-        print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
-        
-        # Extract mean of right hemisphere timeseries for all valid cortical ROIs
-        cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-            cortical_timeseries, 
-            cortical_valid_rois, 
-            hemisphere='RH',
-            aggregation_method='all' # ? will use of 'mean' result in a lower variance estimator here
-        )
-        
-        # Extract mean of left hemisphere timeseries for all valid cortical ROIs
-        cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-            cortical_timeseries, 
-            cortical_valid_rois, 
-            hemisphere='LH',
-            aggregation_method='all' # ? will use of 'mean' result in a lower variance estimator here
-        )
-        
-        print(f"RIGHT mean hemisphere extraction results:")
-        for roi_name, timeseries in cortical_right_timeseries.items():
-            if timeseries.size > 0:
-                print(f"  {roi_name}: shape {timeseries.shape}")
-            else:
-                print(f"  {roi_name}: no parcels in right hemisphere")
-        
-        print(f"LEFT mean hemisphere extraction results:")
-        for roi_name, timeseries in cortical_left_timeseries.items():
-            if timeseries.size > 0:
-                print(f"  {roi_name}: shape {timeseries.shape}")
-            else:
-                print(f"  {roi_name}: no parcels in left hemisphere")
-                
-        # Construct mean vmPFC signal from all PFCm and PFCv timeseries
-        vmPFC_right = np.mean(np.vstack([cortical_right_timeseries['PFCm'], 
-                                         cortical_right_timeseries['PFCv']]), 
-                              axis=0)
-        vmPFC_left = np.mean(np.vstack([cortical_left_timeseries['PFCm'], 
-                                        cortical_left_timeseries['PFCv']]),
-                             axis=0)
-        print(f"Mean vmPFC signal extraction results:")
-        print(f"  RIGHT: shape {vmPFC_right.shape}")
-        print(f"  LEFT: shape {vmPFC_left.shape}")
-        
-        # Plot mean vmPFC signal
-        fig, ax = plt.subplots(2, 1, sharex=True)
-        ax[0].plot(vmPFC_right)
-        ax[0].set_title("Right Hemisphere")
-        ax[0].set_ylabel("Amplitude")
-        ax[1].plot(vmPFC_left)
-        ax[1].set_title("Left Hemisphere")
-        ax[1].set_ylabel("Amplitude")
-        fig.suptitle("Mean vmPFC BOLD-signals (L/R) of 12 timeseries")
-        fig.tight_layout()
-        
-        
+    # ===== MULTI-SUBJECT PROCESSING =====
+    print(f"\n{'='*80}")
+    print(f"STARTING MULTI-SUBJECT ANALYSIS")
+    print(f"{'='*80}")
+    
+    # Apply subject limiting if enabled
+    if LIMIT_SUBJECTS:
+        anhedonic_subjects_to_process = accessible_anhedonic[:MAX_SUBJECTS_PER_GROUP]
+        non_anhedonic_subjects_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
+        print(f"LIMITING ENABLED: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
     else:
-        print(f"[INFO] Cortical atlas does not support hemisphere-specific queries")
-        cortical_right_timeseries = None
-        cortical_left_timeseries = None
+        anhedonic_subjects_to_process = accessible_anhedonic
+        non_anhedonic_subjects_to_process = accessible_non_anhedonic
+        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
     
-    # Demonstrate hemisphere-specific extraction for subcortical ROIs as well
-    subcortical_valid_rois = subcortical_validation_result['valid_rois']
+    # Process all subjects
+    anhedonic_results = {}
+    non_anhedonic_results = {}
     
-    if subcortical_roi_extractor.supports_hemisphere_queries():
-        print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
+    # Process anhedonic subjects
+    print(f"\n{'='*50}")
+    print(f"PROCESSING ANHEDONIC SUBJECTS ({len(anhedonic_subjects_to_process)})")
+    print(f"{'='*50}")
+    
+    for i, subject_id in enumerate(anhedonic_subjects_to_process, 1):
+        print(f"\n[{i}/{len(anhedonic_subjects_to_process)}] Processing anhedonic subject: {subject_id}")
         
-        # Extract right hemisphere timeseries for all valid subcortical ROIs  
-        subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-            subcortical_timeseries,
-            subcortical_valid_rois,
-            hemisphere='rh',
-            aggregation_method='all'
+        subject_result = process_subject(
+            subject_id, manager, loader, cortical_atlas, subcortical_atlas,
+            cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
+            verbose=VERBOSE_SUBJECT_OUTPUT
         )
         
-        # Extract left hemisphere timeseries for all valid subcortical ROIs
-        subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-            subcortical_timeseries,
-            subcortical_valid_rois,
-            hemisphere='lh', 
-            aggregation_method='all'
-        )
+        anhedonic_results[subject_id] = subject_result
         
-        print(f"RIGHT hemisphere extraction results:")
-        for roi_name, timeseries in subcortical_right_timeseries.items():
-            if timeseries.size > 0:
-                print(f"  {roi_name}: shape {timeseries.shape}")
-            else:
-                print(f"  {roi_name}: no parcels in right hemisphere")
-                
-        print(f"LEFT hemisphere extraction results:")
-        for roi_name, timeseries in subcortical_left_timeseries.items():
-            if timeseries.size > 0:
-                print(f"  {roi_name}: shape {timeseries.shape}")
-            else:
-                print(f"  {roi_name}: no parcels in left hemisphere")
-                
-        # Construct mean vmPFC signal from all PFCm and PFCv timeseries
-        amy_right = np.mean(subcortical_right_timeseries['AMY'], axis=0)
-        amy_left = np.mean(subcortical_left_timeseries['AMY'], axis=0)
-        print(f"Mean AMY signal extraction results:")
-        print(f"  RIGHT: shape {amy_right.shape}")
-        print(f"  LEFT: shape {amy_left.shape}")
-        
-        # Plot mean AMY signal
-        fig, ax = plt.subplots(2, 1, sharex=True)
-        ax[0].plot(amy_right)
-        ax[0].set_title("Right Hemisphere")
-        ax[0].set_ylabel("Amplitude")
-        ax[1].plot(amy_left)
-        ax[1].set_title("Left Hemisphere")
-        ax[1].set_ylabel("Amplitude")
-        fig.suptitle("Mean AMY BOLD-signals (L/R) of 2 timeseries")
-        fig.tight_layout()
-    else:
-        print(f"[INFO] Subcortical atlas does not support hemisphere-specific queries")
-        subcortical_right_timeseries = None
-        subcortical_left_timeseries = None
-        
-    # Compute functional connectivity between brain regions using proper Pearson correlation
-    missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries, subcortical_right_timeseries, subcortical_left_timeseries]])
-    
-    if not missing_timeseries:
-        print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
-        
-        # Prepare timeseries dictionary with hemisphere-specific labels
-        fc_timeseries = {
-            'vmPFC_RH': vmPFC_right,
-            'vmPFC_LH': vmPFC_left,
-            'AMY_rh': amy_right,
-            'AMY_lh': amy_left
-        }
-        
-        # Compute functional connectivity matrix
-        fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
-        
-        if fc_matrix is not None:
-            print(f"FC Matrix shape: {fc_matrix.shape}")
-            print(f"ROI labels: {fc_labels}")
-            print(f"FC Matrix:")
-            print(fc_matrix)
-            
-            # Analyze connectivity patterns
-            connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
-            
-            # Print key results
-            print(f"\nConnectivity Pattern Analysis:")
-            print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
-            print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
-            print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
-            print(f"  Ipsilateral connections: {len(connectivity_patterns['ipsilateral'])}")
-            print(f"  Contralateral connections: {len(connectivity_patterns['contralateral'])}")
-            
-            # Show specific connectivity results
-            print(f"\nDetailed Connectivity Results:")
-            for pattern_type, connections in connectivity_patterns.items():
-                if connections and pattern_type != 'all_pairwise':
-                    print(f"\n{pattern_type.upper()}:")
-                    for pair, stats in connections.items():
-                        sig_str = "*" if stats.get('significant', False) else ""
-                        print(f"  {pair}: r={stats['correlation']:.3f}, p={stats['p_value']:.3f}{sig_str}")
-            
-            # Create visualization
-            print(f"\nCreating FC visualization...")
-            fc_fig = plot_fc_results(fc_matrix, fc_labels, fc_pvalues, connectivity_patterns)
-            
-            # Store results for return
-            fc_results = {
-                'fc_matrix': fc_matrix,
-                'fc_labels': fc_labels,
-                'fc_pvalues': fc_pvalues,
-                'connectivity_patterns': connectivity_patterns,
-                'timeseries_used': fc_timeseries
-            }
+        if subject_result['success']:
+            print(f"    ✅ Success: {subject_id}")
         else:
-            print(f"[ERROR] Could not compute FC matrix")
-            fc_results = None
-    else:
-        print(f"[WARNING] Missing timeseries data, skipping FC analysis")
-        fc_results = None
-      
+            print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
     
+    # Process non-anhedonic subjects   
+    print(f"\n{'='*50}")
+    print(f"PROCESSING NON-ANHEDONIC SUBJECTS ({len(non_anhedonic_subjects_to_process)})")
+    print(f"{'='*50}")
+    
+    for i, subject_id in enumerate(non_anhedonic_subjects_to_process, 1):
+        print(f"\n[{i}/{len(non_anhedonic_subjects_to_process)}] Processing non-anhedonic subject: {subject_id}")
+        
+        subject_result = process_subject(
+            subject_id, manager, loader, cortical_atlas, subcortical_atlas,
+            cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
+            verbose=VERBOSE_SUBJECT_OUTPUT
+        )
+        
+        non_anhedonic_results[subject_id] = subject_result
+        
+        if subject_result['success']:
+            print(f"    ✅ Success: {subject_id}")
+        else:
+            print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
+    
+    # ===== RESULTS SUMMARY =====
+    print(f"\n{'='*80}")
+    print(f"PROCESSING SUMMARY")
+    print(f"{'='*80}")
+    
+    anhedonic_success = sum(1 for r in anhedonic_results.values() if r['success'])
+    non_anhedonic_success = sum(1 for r in non_anhedonic_results.values() if r['success'])
+    total_success = anhedonic_success + non_anhedonic_success
+    total_processed = len(anhedonic_results) + len(non_anhedonic_results)
+    
+    print(f"Successfully processed: {total_success}/{total_processed} subjects")
+    print(f"  Anhedonic: {anhedonic_success}/{len(anhedonic_results)}")
+    print(f"  Non-anhedonic: {non_anhedonic_success}/{len(non_anhedonic_results)}")
+    
+    # Collect FC results for group comparison
+    anhedonic_fc_results = []
+    non_anhedonic_fc_results = []
+    
+    for subject_id, result in anhedonic_results.items():
+        if result['success'] and result.get('functional_connectivity'):
+            anhedonic_fc_results.append(result['functional_connectivity'])
+    
+    for subject_id, result in non_anhedonic_results.items():
+        if result['success'] and result.get('functional_connectivity'):
+            non_anhedonic_fc_results.append(result['functional_connectivity'])
+    
+    print(f"FC analysis available:")
+    print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
+    print(f"  Non-anhedonic: {len(non_anhedonic_fc_results)} subjects")
+    
+    # ===== GROUP COMPARISON ANALYSIS =====
+    group_comparison_results = None
+    if len(anhedonic_fc_results) > 0 and len(non_anhedonic_fc_results) > 0:
+        print(f"\n{'='*80}")
+        print(f"GROUP COMPARISON ANALYSIS")
+        print(f"{'='*80}")
+        
+        group_comparison_results = compare_fc_between_groups(
+            anhedonic_fc_results, 
+            non_anhedonic_fc_results,
+            group1_name="Anhedonic",
+            group2_name="Non-anhedonic"
+        )
+        
+        print(f"Statistical Comparisons (Anhedonic vs Non-anhedonic):")
+        for pattern_type, comparison in group_comparison_results['comparisons'].items():
+            if not comparison.get('note'):  # Skip patterns with insufficient data
+                print(f"\n{pattern_type.upper()}:")
+                print(f"  Anhedonic: M={comparison['group1_mean']:.3f}, SD={comparison['group1_std']:.3f}, N={comparison['group1_n']}")
+                print(f"  Non-anhedonic: M={comparison['group2_mean']:.3f}, SD={comparison['group2_std']:.3f}, N={comparison['group2_n']}")
+                print(f"  t({comparison['group1_n']+comparison['group2_n']-2})={comparison['ttest_statistic']:.3f}, p={comparison['ttest_pvalue']:.3f}")
+                print(f"  Cohen's d={comparison['cohens_d']:.3f}, Significant={'Yes' if comparison['significant'] else 'No'}")
+        
+    else:
+        print(f"\n[WARNING] Insufficient FC data for group comparison")
+        print(f"  Need at least 1 subject per group with successful FC analysis")
+    
+    # ===== INDIVIDUAL SUBJECT PLOTS =====
+    individual_plots_created = 0
+    if SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
+        print(f"\n{'='*80}")
+        print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
+        print(f"{'='*80}")
+        
+        all_results = {**anhedonic_results, **non_anhedonic_results}
+        for subject_id, result in all_results.items():
+            if result['success'] and result.get('functional_connectivity'):
+                print(f"Creating plot for {subject_id}...")
+                fc_data = result['functional_connectivity']
+                
+                if fc_data['fc_matrix'] is not None:
+                    # Create subject-specific plot
+                    fc_fig = plot_fc_results(
+                        fc_data['fc_matrix'], 
+                        fc_data['fc_labels'], 
+                        fc_data['fc_pvalues'], 
+                        fc_data['connectivity_patterns']
+                    )
+                    fc_fig.suptitle(f'Functional Connectivity: {subject_id}', fontsize=16)
+                    individual_plots_created += 1
+        
+        print(f"Created {individual_plots_created} individual subject plots")
+    elif total_success > 3:
+        print(f"\n[INFO] Skipping individual plots (too many subjects: {total_success})")
+        print(f"      Individual plots only shown for ≤3 subjects")
+    else:
+        print(f"\n[INFO] No individual plots created (no successful subjects)")
+    
+    # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {
-        'anhedonic_subjects': accessible_anhedonic,
-        'non_anhedonic_subjects': accessible_non_anhedonic,
+        'anhedonic_subjects': anhedonic_subjects_to_process,
+        'non_anhedonic_subjects': non_anhedonic_subjects_to_process,
         'processing_mode': 'downloaded_only' if use_downloaded_only else 'all_available',
+        'configuration': {
+            'limit_subjects': LIMIT_SUBJECTS,
+            'max_subjects_per_group': MAX_SUBJECTS_PER_GROUP if LIMIT_SUBJECTS else None,
+            'show_individual_plots': SHOW_INDIVIDUAL_PLOTS,
+            'verbose_subject_output': VERBOSE_SUBJECT_OUTPUT
+        },
         'summary': {
-            'total_accessible': len(accessible_anhedonic) + len(accessible_non_anhedonic),
-            'anhedonic_count': len(accessible_anhedonic),
-            'non_anhedonic_count': len(accessible_non_anhedonic)
+            'total_processed': total_processed,
+            'total_successful': total_success,
+            'anhedonic_processed': len(anhedonic_results),
+            'anhedonic_successful': anhedonic_success,
+            'non_anhedonic_processed': len(non_anhedonic_results),
+            'non_anhedonic_successful': non_anhedonic_success,
+            'individual_plots_created': individual_plots_created
         },
-        'roi_extraction_results': {
-            'cortical': {
-                'atlas_name': cortical_atlas.atlas_name if 'cortical_atlas' in locals() else None,
-                'roi_timeseries': cortical_roi_timeseries,
-                'requested_rois': cortical_ROIs if 'cortical_ROIs' in locals() else [],
-                'extraction_successful': cortical_roi_timeseries is not None,
-                'hemisphere_specific': {
-                    'right_hemisphere': cortical_right_timeseries if 'vmPFC_right_timeseries' in locals() else None,
-                    'left_hemisphere': cortical_left_timeseries if 'vmPFC_left_timeseries' in locals() else None,
-                    'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries() if 'cortical_roi_extractor' in locals() else False
-                }
-            },
-            'subcortical': {
-                'atlas_name': subcortical_atlas.atlas_name if 'subcortical_atlas' in locals() else None,
-                'roi_timeseries': subcortical_roi_timeseries,
-                'requested_rois': subcortical_ROIs if 'subcortical_ROIs' in locals() else [],
-                'extraction_successful': subcortical_roi_timeseries is not None,
-                'hemisphere_specific': {
-                    'right_hemisphere': subcortical_right_timeseries if 'subcortical_right_timeseries' in locals() else None,
-                    'left_hemisphere': subcortical_left_timeseries if 'subcortical_left_timeseries' in locals() else None,
-                    'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries() if 'subcortical_roi_extractor' in locals() else False
-                }
-            }
+        'subject_results': {
+            'anhedonic': anhedonic_results,
+            'non_anhedonic': non_anhedonic_results
         },
-        'functional_connectivity': fc_results if 'fc_results' in locals() else None
+        'group_analysis': {
+            'anhedonic_fc_count': len(anhedonic_fc_results),
+            'non_anhedonic_fc_count': len(non_anhedonic_fc_results),
+            'group_comparison': group_comparison_results
+        }
     }
 
 
 if __name__ == '__main__':
-    SHOW_PLOTS = False
+    SHOW_PLOTS = True
     main()
     
     if SHOW_PLOTS:
