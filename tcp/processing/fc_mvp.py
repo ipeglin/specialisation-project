@@ -492,10 +492,10 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
         axes[-1, 0].set_xlabel('Time (volumes)', fontsize=12)
         axes[-1, 1].set_xlabel('Time (volumes)', fontsize=12)
 
-        # Add column titles
-        axes[0, 0].text(0.5, 1.15, 'Right Hemisphere', transform=axes[0, 0].transAxes,
+        # Add column titles with more spacing to prevent overlap with subplot titles
+        axes[0, 0].text(0.5, 1.25, 'Right Hemisphere', transform=axes[0, 0].transAxes,
                        ha='center', va='bottom', fontsize=13, fontweight='bold')
-        axes[0, 1].text(0.5, 1.15, 'Left Hemisphere', transform=axes[0, 1].transAxes,
+        axes[0, 1].text(0.5, 1.25, 'Left Hemisphere', transform=axes[0, 1].transAxes,
                        ha='center', va='bottom', fontsize=13, fontweight='bold')
 
         # Add subject ID and atlas type to figure suptitle
@@ -506,10 +506,11 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
         if subject_id:
             title_parts.append(f'({subject_id})')
 
-        fig.suptitle(' - '.join(title_parts), fontsize=16, fontweight='bold', y=0.995)
+        # Reduce suptitle y position to bring it closer to subplot titles (reduce gap by ~50%)
+        fig.suptitle(' - '.join(title_parts), fontsize=16, fontweight='bold', y=0.98)
 
-        # Use tight_layout with padding to prevent title overlap
-        plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.96])
+        # Use tight_layout with less space reserved for suptitle (reduce gap by ~37.5%)
+        plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.97])
         figures.append(fig)
 
     # Return the first figure (or create empty if none)
@@ -650,8 +651,9 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
             ax2.set_xticks([])
             ax2.set_xlabel(f'{len(inter_corrs)} interhemispheric connections', fontsize=11)
             ax2.set_ylabel('Pearson Correlation', fontsize=12)
+            # Main title larger, subtitle smaller
             ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
-                         fontsize=14, fontweight='bold', pad=20)
+                         fontsize=13, fontweight='bold', pad=20)
             ax2.set_ylim(-1, 1)
             ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2.grid(True, alpha=0.3, axis='y')
@@ -675,16 +677,17 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
             ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found',
                     ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
             ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
-                         fontsize=14, fontweight='bold', pad=20)
+                         fontsize=13, fontweight='bold', pad=20)
             ax2.set_xlim(0, 1)
             ax2.set_ylim(0, 1)
     else:
         ax2.text(0.5, 0.5, 'No connectivity patterns\navailable',
                 ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
         ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
-                     fontsize=14, fontweight='bold', pad=20)
+                     fontsize=13, fontweight='bold', pad=20)
 
-    plt.tight_layout(pad=3.0)
+    # Use sufficient padding for FC plots
+    plt.tight_layout(pad=2.8)
     return fig
 
 
@@ -1857,7 +1860,7 @@ def main():
 
 
 if __name__ == '__main__':
-    SHOW_PLOTS = False
+    SHOW_PLOTS = True
     main()
 
     if SHOW_PLOTS:
