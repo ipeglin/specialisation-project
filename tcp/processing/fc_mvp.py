@@ -39,6 +39,7 @@ from scipy import signal, stats
 
 from config.paths import get_analysis_path
 from tcp.processing import DataLoader, SubjectManager
+from tcp.processing.context import ProcessingContext
 from tcp.processing.roi import (
     CorticalAtlasLookup,
     ROIExtractionService,
@@ -727,27 +728,34 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
     return fig
 
 
-def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atlas,
-                   cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-                   verbose=True):
+def process_subject(subject_id: str, context: ProcessingContext):
     """
     Process a single subject for ROI extraction and functional connectivity analysis.
 
+    This function orchestrates the entire processing pipeline for a single subject,
+    using dependency injection through the ProcessingContext.
+
     Args:
         subject_id: Subject identifier
-        manager: SubjectManager instance
-        loader: DataLoader instance
-        cortical_atlas: CorticalAtlasLookup instance
-        subcortical_atlas: SubCorticalAtlasLookup instance
-        cortical_roi_extractor: ROIExtractionService for cortical data
-        subcortical_roi_extractor: ROIExtractionService for subcortical data
-        cortical_ROIs: List of cortical ROI names
-        subcortical_ROIs: List of subcortical ROI names
-        verbose: Whether to print detailed output
+        context: ProcessingContext containing all dependencies (manager, loader,
+                extractors, config)
 
     Returns:
         dict: Subject analysis results
     """
+    # Unpack context for convenience
+    manager = context.manager
+    loader = context.loader
+    cortical_roi_extractor = context.cortical_extractor
+    subcortical_roi_extractor = context.subcortical_extractor
+    cortical_ROIs = context.cortical_rois
+    subcortical_ROIs = context.subcortical_rois
+    verbose = context.verbose
+
+    # Get atlases from extractors
+    cortical_atlas = cortical_roi_extractor.atlas_lookup
+    subcortical_atlas = subcortical_roi_extractor.atlas_lookup
+
     if verbose:
         print(f"\n{'='*60}")
         print(f"Processing Subject: {subject_id}")
@@ -1095,16 +1103,14 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             analytic_envelope = np.abs(analytic_timeseries) # Activity
 
             # Apply low-pass filter for smoothing envelope
+            # Get signal processing parameters from config
+            sig_config = context.config.signal_processing
 
-            # Signal properties
-            TR = 800e-3 # Repetition Time [seconds]
-            sampling_rate = 1 / TR  # 1.25 Hz
-            nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
+            filter_order = sig_config.filter_order
+            cutoff_frequency = sig_config.cutoff_frequency_hz
+            nyquist_frequency = sig_config.nyquist_frequency_hz
 
-            # Filter properties
-            filter_order = 2
-            cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
-                                    # Digital filter critical frequencies must be 0 < Wn < 1
+            # Digital filter critical frequencies must be 0 < Wn < 1
             normalized_cutoff = cutoff_frequency / nyquist_frequency
             b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
 
@@ -1381,35 +1387,53 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
             except Exception as e:
                 print(f"    Error: {e}")
 
-    # ===== ATLAS INITIALIZATION =====
+    # ===== CONFIGURATION AND CONTEXT INITIALIZATION =====
     print(f"\n{'='*50}")
-    print(f"INITIALIZING ATLAS SYSTEMS")
+    print(f"INITIALIZING PROCESSING CONFIGURATION")
     print(f"{'='*50}")
 
-    # Initialize modular ROI extraction system
-    cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
-    subcortical_lut_file = Path(__file__).parent / 'parcellations/subcortical/tian/Tian_Subcortex_S2_3T_label.txt'
-    cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
-    subcortical_atlas = SubCorticalAtlasLookup(subcortical_lut_file)
+    # Import configuration classes
+    from tcp.processing.config.analysis_config import (
+        ProcessingConfig as AnalysisProcessingConfig,
+    )
+
+    # Create processing configuration with dependency injection
+    script_dir = Path(__file__).parent
+    output_base = get_analysis_path('')  # Get base analysis path
+
+    processing_config = AnalysisProcessingConfig.create_default(
+        script_dir=script_dir,
+        output_base=output_base
+    )
+
+    # Override config with function parameters
+    processing_config.plotting_config.create_plots = create_plots
+    processing_config.plotting_config.show_plots = show_plots
+    processing_config.plotting_config.mask_nonsignificant = mask_nonsignificant
+    processing_config.output_config.save_figures = save_figures
+    processing_config.verbose = VERBOSE_SUBJECT_OUTPUT
+
+    # Initialize atlases and extractors
+    cortical_atlas = CorticalAtlasLookup(processing_config.atlas_config.cortical_lut_path)
+    subcortical_atlas = SubCorticalAtlasLookup(processing_config.atlas_config.subcortical_lut_path)
     cortical_roi_extractor = ROIExtractionService(cortical_atlas)
     subcortical_roi_extractor = ROIExtractionService(subcortical_atlas)
 
-    # Define ROIs of interest
-    cortical_ROIs = [
-        'PFCm',  # medial PFC
-        'PFCv',  # ventral PFC
-    ]
-
-    subcortical_ROIs = [
-        'AMY',  # whole amygdala
-    ]
+    # Create ProcessingContext for dependency injection
+    context = ProcessingContext(
+        manager=manager,
+        loader=loader,
+        cortical_extractor=cortical_roi_extractor,
+        subcortical_extractor=subcortical_roi_extractor,
+        config=processing_config
+    )
 
     print(f"Initialized atlases:")
     print(f"  Cortical: {cortical_atlas.atlas_name} ({cortical_atlas.total_parcels} parcels)")
     print(f"  Subcortical: {subcortical_atlas.atlas_name} ({subcortical_atlas.total_parcels} parcels)")
     print(f"ROIs of interest:")
-    print(f"  Cortical: {cortical_ROIs}")
-    print(f"  Subcortical: {subcortical_ROIs}")
+    print(f"  Cortical: {processing_config.atlas_config.cortical_rois}")
+    print(f"  Subcortical: {processing_config.atlas_config.subcortical_rois}")
 
     # ===== MULTI-SUBJECT PROCESSING =====
     print(f"\n{'='*80}")
@@ -1438,11 +1462,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     for i, subject_id in enumerate(anhedonic_subjects_to_process, 1):
         print(f"\n[{i}/{len(anhedonic_subjects_to_process)}] Processing anhedonic subject: {subject_id}")
 
-        subject_result = process_subject(
-            subject_id, manager, loader, cortical_atlas, subcortical_atlas,
-            cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-            verbose=VERBOSE_SUBJECT_OUTPUT
-        )
+        subject_result = process_subject(subject_id, context)
 
         anhedonic_results[subject_id] = subject_result
 
@@ -1459,11 +1479,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     for i, subject_id in enumerate(non_anhedonic_subjects_to_process, 1):
         print(f"\n[{i}/{len(non_anhedonic_subjects_to_process)}] Processing non-anhedonic subject: {subject_id}")
 
-        subject_result = process_subject(
-            subject_id, manager, loader, cortical_atlas, subcortical_atlas,
-            cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-            verbose=VERBOSE_SUBJECT_OUTPUT
-        )
+        subject_result = process_subject(subject_id, context)
 
         non_anhedonic_results[subject_id] = subject_result
 
