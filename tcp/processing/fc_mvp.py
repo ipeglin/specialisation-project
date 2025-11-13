@@ -589,7 +589,7 @@ def plot_averaged_signals(mean_signals, subject_id=None):
 
 
 
-def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05):
+def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -600,6 +600,7 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
         connectivity_patterns: Optional results from analyze_connectivity_patterns
         channel_label_map: Dictionary mapping channel keys to descriptive labels
         alpha: Significance threshold for marking significant correlations
+        mask_nonsignificant: If True, hide non-significant correlations. If False, mark them with asterisks.
     """
     fig = plt.figure(figsize=(16, 8))
 
@@ -611,11 +612,16 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
     if channel_label_map:
         display_labels = [channel_label_map.get(label, label) for label in roi_labels]
 
-    # Create significance mask if p-values available
-    mask = None
-    if p_values is not None:
-        mask = p_values >= alpha
+    # Create mask for diagonal (autocorrelation always = 1, not interesting)
+    mask_diagonal = np.eye(corr_matrix.shape[0], dtype=bool)
 
+    # Optionally mask non-significant correlations
+    mask_combined = mask_diagonal.copy()
+    if mask_nonsignificant and p_values is not None:
+        # Mask both diagonal and non-significant correlations
+        mask_combined = mask_diagonal | (p_values >= alpha)
+
+    # Display correlations with appropriate masking
     # Remove annotations (annot=False) for cleaner visualization with large matrices
     sns.heatmap(corr_matrix,
                 annot=False,
@@ -624,11 +630,29 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
                 center=0,
                 cmap='RdBu_r',
                 vmin=-1, vmax=1,
-                mask=mask,
+                mask=mask_combined,
                 ax=ax1,
                 cbar_kws={'label': 'Pearson Correlation'},
                 square=True)
-    ax1.set_title('Static Functional Connectivity Matrix', fontsize=14, fontweight='bold', pad=20)
+
+    # Add asterisk to non-significant correlations (only if not masking them)
+    if not mask_nonsignificant and p_values is not None:
+        n_rois = corr_matrix.shape[0]
+        for i in range(n_rois):
+            for j in range(n_rois):
+                # Check if correlation is non-significant (and not on diagonal)
+                if i != j and p_values[i, j] >= alpha:
+                    # Add small black asterisk in center of non-significant cells
+                    ax1.text(j + 0.5, i + 0.5, '*',
+                            ha='center', va='center',
+                            color='black', fontsize=7, fontweight='bold')
+
+    # Add note about asterisk marker in the title (only if not masking)
+    title_text = 'Static Functional Connectivity Matrix'
+    if not mask_nonsignificant and p_values is not None:
+        title_text += f'\n($*$ non-significant, p ≥ {alpha})'
+
+    ax1.set_title(title_text, fontsize=14, fontweight='bold', pad=20)
     ax1.tick_params(axis='x', rotation=90, labelsize=7)
     ax1.tick_params(axis='y', rotation=0, labelsize=7)
 
@@ -653,7 +677,7 @@ def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_p
             ax2.set_ylabel('Pearson Correlation', fontsize=12)
             # Main title larger, subtitle smaller
             ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
-                         fontsize=13, fontweight='bold', pad=20)
+                         fontsize=12, fontweight='bold', pad=23)
             ax2.set_ylim(-1, 1)
             ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2.grid(True, alpha=0.3, axis='y')
@@ -1434,7 +1458,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         }
 
 
-def main():
+def main(mask_nonsignificant=False, show_plots=True):
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
 
@@ -1766,8 +1790,8 @@ def main():
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
-    if not SHOW_PLOTS:
-        print(f"\n[INFO] No individual plots created (SHOW_PLOTS set to False)")
+    if not show_plots:
+        print(f"\n[INFO] No individual plots created (show_plots set to False)")
     elif SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
         print(f"\n{'='*80}")
         print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
@@ -1811,7 +1835,8 @@ def main():
                         fc_data['fc_labels'],
                         fc_data['fc_pvalues'],
                         fc_data['connectivity_patterns'],
-                        fc_data.get('channel_label_map')
+                        fc_data.get('channel_label_map'),
+                        mask_nonsignificant=mask_nonsignificant
                     )
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
                     plots_for_subject += 1
@@ -1860,8 +1885,15 @@ def main():
 
 
 if __name__ == '__main__':
-    SHOW_PLOTS = True
-    main()
+    # Display configuration
+    SHOW_PLOTS = True  # Whether to display plots at all
+
+    # FC Matrix display mode:
+    # - False: Show all correlations, mark non-significant with asterisks
+    # - True: Hide non-significant correlations (masked)
+    MASK_NONSIGNIFICANT = False
+
+    main(mask_nonsignificant=MASK_NONSIGNIFICANT, show_plots=SHOW_PLOTS)
 
     if SHOW_PLOTS:
         plt.show()
