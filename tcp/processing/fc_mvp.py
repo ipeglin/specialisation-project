@@ -1209,29 +1209,28 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             vmPFC_left_channels = np.vstack([cortical_left_timeseries['PFCm'],
                                            cortical_left_timeseries['PFCv']])
 
-            # Create channel label mapping using the parcel labels we just created
-            channel_label_map = {}
-            channel_counter = 0
+            # Create channel labels directly from parcel labels (no need for mapping)
+            # Build list of all channel labels in the order they appear in vmPFC_right/left_channels
+            cortical_channel_labels = []
 
-            # Label vmPFC right hemisphere channels using actual parcel labels
+            # Right hemisphere labels (PFCm first, then PFCv)
             for roi_name in ['PFCm', 'PFCv']:
                 rh_labels = cortical_parcel_labels.get(roi_name, {}).get('RH', [])
-                for parcel_label in rh_labels:
-                    channel_label_map[f'vmPFC_RH_ch{channel_counter}'] = parcel_label
-                    channel_counter += 1
+                cortical_channel_labels.extend(rh_labels)
 
-            # Label vmPFC left hemisphere channels using actual parcel labels
+            # Left hemisphere labels (PFCm first, then PFCv)
             for roi_name in ['PFCm', 'PFCv']:
                 lh_labels = cortical_parcel_labels.get(roi_name, {}).get('LH', [])
-                for parcel_label in lh_labels:
-                    channel_label_map[f'vmPFC_LH_ch{channel_counter}'] = parcel_label
-                    channel_counter += 1
+                cortical_channel_labels.extend(lh_labels)
+
+            # Channel label map is now identity (label -> label) for display purposes
+            channel_label_map = {label: label for label in cortical_channel_labels}
 
             if verbose:
-                print(f"Individual vmPFC channel extraction results:")
+                print(f"Individual cortical (PFCm + PFCv) channel extraction results:")
                 print(f"  RIGHT channels: shape {vmPFC_right_channels.shape}")
                 print(f"  LEFT channels: shape {vmPFC_left_channels.shape}")
-                print(f"  vmPFC channel mapping: {len([k for k in channel_label_map.keys() if 'vmPFC' in k])} channels")
+                print(f"  Cortical channel labels: {len(cortical_channel_labels)} channels")
 
         subcortical_valid_rois = subcortical_validation_result['valid_rois']
         subcortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
@@ -1309,22 +1308,23 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             amy_right_channels = subcortical_right_timeseries['AMY']
             amy_left_channels = subcortical_left_timeseries['AMY']
 
-            # Label AMY channels using actual parcel names from atlas (lAMY, mAMY)
+            # Build subcortical channel labels using actual parcel names from atlas (lAMY, mAMY)
+            subcortical_channel_labels = []
             amy_rh_labels = subcortical_parcel_labels.get('AMY', {}).get('rh', [])
             amy_lh_labels = subcortical_parcel_labels.get('AMY', {}).get('lh', [])
 
-            for parcel_idx, parcel_name in enumerate(amy_rh_labels):
-                channel_label_map[f'AMY_rh_ch{channel_counter}'] = parcel_name
-                channel_counter += 1
+            subcortical_channel_labels.extend(amy_rh_labels)
+            subcortical_channel_labels.extend(amy_lh_labels)
 
-            for parcel_idx, parcel_name in enumerate(amy_lh_labels):
-                channel_label_map[f'AMY_lh_ch{channel_counter}'] = parcel_name
-                channel_counter += 1
+            # Add subcortical labels to channel_label_map (identity mapping)
+            for label in subcortical_channel_labels:
+                channel_label_map[label] = label
 
             if verbose:
-                print(f"Individual AMY channel extraction results:")
+                print(f"Individual subcortical (AMY) channel extraction results:")
                 print(f"  RIGHT channels: shape {amy_right_channels.shape}")
                 print(f"  LEFT channels: shape {amy_left_channels.shape}")
+                print(f"  Subcortical channel labels: {len(subcortical_channel_labels)} channels")
                 print(f"  Total channel mapping: {len(channel_label_map)} channels")
                 print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
 
@@ -1340,29 +1340,21 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             if verbose:
                 print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
 
-            # Create FC timeseries dictionary with all individual channels and proper labels
+            # Create FC timeseries dictionary using actual parcel labels
             fc_timeseries = {}
+            all_channel_labels = cortical_channel_labels + subcortical_channel_labels
 
-            # Add all vmPFC channels
-            for i, channel_ts in enumerate(vmPFC_right_channels):
-                channel_key = f'vmPFC_RH_ch{i}'
-                fc_timeseries[channel_key] = channel_ts
+            # Combine all channel timeseries in order
+            all_channels = np.vstack([
+                vmPFC_right_channels,
+                vmPFC_left_channels,
+                amy_right_channels,
+                amy_left_channels
+            ])
 
-            vmPFC_rh_count = vmPFC_right_channels.shape[0]
-            for i, channel_ts in enumerate(vmPFC_left_channels):
-                channel_key = f'vmPFC_LH_ch{i + vmPFC_rh_count}'
-                fc_timeseries[channel_key] = channel_ts
-
-            # Add all AMY channels
-            vmPFC_total_count = vmPFC_rh_count + vmPFC_left_channels.shape[0]
-            for i, channel_ts in enumerate(amy_right_channels):
-                channel_key = f'AMY_rh_ch{i + vmPFC_total_count}'
-                fc_timeseries[channel_key] = channel_ts
-
-            amy_rh_count = amy_right_channels.shape[0]
-            for i, channel_ts in enumerate(amy_left_channels):
-                channel_key = f'AMY_lh_ch{i + vmPFC_total_count + amy_rh_count}'
-                fc_timeseries[channel_key] = channel_ts
+            # Map each channel timeseries to its actual parcel label
+            for i, channel_label in enumerate(all_channel_labels):
+                fc_timeseries[channel_label] = all_channels[i]
 
             fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
 
@@ -1372,6 +1364,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     print(f"ROI labels: {fc_labels}")
 
                 connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
+                print(f"Interhemispheric connections (ALL): {connectivity_patterns['interhemispheric'].keys()}")
 
                 if verbose:
                     print(f"\nConnectivity Pattern Analysis:")
@@ -1770,7 +1763,9 @@ def main():
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
-    if SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
+    if not SHOW_PLOTS:
+        print(f"\n[INFO] No individual plots created (SHOW_PLOTS set to False)")
+    elif SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
         print(f"\n{'='*80}")
         print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
         print(f"{'='*80}")
@@ -1862,7 +1857,7 @@ def main():
 
 
 if __name__ == '__main__':
-    SHOW_PLOTS = True
+    SHOW_PLOTS = False
     main()
 
     if SHOW_PLOTS:
