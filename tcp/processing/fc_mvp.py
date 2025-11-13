@@ -734,6 +734,87 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     return fig
 
 
+def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name="Group 1", group2_name="Group 2", alpha=0.05):
+    """
+    Compare functional connectivity patterns between two groups using statistical tests.
+
+    Args:
+        group1_fc_results: List of FC result dictionaries for group 1
+        group2_fc_results: List of FC result dictionaries for group 2
+        group1_name: Name of group 1 (for reporting)
+        group2_name: Name of group 2 (for reporting)
+        alpha: Significance threshold
+
+    Returns:
+        dict: Statistical comparison results
+    """
+    from scipy import stats as scipy_stats
+
+    # Initialize comparison results
+    comparison_results = {
+        'group1_name': group1_name,
+        'group2_name': group2_name,
+        'comparisons': {}
+    }
+
+    # Pattern types to compare
+    pattern_types = ['all_pairwise', 'interhemispheric', 'cross_regional', 'ipsilateral', 'contralateral']
+
+    for pattern_type in pattern_types:
+        # Collect correlations for this pattern from both groups
+        group1_corrs = []
+        group2_corrs = []
+
+        for fc_result in group1_fc_results:
+            connectivity_patterns = fc_result.get('static_connectivity_patterns', {})
+            pattern_data = connectivity_patterns.get(pattern_type, {})
+            for pair_data in pattern_data.values():
+                group1_corrs.append(pair_data['correlation'])
+
+        for fc_result in group2_fc_results:
+            connectivity_patterns = fc_result.get('static_connectivity_patterns', {})
+            pattern_data = connectivity_patterns.get(pattern_type, {})
+            for pair_data in pattern_data.values():
+                group2_corrs.append(pair_data['correlation'])
+
+        # Skip if insufficient data
+        if len(group1_corrs) < 2 or len(group2_corrs) < 2:
+            comparison_results['comparisons'][pattern_type] = {
+                'note': f'Insufficient data for {pattern_type} comparison'
+            }
+            continue
+
+        # Compute statistics
+        group1_mean = np.mean(group1_corrs)
+        group1_std = np.std(group1_corrs, ddof=1)
+        group2_mean = np.mean(group2_corrs)
+        group2_std = np.std(group2_corrs, ddof=1)
+
+        # Independent samples t-test
+        t_stat, p_val = scipy_stats.ttest_ind(group1_corrs, group2_corrs)
+
+        # Effect size (Cohen's d)
+        pooled_std = np.sqrt(((len(group1_corrs) - 1) * group1_std**2 +
+                             (len(group2_corrs) - 1) * group2_std**2) /
+                            (len(group1_corrs) + len(group2_corrs) - 2))
+        cohens_d = (group1_mean - group2_mean) / pooled_std if pooled_std > 0 else 0
+
+        comparison_results['comparisons'][pattern_type] = {
+            'group1_mean': group1_mean,
+            'group1_std': group1_std,
+            'group1_n': len(group1_corrs),
+            'group2_mean': group2_mean,
+            'group2_std': group2_std,
+            'group2_n': len(group2_corrs),
+            'ttest_statistic': t_stat,
+            'ttest_pvalue': p_val,
+            'cohens_d': cohens_d,
+            'significant': p_val < alpha
+        }
+
+    return comparison_results
+
+
 def process_subject(subject_id: str, context: ProcessingContext):
     """
     Process a single subject for ROI extraction and functional connectivity analysis.
@@ -897,29 +978,55 @@ def process_subject(subject_id: str, context: ProcessingContext):
         }
 
 
-def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
-    """Main function for FC MVP analysis"""
+def setup_analysis_configuration(
+    limit_subjects: bool = True,
+    max_subjects_per_group: int = 2,
+    show_individual_plots: bool = True,
+    verbose_subject_output: bool = True,
+    show_group_summary: bool = True
+) -> dict:
+    """
+    Setup and display analysis configuration.
+
+    Args:
+        limit_subjects: Whether to limit number of subjects processed
+        max_subjects_per_group: Maximum subjects per group when limiting
+        show_individual_plots: Whether to show individual subject plots
+        verbose_subject_output: Whether to show detailed per-subject output
+        show_group_summary: Whether to show aggregated group analysis
+
+    Returns:
+        dict: Configuration dictionary
+    """
     print("=== Functional Connectivity MVP ===")
-
-    # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
-    LIMIT_SUBJECTS = True  # Set False for full analysis
-    MAX_SUBJECTS_PER_GROUP = 2  # Limit when testing (only used if LIMIT_SUBJECTS=True)
-    SHOW_INDIVIDUAL_PLOTS = True  # Show individual subject plots
-    VERBOSE_SUBJECT_OUTPUT = True  # Detailed per-subject printing
-    SHOW_GROUP_SUMMARY = True  # Show aggregated group analysis
-
     print(f"Configuration:")
-    print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
-    if LIMIT_SUBJECTS:
-        print(f"  Max subjects per group: {MAX_SUBJECTS_PER_GROUP}")
-    print(f"  Individual plots: {'ENABLED' if SHOW_INDIVIDUAL_PLOTS else 'DISABLED'}")
-    print(f"  Verbose output: {'ENABLED' if VERBOSE_SUBJECT_OUTPUT else 'DISABLED'}")
+    print(f"  Subject limiting: {'ENABLED' if limit_subjects else 'DISABLED'}")
+    if limit_subjects:
+        print(f"  Max subjects per group: {max_subjects_per_group}")
+    print(f"  Individual plots: {'ENABLED' if show_individual_plots else 'DISABLED'}")
+    print(f"  Verbose output: {'ENABLED' if verbose_subject_output else 'DISABLED'}")
     print()
 
-    # Initialize data infrastructure
-    loader = DataLoader()
-    manager = SubjectManager(data_loader=loader)
+    return {
+        'limit_subjects': limit_subjects,
+        'max_subjects_per_group': max_subjects_per_group,
+        'show_individual_plots': show_individual_plots,
+        'verbose_subject_output': verbose_subject_output,
+        'show_group_summary': show_group_summary
+    }
 
+
+def initialize_infrastructure(manager: SubjectManager, loader: DataLoader) -> dict:
+    """
+    Initialize data infrastructure and display availability summary.
+
+    Args:
+        manager: SubjectManager instance
+        loader: DataLoader instance
+
+    Returns:
+        dict: Infrastructure information including groups and availability
+    """
     print(f"[OK] Loaded manifest with {len(loader.get_all_subject_ids())} subjects")
 
     # Get available analysis groups
@@ -943,10 +1050,31 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
         print(f"\nUsing ALL-AVAILABLE mode ({availability['with_timeseries_data']} subjects)")
         print("  Warning: Some subjects may not have locally downloaded data")
 
-    # Use a valid group name from the manifest
-    # The manifest shows: anhedonic_vs_non_anhedonic, anhedonic_patients_vs_controls, etc.
-    group_name = 'anhedonic_vs_non_anhedonic'  # Use actual group from manifest
+    return {
+        'groups': groups,
+        'availability': availability,
+        'use_downloaded_only': use_downloaded_only
+    }
 
+
+def select_and_validate_subjects(
+    manager: SubjectManager,
+    loader: DataLoader,
+    group_name: str,
+    use_downloaded_only: bool
+) -> dict:
+    """
+    Select subjects for analysis and validate file access.
+
+    Args:
+        manager: SubjectManager instance
+        loader: DataLoader instance
+        group_name: Analysis group name
+        use_downloaded_only: Whether to use only downloaded subjects
+
+    Returns:
+        dict: Subject lists and validation results
+    """
     # Get subjects for analysis
     low_anhedonic_subjects = manager.filter_subjects(
         groups=[group_name],
@@ -964,7 +1092,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     )
     anhedonic_subjects = low_anhedonic_subjects + high_anhedonic_subjects
 
-    non_anhedonic_subjects = manager.filter_subjects(  # Fixed typo
+    non_anhedonic_subjects = manager.filter_subjects(
         groups=[group_name],
         classifications={'anhedonic_status': 'non-anhedonic'},
         data_requirements=['timeseries'],
@@ -985,10 +1113,8 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     # Check anhedonic subjects (hammer task only)
     for subject_id in anhedonic_subjects:
         try:
-            # Get only hammer task files
             hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
             if hammer_files:
-                # Check if at least one hammer file is actually downloaded (not a git-annex symlink)
                 first_file = loader.resolve_file_path(hammer_files[0])
                 if is_actual_file(first_file):
                     accessible_anhedonic.append(subject_id)
@@ -1002,7 +1128,6 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     # Check non-anhedonic subjects (hammer task only)
     for subject_id in non_anhedonic_subjects:
         try:
-            # Get only hammer task files
             hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
             if hammer_files:
                 first_file = loader.resolve_file_path(hammer_files[0])
@@ -1031,38 +1156,63 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
         print(f"\n   Or use the preprocessing pipeline with timeseries data type enabled.")
         return {
             'error': 'No downloaded timeseries files',
-            'anhedonic_subjects': [],
-            'non_anhedonic_subjects': [],
-            'processing_mode': 'downloaded_only' if use_downloaded_only else 'all_available',
+            'accessible_anhedonic': [],
+            'accessible_non_anhedonic': []
         }
 
     # Show example hammer task file paths for first few accessible subjects
     if accessible_anhedonic:
         print(f"\nExample accessible hammer task file paths:")
-        for subject_id in accessible_anhedonic[:2]:  # Show first 2
+        for subject_id in accessible_anhedonic[:2]:
             print(f"\n  Subject: {subject_id}")
             try:
-                # Get only hammer task files
                 hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
-                for file_path in hammer_files[:2]:  # Show first 2 hammer files
+                for file_path in hammer_files[:2]:
                     full_path = loader.resolve_file_path(file_path)
                     print(f"    {full_path}")
             except Exception as e:
                 print(f"    Error: {e}")
 
-    # ===== CONFIGURATION AND CONTEXT INITIALIZATION =====
+    return {
+        'accessible_anhedonic': accessible_anhedonic,
+        'accessible_non_anhedonic': accessible_non_anhedonic
+    }
+
+
+def initialize_processing_context(
+    manager: SubjectManager,
+    loader: DataLoader,
+    mask_nonsignificant: bool,
+    create_plots: bool,
+    show_plots: bool,
+    save_figures: bool,
+    verbose: bool
+) -> ProcessingContext:
+    """
+    Initialize processing configuration and context with all dependencies.
+
+    Args:
+        manager: SubjectManager instance
+        loader: DataLoader instance
+        mask_nonsignificant: Whether to mask non-significant correlations
+        create_plots: Whether to create plots
+        show_plots: Whether to show plots interactively
+        save_figures: Whether to save figures to disk
+        verbose: Whether to show detailed output
+
+    Returns:
+        ProcessingContext: Initialized processing context
+    """
     print(f"\n{'='*50}")
     print(f"INITIALIZING PROCESSING CONFIGURATION")
     print(f"{'='*50}")
 
-    # Import configuration classes
     from tcp.processing.config.analysis_config import (
         ProcessingConfig as AnalysisProcessingConfig,
     )
 
-    # Create processing configuration with dependency injection
     script_dir = Path(__file__).parent
-    output_base = get_analysis_path('')  # Get base analysis path
+    output_base = get_analysis_path('')
 
     processing_config = AnalysisProcessingConfig.create_default(
         script_dir=script_dir,
@@ -1074,7 +1224,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     processing_config.plotting_config.show_plots = show_plots
     processing_config.plotting_config.mask_nonsignificant = mask_nonsignificant
     processing_config.output_config.save_figures = save_figures
-    processing_config.verbose = VERBOSE_SUBJECT_OUTPUT
+    processing_config.verbose = verbose
 
     # Initialize atlases and extractors
     cortical_atlas = CorticalAtlasLookup(processing_config.atlas_config.cortical_lut_path)
@@ -1098,130 +1248,128 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     print(f"  Cortical: {processing_config.atlas_config.cortical_rois}")
     print(f"  Subcortical: {processing_config.atlas_config.subcortical_rois}")
 
-    # ===== MULTI-SUBJECT PROCESSING =====
-    print(f"\n{'='*80}")
-    print(f"STARTING MULTI-SUBJECT ANALYSIS")
-    print(f"{'='*80}")
+    return context
 
-    # Apply subject limiting if enabled
-    if LIMIT_SUBJECTS:
-        anhedonic_subjects_to_process = accessible_anhedonic[:MAX_SUBJECTS_PER_GROUP]
-        non_anhedonic_subjects_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
-        print(f"LIMITING ENABLED: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
-    else:
-        anhedonic_subjects_to_process = accessible_anhedonic
-        non_anhedonic_subjects_to_process = accessible_non_anhedonic
-        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
 
-    # Process all subjects
-    anhedonic_results = {}
-    non_anhedonic_results = {}
+def process_subject_group(
+    subject_list: list,
+    group_name: str,
+    context: ProcessingContext
+) -> dict:
+    """
+    Process all subjects in a group.
 
-    # Process anhedonic subjects
+    Args:
+        subject_list: List of subject IDs to process
+        group_name: Name of the group (for display)
+        context: ProcessingContext with all dependencies
+
+    Returns:
+        dict: Dictionary mapping subject IDs to their results
+    """
     print(f"\n{'='*50}")
-    print(f"PROCESSING ANHEDONIC SUBJECTS ({len(anhedonic_subjects_to_process)})")
+    print(f"PROCESSING {group_name.upper()} SUBJECTS ({len(subject_list)})")
     print(f"{'='*50}")
 
-    for i, subject_id in enumerate(anhedonic_subjects_to_process, 1):
-        print(f"\n[{i}/{len(anhedonic_subjects_to_process)}] Processing anhedonic subject: {subject_id}")
+    results = {}
+
+    for i, subject_id in enumerate(subject_list, 1):
+        print(f"\n[{i}/{len(subject_list)}] Processing {group_name} subject: {subject_id}")
 
         subject_result = process_subject(subject_id, context)
-
-        anhedonic_results[subject_id] = subject_result
+        results[subject_id] = subject_result
 
         if subject_result['success']:
             print(f"    ✅ Success: {subject_id}")
         else:
             print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
 
-    # Process non-anhedonic subjects
-    print(f"\n{'='*50}")
-    print(f"PROCESSING NON-ANHEDONIC SUBJECTS ({len(non_anhedonic_subjects_to_process)})")
-    print(f"{'='*50}")
+    return results
 
-    for i, subject_id in enumerate(non_anhedonic_subjects_to_process, 1):
-        print(f"\n[{i}/{len(non_anhedonic_subjects_to_process)}] Processing non-anhedonic subject: {subject_id}")
 
-        subject_result = process_subject(subject_id, context)
+def collect_fc_results(results_dict: dict) -> list:
+    """
+    Collect functional connectivity results from processed subjects.
 
-        non_anhedonic_results[subject_id] = subject_result
+    Args:
+        results_dict: Dictionary of subject results
 
-        if subject_result['success']:
-            print(f"    ✅ Success: {subject_id}")
-        else:
-            print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
-
-    # ===== RESULTS SUMMARY =====
-    print(f"\n{'='*80}")
-    print(f"PROCESSING SUMMARY")
-    print(f"{'='*80}")
-
-    anhedonic_success = sum(1 for r in anhedonic_results.values() if r['success'])
-    non_anhedonic_success = sum(1 for r in non_anhedonic_results.values() if r['success'])
-    total_success = anhedonic_success + non_anhedonic_success
-    total_processed = len(anhedonic_results) + len(non_anhedonic_results)
-
-    print(f"Successfully processed: {total_success}/{total_processed} subjects")
-    print(f"  Anhedonic: {anhedonic_success}/{len(anhedonic_results)}")
-    print(f"  Non-anhedonic: {non_anhedonic_success}/{len(non_anhedonic_results)}")
-
-    # Collect FC results for group comparison
-    anhedonic_fc_results = []
-    non_anhedonic_fc_results = []
-
-    for subject_id, result in anhedonic_results.items():
+    Returns:
+        list: List of FC results from successful subjects
+    """
+    fc_results = []
+    for subject_id, result in results_dict.items():
         if result['success'] and result.get('static_functional_connectivity'):
-            anhedonic_fc_results.append(result['static_functional_connectivity'])
+            fc_results.append(result['static_functional_connectivity'])
+    return fc_results
 
-    for subject_id, result in non_anhedonic_results.items():
-        if result['success'] and result.get('static_functional_connectivity'):
-            non_anhedonic_fc_results.append(result['static_functional_connectivity'])
 
-    print(f"FC analysis available:")
-    print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
-    print(f"  Non-anhedonic: {len(non_anhedonic_fc_results)} subjects")
+def perform_group_comparison(
+    anhedonic_fc_results: list,
+    non_anhedonic_fc_results: list
+) -> dict:
+    """
+    Perform statistical comparison between two groups.
 
-    # ===== GROUP COMPARISON ANALYSIS =====
-    group_comparison_results = None
-    if len(anhedonic_fc_results) > 0 and len(non_anhedonic_fc_results) > 0:
-        print(f"\n{'='*80}")
-        print(f"GROUP COMPARISON ANALYSIS")
-        print(f"{'='*80}")
+    Args:
+        anhedonic_fc_results: FC results from anhedonic group
+        non_anhedonic_fc_results: FC results from non-anhedonic group
 
-        group_comparison_results = compare_fc_between_groups(
-            anhedonic_fc_results,
-            non_anhedonic_fc_results,
-            group1_name="Anhedonic",
-            group2_name="Non-anhedonic"
-        )
-
-        print(f"Statistical Comparisons (Anhedonic vs Non-anhedonic):")
-        for pattern_type, comparison in group_comparison_results['comparisons'].items():
-            if not comparison.get('note'):  # Skip patterns with insufficient data
-                print(f"\n{pattern_type.upper()}:")
-                print(f"  Anhedonic: M={comparison['group1_mean']:.3f}, SD={comparison['group1_std']:.3f}, N={comparison['group1_n']}")
-                print(f"  Non-anhedonic: M={comparison['group2_mean']:.3f}, SD={comparison['group2_std']:.3f}, N={comparison['group2_n']}")
-                print(f"  t({comparison['group1_n']+comparison['group2_n']-2})={comparison['ttest_statistic']:.3f}, p={comparison['ttest_pvalue']:.3f}")
-                print(f"  Cohen's d={comparison['cohens_d']:.3f}, Significant={'Yes' if comparison['significant'] else 'No'}")
-
-    else:
+    Returns:
+        dict: Group comparison results, or None if insufficient data
+    """
+    if len(anhedonic_fc_results) == 0 or len(non_anhedonic_fc_results) == 0:
         print(f"\n[WARNING] Insufficient FC data for group comparison")
         print(f"  Need at least 1 subject per group with successful FC analysis")
+        return None
 
-    # ===== EXPORT FC RESULTS TO CSV =====
+    print(f"\n{'='*80}")
+    print(f"GROUP COMPARISON ANALYSIS")
+    print(f"{'='*80}")
+
+    group_comparison_results = compare_fc_between_groups(
+        anhedonic_fc_results,
+        non_anhedonic_fc_results,
+        group1_name="Anhedonic",
+        group2_name="Non-anhedonic"
+    )
+
+    print(f"Statistical Comparisons (Anhedonic vs Non-anhedonic):")
+    for pattern_type, comparison in group_comparison_results['comparisons'].items():
+        if not comparison.get('note'):
+            print(f"\n{pattern_type.upper()}:")
+            print(f"  Anhedonic: M={comparison['group1_mean']:.3f}, SD={comparison['group1_std']:.3f}, N={comparison['group1_n']}")
+            print(f"  Non-anhedonic: M={comparison['group2_mean']:.3f}, SD={comparison['group2_std']:.3f}, N={comparison['group2_n']}")
+            print(f"  t({comparison['group1_n']+comparison['group2_n']-2})={comparison['ttest_statistic']:.3f}, p={comparison['ttest_pvalue']:.3f}")
+            print(f"  Cohen's d={comparison['cohens_d']:.3f}, Significant={'Yes' if comparison['significant'] else 'No'}")
+
+    return group_comparison_results
+
+
+def export_all_fc_results(
+    all_results: dict,
+    total_success: int
+) -> int:
+    """
+    Export functional connectivity results to CSV files.
+
+    Args:
+        all_results: Combined dictionary of all subject results
+        total_success: Total number of successful subjects
+
+    Returns:
+        int: Number of subjects with exported CSV files
+    """
     print(f"\n{'='*80}")
     print(f"EXPORTING STATIC FC RESULTS TO CSV")
     print(f"{'='*80}")
 
-    # Create output directory for FC CSV files using cross-platform path system
-    # This will automatically use the correct base path for macOS, Windows 11, or CentOS
     fc_output_dir = get_analysis_path('fc_analysis/static_fc')
     fc_output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {fc_output_dir}")
     print(f"  (Platform-specific path automatically configured)")
 
     csv_export_count = 0
-    all_results = {**anhedonic_results, **non_anhedonic_results}
 
     for subject_id, result in all_results.items():
         if not result['success']:
@@ -1237,11 +1385,34 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
     print(f"  Files saved to: {fc_output_dir}")
 
-    # ===== INDIVIDUAL SUBJECT PLOTS =====
+    return csv_export_count
+
+
+def create_individual_plots(
+    all_results: dict,
+    total_success: int,
+    show_individual_plots: bool,
+    create_plots: bool,
+    save_figures: bool,
+    mask_nonsignificant: bool
+) -> tuple:
+    """
+    Create individual subject plots.
+
+    Args:
+        all_results: Combined dictionary of all subject results
+        total_success: Total number of successful subjects
+        show_individual_plots: Whether to show individual plots
+        create_plots: Whether to create plots
+        save_figures: Whether to save figures to disk
+        mask_nonsignificant: Whether to mask non-significant correlations
+
+    Returns:
+        tuple: (plots_created_count, figures_saved_count)
+    """
     individual_plots_created = 0
     figures_saved_count = 0
 
-    # Create output directory for saved figures if needed
     figures_output_dir = None
     if save_figures and create_plots:
         figures_output_dir = get_analysis_path('fc_analysis/figures')
@@ -1250,145 +1421,255 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
 
     if not create_plots:
         print(f"\n[INFO] No individual plots created (create_plots set to False)")
-    elif SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
-        print(f"\n{'='*80}")
-        print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
-        print(f"{'='*80}")
+        return individual_plots_created, figures_saved_count
 
-        all_results = {**anhedonic_results, **non_anhedonic_results}
-        for subject_id, result in all_results.items():
-            if not result['success']:
-                continue
+    if not show_individual_plots or total_success > 3:
+        if total_success > 3:
+            print(f"\n[INFO] Skipping individual plots (too many subjects: {total_success})")
+            print(f"      Individual plots only shown for ≤3 subjects")
+        else:
+            print(f"\n[INFO] No individual plots created (no successful subjects)")
+        return individual_plots_created, figures_saved_count
 
-            plots_for_subject = 0
+    print(f"\n{'='*80}")
+    print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
+    print(f"{'='*80}")
 
-            # 1. Plot cortical ROI timeseries
-            roi_results = result.get('roi_extraction_results', {})
-            if roi_results.get('cortical'):
-                cortical_data = roi_results['cortical']
-                if cortical_data.get('extraction_successful'):
-                    print(f"  Creating cortical ROI timeseries plot for {subject_id}...")
-                    cortical_roi_fig = plot_roi_timeseries_result(cortical_data, subject_id=subject_id, atlas_type='Cortical')
-                    plots_for_subject += 1
+    for subject_id, result in all_results.items():
+        if not result['success']:
+            continue
 
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_cortical_timeseries.svg'
-                        cortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+        plots_for_subject = 0
+        roi_results = result.get('roi_extraction_results', {})
 
-            # 2. Plot subcortical ROI timeseries
-            if roi_results.get('subcortical'):
-                subcortical_data = roi_results['subcortical']
-                if subcortical_data.get('extraction_successful'):
-                    print(f"  Creating subcortical ROI timeseries plot for {subject_id}...")
-                    subcortical_roi_fig = plot_roi_timeseries_result(subcortical_data, subject_id=subject_id, atlas_type='Subcortical')
-                    plots_for_subject += 1
+        # Plot cortical ROI timeseries
+        if roi_results.get('cortical', {}).get('extraction_successful'):
+            print(f"  Creating cortical ROI timeseries plot for {subject_id}...")
+            cortical_fig = plot_roi_timeseries_result(
+                roi_results['cortical'], subject_id=subject_id, atlas_type='Cortical'
+            )
+            plots_for_subject += 1
 
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_subcortical_timeseries.svg'
-                        subcortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+            if save_figures and figures_output_dir:
+                fig_path = figures_output_dir / f'{subject_id}_cortical_timeseries.svg'
+                cortical_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                figures_saved_count += 1
 
-            # 3. Skip averaged signals plot (no longer applicable with individual channels)
-            # Individual channel signals are preserved - averaging would destroy temporal information
+        # Plot subcortical ROI timeseries
+        if roi_results.get('subcortical', {}).get('extraction_successful'):
+            print(f"  Creating subcortical ROI timeseries plot for {subject_id}...")
+            subcortical_fig = plot_roi_timeseries_result(
+                roi_results['subcortical'], subject_id=subject_id, atlas_type='Subcortical'
+            )
+            plots_for_subject += 1
 
-            # 4. Plot analytic signal with envelopes (raw and LP-filtered)
-            activity_data = result.get('activity')
-            if activity_data:
-                # Extract required data
-                analytic_signal = activity_data.get('analytic_signal')
-                analytic_envelope = activity_data.get('analytic_envelope')
-                smoothed_envelope = activity_data.get('smoothed_envelope')
-                channel_labels = activity_data.get('channel_labels')
+            if save_figures and figures_output_dir:
+                fig_path = figures_output_dir / f'{subject_id}_subcortical_timeseries.svg'
+                subcortical_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                figures_saved_count += 1
 
-                if analytic_signal is not None and analytic_envelope is not None and smoothed_envelope is not None:
-                    # Plot with raw analytic envelope
-                    print(f"  Creating analytic signal with raw envelope plot for {subject_id}...")
-                    raw_envelope_fig = plot_timeseries_with_envelopes(
-                        analytic_signal,
-                        analytic_envelope,
-                        smoothed_envelope,
-                        channel_labels,
-                        subject_id=subject_id,
-                        envelope_type='raw'
-                    )
-                    plots_for_subject += 1
+        # Plot analytic signal with envelopes
+        activity_data = result.get('activity')
+        if activity_data:
+            analytic_signal = activity_data.get('analytic_signal')
+            analytic_envelope = activity_data.get('analytic_envelope')
+            smoothed_envelope = activity_data.get('smoothed_envelope')
+            channel_labels = activity_data.get('channel_labels')
 
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_raw_envelope.svg'
-                        raw_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+            if all([analytic_signal is not None, analytic_envelope is not None, smoothed_envelope is not None]):
+                # Raw envelope
+                print(f"  Creating analytic signal with raw envelope plot for {subject_id}...")
+                raw_fig = plot_timeseries_with_envelopes(
+                    analytic_signal, analytic_envelope, smoothed_envelope,
+                    channel_labels, subject_id=subject_id, envelope_type='raw'
+                )
+                plots_for_subject += 1
 
-                    # Plot with LP-filtered envelope
-                    print(f"  Creating analytic signal with LP-filtered envelope plot for {subject_id}...")
-                    filtered_envelope_fig = plot_timeseries_with_envelopes(
-                        analytic_signal,
-                        analytic_envelope,
-                        smoothed_envelope,
-                        channel_labels,
-                        subject_id=subject_id,
-                        envelope_type='filtered'
-                    )
-                    plots_for_subject += 1
+                if save_figures and figures_output_dir:
+                    fig_path = figures_output_dir / f'{subject_id}_analytic_signal_raw_envelope.svg'
+                    raw_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
 
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_filtered_envelope.svg'
-                        filtered_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+                # Filtered envelope
+                print(f"  Creating analytic signal with LP-filtered envelope plot for {subject_id}...")
+                filtered_fig = plot_timeseries_with_envelopes(
+                    analytic_signal, analytic_envelope, smoothed_envelope,
+                    channel_labels, subject_id=subject_id, envelope_type='filtered'
+                )
+                plots_for_subject += 1
 
-            # 5. Plot static functional connectivity analysis results (clean version)
-            if result.get('static_functional_connectivity'):
-                print(f"  Creating static FC analysis plot for {subject_id}...")
-                static_fc_data = result['static_functional_connectivity']
+                if save_figures and figures_output_dir:
+                    fig_path = figures_output_dir / f'{subject_id}_analytic_signal_filtered_envelope.svg'
+                    filtered_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
 
-                if static_fc_data.get('static_fc_matrix') is not None:
-                    fc_fig = plot_fc_results(
-                        static_fc_data['static_fc_matrix'],
-                        static_fc_data['static_fc_labels'],
-                        static_fc_data['static_fc_pvalues'],
-                        static_fc_data['static_connectivity_patterns'],
-                        static_fc_data.get('channel_label_map'),
-                        mask_nonsignificant=mask_nonsignificant
-                    )
-                    fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
-                    plots_for_subject += 1
+        # Plot static FC
+        static_fc_data = result.get('static_functional_connectivity')
+        if static_fc_data and static_fc_data.get('static_fc_matrix') is not None:
+            print(f"  Creating static FC analysis plot for {subject_id}...")
+            fc_fig = plot_fc_results(
+                static_fc_data['static_fc_matrix'],
+                static_fc_data['static_fc_labels'],
+                static_fc_data['static_fc_pvalues'],
+                static_fc_data['static_connectivity_patterns'],
+                static_fc_data.get('channel_label_map'),
+                mask_nonsignificant=mask_nonsignificant
+            )
+            fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
+            plots_for_subject += 1
 
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_static_fc_analysis.svg'
-                        fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+            if save_figures and figures_output_dir:
+                fig_path = figures_output_dir / f'{subject_id}_static_fc_analysis.svg'
+                fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                figures_saved_count += 1
 
-            if plots_for_subject > 0:
-                individual_plots_created += 1
-                print(f"  ✓ Created {plots_for_subject} plots for {subject_id}")
+        if plots_for_subject > 0:
+            individual_plots_created += 1
+            print(f"  ✓ Created {plots_for_subject} plots for {subject_id}")
 
-        print(f"\nCreated plots for {individual_plots_created} subjects")
+    print(f"\nCreated plots for {individual_plots_created} subjects")
 
-        # Summary of saved figures
-        if save_figures and figures_saved_count > 0:
-            print(f"✓ Saved {figures_saved_count} figures to: {figures_output_dir}")
-    elif total_success > 3:
-        print(f"\n[INFO] Skipping individual plots (too many subjects: {total_success})")
-        print(f"      Individual plots only shown for ≤3 subjects")
+    if save_figures and figures_saved_count > 0:
+        print(f"✓ Saved {figures_saved_count} figures to: {figures_output_dir}")
+
+    return individual_plots_created, figures_saved_count
+
+
+def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
+    """
+    Main orchestration function for functional connectivity MVP analysis.
+
+    This function coordinates the entire analysis pipeline using focused helper functions:
+    1. Configuration setup
+    2. Infrastructure initialization
+    3. Subject selection and validation
+    4. Processing context initialization
+    5. Multi-subject processing
+    6. Group comparison
+    7. CSV export
+    8. Plotting
+
+    Args:
+        mask_nonsignificant: Whether to mask non-significant correlations in FC plots
+        create_plots: Whether to create plots
+        show_plots: Whether to display plots interactively
+        save_figures: Whether to save figures to disk
+
+    Returns:
+        dict: Comprehensive analysis results
+    """
+    # Analysis configuration constants
+    LIMIT_SUBJECTS = True
+    MAX_SUBJECTS_PER_GROUP = 2
+    SHOW_INDIVIDUAL_PLOTS = True
+    VERBOSE_SUBJECT_OUTPUT = True
+    SHOW_GROUP_SUMMARY = True
+
+    # 1. Setup configuration
+    config = setup_analysis_configuration(
+        limit_subjects=LIMIT_SUBJECTS,
+        max_subjects_per_group=MAX_SUBJECTS_PER_GROUP,
+        show_individual_plots=SHOW_INDIVIDUAL_PLOTS,
+        verbose_subject_output=VERBOSE_SUBJECT_OUTPUT,
+        show_group_summary=SHOW_GROUP_SUMMARY
+    )
+
+    # 2. Initialize infrastructure
+    loader = DataLoader()
+    manager = SubjectManager(data_loader=loader)
+    infrastructure = initialize_infrastructure(manager, loader)
+
+    # 3. Select and validate subjects
+    group_name = 'anhedonic_vs_non_anhedonic'
+    subject_validation = select_and_validate_subjects(
+        manager,
+        loader,
+        group_name,
+        infrastructure['use_downloaded_only']
+    )
+
+    # Handle error case (no accessible subjects)
+    if 'error' in subject_validation:
+        return {
+            'error': subject_validation['error'],
+            'anhedonic_subjects': [],
+            'non_anhedonic_subjects': [],
+            'processing_mode': 'downloaded_only' if infrastructure['use_downloaded_only'] else 'all_available',
+        }
+
+    accessible_anhedonic = subject_validation['accessible_anhedonic']
+    accessible_non_anhedonic = subject_validation['accessible_non_anhedonic']
+
+    # 4. Apply subject limiting if configured
+    print(f"\n{'='*80}")
+    print(f"STARTING MULTI-SUBJECT ANALYSIS")
+    print(f"{'='*80}")
+
+    if config['limit_subjects']:
+        anhedonic_subjects_to_process = accessible_anhedonic[:config['max_subjects_per_group']]
+        non_anhedonic_subjects_to_process = accessible_non_anhedonic[:config['max_subjects_per_group']]
+        print(f"LIMITING ENABLED: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
     else:
-        print(f"\n[INFO] No individual plots created (no successful subjects)")
+        anhedonic_subjects_to_process = accessible_anhedonic
+        non_anhedonic_subjects_to_process = accessible_non_anhedonic
+        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
 
-    # ===== RETURN MULTI-SUBJECT RESULTS =====
+    # 5. Initialize processing context
+    context = initialize_processing_context(
+        manager, loader, mask_nonsignificant, create_plots, show_plots,
+        save_figures, config['verbose_subject_output']
+    )
+
+    # 6. Process subject groups
+    anhedonic_results = process_subject_group(
+        anhedonic_subjects_to_process, "anhedonic", context
+    )
+    non_anhedonic_results = process_subject_group(
+        non_anhedonic_subjects_to_process, "non-anhedonic", context
+    )
+
+    # 7. Calculate summary statistics
+    print(f"\n{'='*80}")
+    print(f"PROCESSING SUMMARY")
+    print(f"{'='*80}")
+
+    anhedonic_success = sum(1 for r in anhedonic_results.values() if r['success'])
+    non_anhedonic_success = sum(1 for r in non_anhedonic_results.values() if r['success'])
+    total_success = anhedonic_success + non_anhedonic_success
+    total_processed = len(anhedonic_results) + len(non_anhedonic_results)
+
+    print(f"Successfully processed: {total_success}/{total_processed} subjects")
+    print(f"  Anhedonic: {anhedonic_success}/{len(anhedonic_results)}")
+    print(f"  Non-anhedonic: {non_anhedonic_success}/{len(non_anhedonic_results)}")
+
+    # 8. Collect FC results and perform group comparison
+    anhedonic_fc_results = collect_fc_results(anhedonic_results)
+    non_anhedonic_fc_results = collect_fc_results(non_anhedonic_results)
+
+    print(f"FC analysis available:")
+    print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
+    print(f"  Non-anhedonic: {len(non_anhedonic_fc_results)} subjects")
+
+    group_comparison_results = perform_group_comparison(
+        anhedonic_fc_results, non_anhedonic_fc_results
+    )
+
+    # 9. Export FC results to CSV
+    all_results = {**anhedonic_results, **non_anhedonic_results}
+    csv_export_count = export_all_fc_results(all_results, total_success)
+
+    # 10. Create individual plots
+    individual_plots_created, figures_saved_count = create_individual_plots(
+        all_results, total_success, config['show_individual_plots'],
+        create_plots, save_figures, mask_nonsignificant
+    )
+
+    # 11. Return comprehensive results
     return {
         'anhedonic_subjects': anhedonic_subjects_to_process,
         'non_anhedonic_subjects': non_anhedonic_subjects_to_process,
-        'processing_mode': 'downloaded_only' if use_downloaded_only else 'all_available',
-        'configuration': {
-            'limit_subjects': LIMIT_SUBJECTS,
-            'max_subjects_per_group': MAX_SUBJECTS_PER_GROUP if LIMIT_SUBJECTS else None,
-            'show_individual_plots': SHOW_INDIVIDUAL_PLOTS,
-            'verbose_subject_output': VERBOSE_SUBJECT_OUTPUT
-        },
+        'processing_mode': 'downloaded_only' if infrastructure['use_downloaded_only'] else 'all_available',
+        'configuration': config,
         'summary': {
             'total_processed': total_processed,
             'total_successful': total_success,
@@ -1396,7 +1677,9 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
             'anhedonic_successful': anhedonic_success,
             'non_anhedonic_processed': len(non_anhedonic_results),
             'non_anhedonic_successful': non_anhedonic_success,
-            'individual_plots_created': individual_plots_created
+            'individual_plots_created': individual_plots_created,
+            'figures_saved': figures_saved_count,
+            'csv_exports': csv_export_count
         },
         'subject_results': {
             'anhedonic': anhedonic_results,
