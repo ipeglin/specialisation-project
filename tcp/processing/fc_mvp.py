@@ -1361,7 +1361,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             if fc_matrix is not None:
                 if verbose:
                     print(f"FC Matrix shape: {fc_matrix.shape}")
-                    print(f"ROI labels: {fc_labels}")
+                    print(f"ROI labels (alphabetical): {sorted(fc_labels)}")
 
                 connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
                 print(f"Interhemispheric connections (ALL): {connectivity_patterns['interhemispheric'].keys()}")
