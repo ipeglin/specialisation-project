@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
-"""Functional Connectivity MVP Script"""
+"""
+Functional Connectivity Analysis Script
 
+This script performs STATIC functional connectivity analysis on TCP dataset timeseries.
+Static FC computes Pearson correlations between ROI timeseries across the entire session.
+
+TODO: Dynamic FC analysis (binned/windowed correlations) is not yet implemented.
+
+Author: Ian Philip Eglin
+"""
+
+import csv
 import sys
 from pathlib import Path
 
@@ -27,9 +37,13 @@ import numpy as np
 import seaborn as sns
 from scipy import stats
 
+from config.paths import get_analysis_path
 from tcp.processing import DataLoader, SubjectManager
-from tcp.processing.roi import (CorticalAtlasLookup, ROIExtractionService,
-                                SubCorticalAtlasLookup)
+from tcp.processing.roi import (
+    CorticalAtlasLookup,
+    ROIExtractionService,
+    SubCorticalAtlasLookup,
+)
 
 
 def is_actual_file(file_path: Path) -> bool:
@@ -118,11 +132,148 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     for i in range(n_rois):
         for j in range(i+1, n_rois):
             # Compute p-value for correlation
-            corr_coef, p_val = stats.pearsonr(timeseries_list[i], timeseries_list[j])
+            _, p_val = stats.pearsonr(timeseries_list[i], timeseries_list[j])
             p_values[i, j] = p_val
             p_values[j, i] = p_val  # Symmetric matrix
 
     return corr_matrix, roi_labels, p_values
+
+
+def export_fc_results_to_csv(fc_results, subject_id, output_dir):
+    """
+    Export STATIC functional connectivity results to CSV files for later analysis.
+
+    Creates three CSV files per subject:
+    1. {subject_id}_fc_matrix.csv - Full correlation matrix
+    2. {subject_id}_fc_pvalues.csv - P-values matrix
+    3. {subject_id}_fc_pairwise.csv - Pairwise connections with metadata
+
+    NOTE: This exports STATIC FC (whole-session correlations).
+    Dynamic FC (time-windowed) is not yet implemented.
+
+    Args:
+        fc_results: FC results dictionary from process_subject
+        subject_id: Subject identifier
+        output_dir: Directory to save CSV files (Path object or string)
+
+    Returns:
+        dict: Paths to created CSV files
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not fc_results or 'fc_matrix' not in fc_results:
+        print(f"[WARNING] No FC results to export for {subject_id}")
+        return None
+
+    fc_matrix = fc_results['fc_matrix']
+    fc_labels = fc_results['fc_labels']
+    fc_pvalues = fc_results.get('fc_pvalues')
+    connectivity_patterns = fc_results.get('connectivity_patterns', {})
+    channel_label_map = fc_results.get('channel_label_map', {})
+
+    created_files = {}
+
+    # 1. Export FC correlation matrix
+    matrix_file = output_dir / f'{subject_id}_fc_matrix.csv'
+    with open(matrix_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+
+        # Header row with channel labels
+        display_labels = [channel_label_map.get(label, label) for label in fc_labels]
+        writer.writerow([''] + display_labels)
+
+        # Data rows
+        for i, row_label in enumerate(display_labels):
+            writer.writerow([row_label] + list(fc_matrix[i, :]))
+
+    created_files['fc_matrix'] = matrix_file
+    print(f"  Exported FC matrix to: {matrix_file}")
+
+    # 2. Export p-values matrix (if available)
+    if fc_pvalues is not None:
+        pvalues_file = output_dir / f'{subject_id}_fc_pvalues.csv'
+        with open(pvalues_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+
+            # Header row
+            display_labels = [channel_label_map.get(label, label) for label in fc_labels]
+            writer.writerow([''] + display_labels)
+
+            # Data rows
+            for i, row_label in enumerate(display_labels):
+                writer.writerow([row_label] + list(fc_pvalues[i, :]))
+
+        created_files['fc_pvalues'] = pvalues_file
+        print(f"  Exported p-values to: {pvalues_file}")
+
+    # 3. Export pairwise connections with metadata
+    pairwise_file = output_dir / f'{subject_id}_fc_pairwise.csv'
+    with open(pairwise_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+
+        # Header
+        writer.writerow([
+            'ROI_1', 'ROI_2',
+            'ROI_1_label', 'ROI_2_label',
+            'Correlation', 'P_value', 'Significant',
+            'Connection_type', 'Regions', 'Hemispheres'
+        ])
+
+        # Extract all pairwise data
+        all_pairwise = connectivity_patterns.get('all_pairwise', {})
+
+        for pair_key, pair_data in all_pairwise.items():
+            # Parse pair key (e.g., 'vmPFC_RH_ch0_vmPFC_LH_ch2')
+            parts = pair_key.split('_')
+
+            # Try to reconstruct ROI names
+            if len(parts) >= 6:
+                roi1_key = '_'.join(parts[:3])
+                roi2_key = '_'.join(parts[3:])
+            else:
+                roi1_key = parts[0] if len(parts) > 0 else 'unknown'
+                roi2_key = parts[1] if len(parts) > 1 else 'unknown'
+
+            # Get descriptive labels
+            roi1_label = channel_label_map.get(roi1_key, roi1_key)
+            roi2_label = channel_label_map.get(roi2_key, roi2_key)
+
+            # Determine connection type
+            connection_type = 'other'
+            regions = ''
+            hemispheres = ''
+
+            # Check in connectivity patterns
+            if pair_key in connectivity_patterns.get('interhemispheric', {}):
+                connection_type = 'interhemispheric'
+                regions = connectivity_patterns['interhemispheric'][pair_key].get('region', '')
+            elif pair_key in connectivity_patterns.get('cross_regional', {}):
+                connection_type = 'cross_regional'
+                regions = connectivity_patterns['cross_regional'][pair_key].get('regions', '')
+                if pair_key in connectivity_patterns.get('ipsilateral', {}):
+                    connection_type = 'ipsilateral_cross_regional'
+                    hemispheres = connectivity_patterns['ipsilateral'][pair_key].get('hemisphere', '')
+                elif pair_key in connectivity_patterns.get('contralateral', {}):
+                    connection_type = 'contralateral_cross_regional'
+                    hemispheres = connectivity_patterns['contralateral'][pair_key].get('hemispheres', '')
+
+            # Write row
+            writer.writerow([
+                roi1_key, roi2_key,
+                roi1_label, roi2_label,
+                pair_data['correlation'],
+                pair_data.get('p_value', ''),
+                pair_data.get('significant', ''),
+                connection_type,
+                regions,
+                hemispheres
+            ])
+
+    created_files['fc_pairwise'] = pairwise_file
+    print(f"  Exported pairwise connections to: {pairwise_file}")
+
+    return created_files
 
 
 def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=0.05):
@@ -216,12 +367,15 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
     return results
 
 
-def plot_roi_timeseries_result(roi_extraction_results):
+def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_type=''):
     """
     Create visualization for ROI timeseries from the TCP dataset.
+    Plots all individual channels separately, organized by region and hemisphere.
 
     Args:
         roi_extraction_results: Results from cortical, or subcortical roi extraction from the process_subject() function
+        subject_id: Optional subject identifier to add to figure title
+        atlas_type: Optional string to specify atlas type ('Cortical' or 'Subcortical')
 
     Example:
         cortical': {
@@ -245,6 +399,7 @@ def plot_roi_timeseries_result(roi_extraction_results):
     roi_timeseries = roi_extraction_results.get('roi_timeseries')
     requested_rois = roi_extraction_results.get('requested_rois')
     atlas_name = roi_extraction_results.get('atlas_name', 'Unknown Atlas')
+    parcel_labels = roi_extraction_results.get('parcel_labels', {})
 
     right_hemisphere_ts = roi_extraction_results.get('hemisphere_specific', {}).get('right_hemisphere')
     left_hemisphere_ts = roi_extraction_results.get('hemisphere_specific', {}).get('left_hemisphere')
@@ -259,57 +414,112 @@ def plot_roi_timeseries_result(roi_extraction_results):
                 ha='center', va='center', fontsize=14, color='gray')
         return fig
 
-    # Count only hemisphere-specific plots
-    n_plots = len([roi for roi in requested_rois
-                   if roi in right_hemisphere_ts and roi in left_hemisphere_ts])
+    # Create separate figures for each ROI (region) to keep plots organized
+    figures = []
 
-    if n_plots == 0:
+    for roi_name in requested_rois:
+        if roi_name not in right_hemisphere_ts or roi_name not in left_hemisphere_ts:
+            continue
+
+        ts_right = right_hemisphere_ts[roi_name]
+        ts_left = left_hemisphere_ts[roi_name]
+
+        # Ensure 2D format (channels x timepoints)
+        if ts_right.ndim == 1:
+            ts_right = ts_right.reshape(1, -1)
+        if ts_left.ndim == 1:
+            ts_left = ts_left.reshape(1, -1)
+
+        n_channels_right = ts_right.shape[0]
+        n_channels_left = ts_left.shape[0]
+
+        # Get parcel labels for this ROI (if available)
+        roi_parcel_labels = parcel_labels.get(roi_name, {})
+        right_labels = roi_parcel_labels.get('RH', roi_parcel_labels.get('rh', []))
+        left_labels = roi_parcel_labels.get('LH', roi_parcel_labels.get('lh', []))
+
+        # Create figure with 2 columns (right and left hemisphere)
+        n_rows = max(n_channels_right, n_channels_left)
+        fig, axes = plt.subplots(n_rows, 2, figsize=(16, 2.5 * n_rows), sharex=True)
+
+        # Handle single row case
+        if n_rows == 1:
+            axes = axes.reshape(1, -1)
+
+        # Plot right hemisphere channels
+        for ch_idx in range(n_channels_right):
+            ax = axes[ch_idx, 0]
+            ax.plot(ts_right[ch_idx], color='#d62728', linewidth=1.5, alpha=0.85)
+            ax.set_ylabel('Signal', fontsize=10)
+
+            # Use descriptive label if available, otherwise fall back to generic label
+            if ch_idx < len(right_labels):
+                title = f'{right_labels[ch_idx]} (Ch {ch_idx+1})'
+            else:
+                title = f'{roi_name} RH - Channel {ch_idx+1}'
+
+            ax.set_title(title, fontsize=11, fontweight='bold', pad=8)
+            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+        # Hide unused right hemisphere subplots
+        for ch_idx in range(n_channels_right, n_rows):
+            axes[ch_idx, 0].axis('off')
+
+        # Plot left hemisphere channels
+        for ch_idx in range(n_channels_left):
+            ax = axes[ch_idx, 1]
+            ax.plot(ts_left[ch_idx], color='#1f77b4', linewidth=1.5, alpha=0.85)
+            ax.set_ylabel('Signal', fontsize=10)
+
+            # Use descriptive label if available, otherwise fall back to generic label
+            if ch_idx < len(left_labels):
+                title = f'{left_labels[ch_idx]} (Ch {ch_idx+1})'
+            else:
+                title = f'{roi_name} LH - Channel {ch_idx+1}'
+
+            ax.set_title(title, fontsize=11, fontweight='bold', pad=8)
+            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+        # Hide unused left hemisphere subplots
+        for ch_idx in range(n_channels_left, n_rows):
+            axes[ch_idx, 1].axis('off')
+
+        # Set x-label on the bottom plots
+        axes[-1, 0].set_xlabel('Time (volumes)', fontsize=12)
+        axes[-1, 1].set_xlabel('Time (volumes)', fontsize=12)
+
+        # Add column titles
+        axes[0, 0].text(0.5, 1.15, 'Right Hemisphere', transform=axes[0, 0].transAxes,
+                       ha='center', va='bottom', fontsize=13, fontweight='bold')
+        axes[0, 1].text(0.5, 1.15, 'Left Hemisphere', transform=axes[0, 1].transAxes,
+                       ha='center', va='bottom', fontsize=13, fontweight='bold')
+
+        # Add subject ID and atlas type to figure suptitle
+        title_parts = []
+        if atlas_type:
+            title_parts.append(f'{atlas_type} ROI')
+        title_parts.append(f'{roi_name} Timeseries')
+        if subject_id:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=16, fontweight='bold', y=0.995)
+
+        # Use tight_layout with padding to prevent title overlap
+        plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.96])
+        figures.append(fig)
+
+    # Return the first figure (or create empty if none)
+    if figures:
+        return figures[0]
+    else:
         fig = plt.figure(figsize=(16, 6))
         fig.text(0.5, 0.5, 'No matching ROIs found',
                 ha='center', va='center', fontsize=14, color='gray')
         return fig
-
-    # Create figure with subplots - cleaner spacing
-    fig, axes = plt.subplots(n_plots, 1, figsize=(16, 3.5 * n_plots), sharex=True)
-    if n_plots == 1:
-        axes = [axes]
-
-    plot_idx = 0
-
-    # Only plot hemisphere-specific timeseries (cleaner visualization)
-    # Skip the all-parcels ROI timeseries to reduce clutter
-    if has_hemisphere_data:
-        for roi_name in requested_rois:
-            if roi_name in right_hemisphere_ts and roi_name in left_hemisphere_ts:
-                ts_right = right_hemisphere_ts[roi_name]
-                ts_left = left_hemisphere_ts[roi_name]
-                ax = axes[plot_idx]
-
-                # Always compute mean if multi-dimensional (no individual parcels)
-                if ts_right.ndim > 1:
-                    ts_right = np.mean(ts_right, axis=0)
-                if ts_left.ndim > 1:
-                    ts_left = np.mean(ts_left, axis=0)
-
-                # Plot clean hemisphere signals with professional styling
-                ax.plot(ts_right, label=f'{roi_name} Right', color='#d62728', linewidth=2, alpha=0.85)
-                ax.plot(ts_left, label=f'{roi_name} Left', color='#1f77b4', linewidth=2, alpha=0.85)
-
-                ax.set_ylabel('Signal (mean)', fontsize=11)
-                ax.set_title(f'{roi_name} - Hemisphere Comparison',
-                           fontsize=11, fontweight='bold', pad=10)
-                ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
-                ax.grid(True, alpha=0.3, linestyle='--')
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                plot_idx += 1
-
-    # Set x-label on the bottom plot
-    axes[-1].set_xlabel('Time (volumes)', fontsize=12)
-
-    # Use tight_layout with padding to prevent title overlap
-    plt.tight_layout(pad=2.0, h_pad=2.5)
-    return fig
 
 
 def plot_averaged_signals(mean_signals, subject_id=None):
@@ -376,6 +586,106 @@ def plot_averaged_signals(mean_signals, subject_id=None):
     return fig
 
 
+
+
+def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05):
+    """
+    Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
+
+    Args:
+        corr_matrix: Correlation matrix
+        roi_labels: ROI labels (channel keys)
+        p_values: Optional p-values matrix
+        connectivity_patterns: Optional results from analyze_connectivity_patterns
+        channel_label_map: Dictionary mapping channel keys to descriptive labels
+        alpha: Significance threshold for marking significant correlations
+    """
+    fig = plt.figure(figsize=(16, 8))
+
+    # 1. Static FC Matrix (left side)
+    ax1 = plt.subplot(1, 2, 1)
+
+    # Use descriptive labels if channel_label_map is provided
+    display_labels = roi_labels
+    if channel_label_map:
+        display_labels = [channel_label_map.get(label, label) for label in roi_labels]
+
+    # Create significance mask if p-values available
+    mask = None
+    if p_values is not None:
+        mask = p_values >= alpha
+
+    # Remove annotations (annot=False) for cleaner visualization with large matrices
+    sns.heatmap(corr_matrix,
+                annot=False,
+                xticklabels=display_labels,
+                yticklabels=display_labels,
+                center=0,
+                cmap='RdBu_r',
+                vmin=-1, vmax=1,
+                mask=mask,
+                ax=ax1,
+                cbar_kws={'label': 'Pearson Correlation'},
+                square=True)
+    ax1.set_title('Static Functional Connectivity Matrix', fontsize=14, fontweight='bold', pad=20)
+    ax1.tick_params(axis='x', rotation=90, labelsize=7)
+    ax1.tick_params(axis='y', rotation=0, labelsize=7)
+
+    # 2. Interhemispheric Connectivity Analysis (right side)
+    ax2 = plt.subplot(1, 2, 2)
+
+    if connectivity_patterns and 'interhemispheric' in connectivity_patterns:
+        inter_data = connectivity_patterns['interhemispheric']
+
+        if inter_data:
+            # Extract interhemispheric correlations and labels
+            inter_pairs = list(inter_data.keys())
+            inter_corrs = [v['correlation'] for v in inter_data.values()]
+
+            # Create bar plot (no x-axis labels to avoid clutter with many connections)
+            bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color='lightcoral',
+                          edgecolor='darkred', alpha=0.7, width=0.8)
+
+            # Remove x-axis tick labels (too cluttered with many connections)
+            ax2.set_xticks([])
+            ax2.set_xlabel(f'{len(inter_corrs)} interhemispheric connections', fontsize=11)
+            ax2.set_ylabel('Pearson Correlation', fontsize=12)
+            ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+                         fontsize=14, fontweight='bold', pad=20)
+            ax2.set_ylim(-1, 1)
+            ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            ax2.grid(True, alpha=0.3, axis='y')
+
+            # Mark significant correlations with different color (no text labels)
+            if p_values is not None:
+                for i, (pair_key, pair_data) in enumerate(inter_data.items()):
+                    if pair_data.get('significant', False):
+                        bars[i].set_color('darkred')
+                        bars[i].set_alpha(0.9)
+
+            # Add legend for significance
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='lightcoral', edgecolor='darkred', alpha=0.7, label='Non-significant'),
+                Patch(facecolor='darkred', edgecolor='darkred', alpha=0.9, label='Significant (p<0.05)')
+            ]
+            ax2.legend(handles=legend_elements, loc='upper right', fontsize=10)
+
+        else:
+            ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found',
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
+            ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+                         fontsize=14, fontweight='bold', pad=20)
+            ax2.set_xlim(0, 1)
+            ax2.set_ylim(0, 1)
+    else:
+        ax2.text(0.5, 0.5, 'No connectivity patterns\navailable',
+                ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
+        ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+                     fontsize=14, fontweight='bold', pad=20)
+
+    plt.tight_layout(pad=3.0)
+    return fig
 
 
 def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, alpha=0.05):
@@ -706,7 +1016,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         subcortical_atlas: SubCorticalAtlasLookup instance
         cortical_roi_extractor: ROIExtractionService for cortical data
         subcortical_roi_extractor: ROIExtractionService for subcortical data
-        cortical_ROIs: List of cortical ROI names       
+        cortical_ROIs: List of cortical ROI names
         subcortical_ROIs: List of subcortical ROI names
         verbose: Whether to print detailed output
 
@@ -790,14 +1100,15 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         cortical_left_timeseries = None
         subcortical_right_timeseries = None
         subcortical_left_timeseries = None
-        # averaged ROI
-        vmPFC_right = None
-        vmPFC_left = None
-        amy_right = None
-        amy_left = None
-        # static activity
+        # individual channel timeseries with label mapping
+        vmPFC_right_channels = None
+        vmPFC_left_channels = None
+        amy_right_channels = None
+        amy_left_channels = None
+        channel_label_map = None
 
         cortical_valid_rois = cortical_validation_result['valid_rois']
+        cortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
 
         if cortical_roi_extractor.supports_hemisphere_queries() and cortical_valid_rois:
             if verbose:
@@ -817,6 +1128,69 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 aggregation_method='all'
             )
 
+            # Create parcel labels for each ROI and hemisphere
+            for roi_name in cortical_valid_rois:
+                if roi_name not in cortical_parcel_labels:
+                    cortical_parcel_labels[roi_name] = {'RH': [], 'LH': []}
+
+                # Right hemisphere labels - get actual parcel names with network info
+                if roi_name in cortical_right_timeseries:
+                    rh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='RH')
+                    rh_indices = rh_indices_dict.get(roi_name, [])
+                    rh_parcel_labels = []
+
+                    for idx in rh_indices:
+                        # Get full parcel name (e.g., '17networks_RH_DefaultA_PFCm_1')
+                        full_name = cortical_atlas.get_parcel_name(idx)
+                        if full_name:
+                            # Extract network and create compact label
+                            # Format: 17networks_{hemi}_{network}_{region}_{subarea}
+                            parts = full_name.split('_')
+                            if len(parts) >= 4:
+                                # parts: ['17networks', 'RH', 'DefaultA', 'PFCm', '1']
+                                hemi = parts[1]
+                                network = parts[2]
+                                region = parts[3]
+                                subarea = parts[4] if len(parts) > 4 else ''
+                                # Create label: PFCm_RH_DefaultA_p1 (includes network, p = parcel)
+                                label = f'{region}_{hemi}_{network}'
+                                if subarea:
+                                    label += f'_p{subarea}'
+                                rh_parcel_labels.append(label)
+                            else:
+                                # Fallback if parsing fails
+                                rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
+                        else:
+                            rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
+
+                    cortical_parcel_labels[roi_name]['RH'] = rh_parcel_labels
+
+                # Left hemisphere labels
+                if roi_name in cortical_left_timeseries:
+                    lh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='LH')
+                    lh_indices = lh_indices_dict.get(roi_name, [])
+                    lh_parcel_labels = []
+
+                    for idx in lh_indices:
+                        full_name = cortical_atlas.get_parcel_name(idx)
+                        if full_name:
+                            parts = full_name.split('_')
+                            if len(parts) >= 4:
+                                hemi = parts[1]
+                                network = parts[2]
+                                region = parts[3]
+                                subarea = parts[4] if len(parts) > 4 else ''
+                                label = f'{region}_{hemi}_{network}'
+                                if subarea:
+                                    label += f'_p{subarea}'
+                                lh_parcel_labels.append(label)
+                            else:
+                                lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
+                        else:
+                            lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
+
+                    cortical_parcel_labels[roi_name]['LH'] = lh_parcel_labels
+
             if verbose:
                 print(f"RIGHT hemisphere extraction results:")
                 for roi_name, timeseries in cortical_right_timeseries.items():
@@ -828,26 +1202,39 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     if timeseries.size > 0:
                         print(f"  {roi_name}: shape {timeseries.shape}")
 
-            # Construct mean vmPFC signal - handle both aggregation methods
-            if cortical_right_timeseries['PFCm'].ndim == 1:
-                # Mean aggregation: PFCm and PFCv are already 1D arrays, average them
-                vmPFC_right = np.mean([cortical_right_timeseries['PFCm'],
-                                     cortical_right_timeseries['PFCv']], axis=0)
-                vmPFC_left = np.mean([cortical_left_timeseries['PFCm'],
-                                    cortical_left_timeseries['PFCv']], axis=0)
-            else:
-                # 'All' aggregation: PFCm and PFCv are 2D arrays, stack and average
-                vmPFC_right = np.mean(np.vstack([cortical_right_timeseries['PFCm'],
-                                               cortical_right_timeseries['PFCv']]), axis=0)
-                vmPFC_left = np.mean(np.vstack([cortical_left_timeseries['PFCm'],
-                                              cortical_left_timeseries['PFCv']]), axis=0)
+            # Extract individual vmPFC channels with proper labeling (only 'all' aggregation)
+            # Assume 'all' aggregation: each ROI contains multiple parcels as 2D arrays
+            vmPFC_right_channels = np.vstack([cortical_right_timeseries['PFCm'],
+                                            cortical_right_timeseries['PFCv']])
+            vmPFC_left_channels = np.vstack([cortical_left_timeseries['PFCm'],
+                                           cortical_left_timeseries['PFCv']])
+
+            # Create channel label mapping using the parcel labels we just created
+            channel_label_map = {}
+            channel_counter = 0
+
+            # Label vmPFC right hemisphere channels using actual parcel labels
+            for roi_name in ['PFCm', 'PFCv']:
+                rh_labels = cortical_parcel_labels.get(roi_name, {}).get('RH', [])
+                for parcel_label in rh_labels:
+                    channel_label_map[f'vmPFC_RH_ch{channel_counter}'] = parcel_label
+                    channel_counter += 1
+
+            # Label vmPFC left hemisphere channels using actual parcel labels
+            for roi_name in ['PFCm', 'PFCv']:
+                lh_labels = cortical_parcel_labels.get(roi_name, {}).get('LH', [])
+                for parcel_label in lh_labels:
+                    channel_label_map[f'vmPFC_LH_ch{channel_counter}'] = parcel_label
+                    channel_counter += 1
 
             if verbose:
-                print(f"Mean vmPFC signal extraction results:")
-                print(f"  RIGHT: shape {vmPFC_right.shape}")
-                print(f"  LEFT: shape {vmPFC_left.shape}")
+                print(f"Individual vmPFC channel extraction results:")
+                print(f"  RIGHT channels: shape {vmPFC_right_channels.shape}")
+                print(f"  LEFT channels: shape {vmPFC_left_channels.shape}")
+                print(f"  vmPFC channel mapping: {len([k for k in channel_label_map.keys() if 'vmPFC' in k])} channels")
 
         subcortical_valid_rois = subcortical_validation_result['valid_rois']
+        subcortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
 
         if subcortical_roi_extractor.supports_hemisphere_queries() and subcortical_valid_rois:
             if verbose:
@@ -867,6 +1254,45 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 aggregation_method='all'
             )
 
+            # Create parcel labels for each ROI and hemisphere
+            # For subcortical, get actual parcel names from atlas (e.g., lAMY-rh, mAMY-rh)
+            for roi_name in subcortical_valid_rois:
+                if roi_name not in subcortical_parcel_labels:
+                    subcortical_parcel_labels[roi_name] = {'rh': [], 'lh': []}
+
+                # Right hemisphere labels - get actual subdivision names from atlas
+                if roi_name in subcortical_right_timeseries:
+                    # Get parcel indices for this ROI in right hemisphere
+                    rh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='rh')
+                    rh_indices = rh_indices_dict.get(roi_name, [])
+                    rh_parcel_names = []
+
+                    for idx in rh_indices:
+                        # Get the actual parcel name from the atlas (e.g., 'lAMY-rh', 'mAMY-rh')
+                        parcel_name = subcortical_atlas.get_parcel_name(idx)
+                        if parcel_name:
+                            rh_parcel_names.append(parcel_name)
+                        else:
+                            # Fallback if parcel name not available
+                            rh_parcel_names.append(f'{roi_name}_rh_parcel{len(rh_parcel_names)+1}')
+
+                    subcortical_parcel_labels[roi_name]['rh'] = rh_parcel_names
+
+                # Left hemisphere labels
+                if roi_name in subcortical_left_timeseries:
+                    lh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='lh')
+                    lh_indices = lh_indices_dict.get(roi_name, [])
+                    lh_parcel_names = []
+
+                    for idx in lh_indices:
+                        parcel_name = subcortical_atlas.get_parcel_name(idx)
+                        if parcel_name:
+                            lh_parcel_names.append(parcel_name)
+                        else:
+                            lh_parcel_names.append(f'{roi_name}_lh_parcel{len(lh_parcel_names)+1}')
+
+                    subcortical_parcel_labels[roi_name]['lh'] = lh_parcel_names
+
             if verbose:
                 print(f"RIGHT hemisphere extraction results:")
                 for roi_name, timeseries in subcortical_right_timeseries.items():
@@ -878,38 +1304,65 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     if timeseries.size > 0:
                         print(f"  {roi_name}: shape {timeseries.shape}")
 
-            # Construct mean AMY signal - handle both aggregation methods
-            if subcortical_right_timeseries['AMY'].ndim == 1:
-                # Mean aggregation: AMY is already a 1D array (493,), use directly
-                amy_right = subcortical_right_timeseries['AMY']
-                amy_left = subcortical_left_timeseries['AMY']
-            else:
-                # 'All' aggregation: AMY is 2D (N, 493), need to average
-                amy_right = np.mean(subcortical_right_timeseries['AMY'], axis=0)
-                amy_left = np.mean(subcortical_left_timeseries['AMY'], axis=0)
+            # Extract individual AMY channels with proper labeling (only 'all' aggregation)
+            # Assume 'all' aggregation: AMY contains multiple parcels as 2D arrays
+            amy_right_channels = subcortical_right_timeseries['AMY']
+            amy_left_channels = subcortical_left_timeseries['AMY']
+
+            # Label AMY channels using actual parcel names from atlas (lAMY, mAMY)
+            amy_rh_labels = subcortical_parcel_labels.get('AMY', {}).get('rh', [])
+            amy_lh_labels = subcortical_parcel_labels.get('AMY', {}).get('lh', [])
+
+            for parcel_idx, parcel_name in enumerate(amy_rh_labels):
+                channel_label_map[f'AMY_rh_ch{channel_counter}'] = parcel_name
+                channel_counter += 1
+
+            for parcel_idx, parcel_name in enumerate(amy_lh_labels):
+                channel_label_map[f'AMY_lh_ch{channel_counter}'] = parcel_name
+                channel_counter += 1
 
             if verbose:
-                print(f"Mean AMY signal extraction results:")
-                print(f"  RIGHT: shape {amy_right.shape}")
-                print(f"  LEFT: shape {amy_left.shape}")
+                print(f"Individual AMY channel extraction results:")
+                print(f"  RIGHT channels: shape {amy_right_channels.shape}")
+                print(f"  LEFT channels: shape {amy_left_channels.shape}")
+                print(f"  Total channel mapping: {len(channel_label_map)} channels")
+                print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
 
         # Functional connectivity analysis
         fc_results = None
         is_missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries,
                                                      subcortical_right_timeseries, subcortical_left_timeseries,
-                                                     vmPFC_right, vmPFC_left,
-                                                     amy_right, amy_left]])
+                                                     vmPFC_right_channels, vmPFC_left_channels,
+                                                     amy_right_channels, amy_left_channels,
+                                                     channel_label_map]])
 
         if not is_missing_timeseries:
             if verbose:
                 print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
 
-            fc_timeseries = {
-                'vmPFC_RH': vmPFC_right,
-                'vmPFC_LH': vmPFC_left,
-                'AMY_rh': amy_right,
-                'AMY_lh': amy_left
-            }
+            # Create FC timeseries dictionary with all individual channels and proper labels
+            fc_timeseries = {}
+
+            # Add all vmPFC channels
+            for i, channel_ts in enumerate(vmPFC_right_channels):
+                channel_key = f'vmPFC_RH_ch{i}'
+                fc_timeseries[channel_key] = channel_ts
+
+            vmPFC_rh_count = vmPFC_right_channels.shape[0]
+            for i, channel_ts in enumerate(vmPFC_left_channels):
+                channel_key = f'vmPFC_LH_ch{i + vmPFC_rh_count}'
+                fc_timeseries[channel_key] = channel_ts
+
+            # Add all AMY channels
+            vmPFC_total_count = vmPFC_rh_count + vmPFC_left_channels.shape[0]
+            for i, channel_ts in enumerate(amy_right_channels):
+                channel_key = f'AMY_rh_ch{i + vmPFC_total_count}'
+                fc_timeseries[channel_key] = channel_ts
+
+            amy_rh_count = amy_right_channels.shape[0]
+            for i, channel_ts in enumerate(amy_left_channels):
+                channel_key = f'AMY_lh_ch{i + vmPFC_total_count + amy_rh_count}'
+                fc_timeseries[channel_key] = channel_ts
 
             fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
 
@@ -931,7 +1384,8 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     'fc_labels': fc_labels,
                     'fc_pvalues': fc_pvalues,
                     'connectivity_patterns': connectivity_patterns,
-                    'timeseries_used': fc_timeseries
+                    'timeseries_used': fc_timeseries,
+                    'channel_label_map': channel_label_map
                 }
 
         return {
@@ -948,7 +1402,8 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         'right_hemisphere': cortical_right_timeseries,
                         'left_hemisphere': cortical_left_timeseries,
                         'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries()
-                    }
+                    },
+                    'parcel_labels': cortical_parcel_labels
                 },
                 'subcortical': {
                     'atlas_name': subcortical_atlas.atlas_name,
@@ -959,15 +1414,17 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         'right_hemisphere': subcortical_right_timeseries,
                         'left_hemisphere': subcortical_left_timeseries,
                         'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries()
-                    }
+                    },
+                    'parcel_labels': subcortical_parcel_labels
                 }
             },
             'functional_connectivity': fc_results,
-            'mean_signals': {
-                'vmPFC_right': vmPFC_right,
-                'vmPFC_left': vmPFC_left,
-                'amy_right': amy_right,
-                'amy_left': amy_left
+            'channel_signals': {
+                'vmPFC_right_channels': vmPFC_right_channels,
+                'vmPFC_left_channels': vmPFC_left_channels,
+                'amy_right_channels': amy_right_channels,
+                'amy_left_channels': amy_left_channels,
+                'channel_label_map': channel_label_map
             }
         }
 
@@ -1282,6 +1739,35 @@ def main():
         print(f"\n[WARNING] Insufficient FC data for group comparison")
         print(f"  Need at least 1 subject per group with successful FC analysis")
 
+    # ===== EXPORT FC RESULTS TO CSV =====
+    print(f"\n{'='*80}")
+    print(f"EXPORTING FC RESULTS TO CSV (STATIC FC)")
+    print(f"{'='*80}")
+
+    # Create output directory for FC CSV files using cross-platform path system
+    # This will automatically use the correct base path for macOS, Windows 11, or CentOS
+    fc_output_dir = get_analysis_path('fc_analysis/static_fc')
+    fc_output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {fc_output_dir}")
+    print(f"  (Platform-specific path automatically configured)")
+
+    csv_export_count = 0
+    all_results = {**anhedonic_results, **non_anhedonic_results}
+
+    for subject_id, result in all_results.items():
+        if not result['success']:
+            continue
+
+        fc_data = result.get('functional_connectivity')
+        if fc_data:
+            print(f"\nExporting FC results for {subject_id}...")
+            exported_files = export_fc_results_to_csv(fc_data, subject_id, fc_output_dir)
+            if exported_files:
+                csv_export_count += 1
+
+    print(f"\n✓ Exported FC results for {csv_export_count}/{total_success} subjects")
+    print(f"  Files saved to: {fc_output_dir}")
+
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
     if SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
@@ -1302,8 +1788,7 @@ def main():
                 cortical_data = roi_results['cortical']
                 if cortical_data.get('extraction_successful'):
                     print(f"  Creating cortical ROI timeseries plot for {subject_id}...")
-                    cortical_roi_fig = plot_roi_timeseries_result(cortical_data)
-                    cortical_roi_fig.suptitle(f'Cortical ROI Timeseries - {subject_id}', fontsize=16, fontweight='bold')
+                    cortical_roi_fig = plot_roi_timeseries_result(cortical_data, subject_id=subject_id, atlas_type='Cortical')
                     plots_for_subject += 1
 
             # 2. Plot subcortical ROI timeseries
@@ -1311,29 +1796,24 @@ def main():
                 subcortical_data = roi_results['subcortical']
                 if subcortical_data.get('extraction_successful'):
                     print(f"  Creating subcortical ROI timeseries plot for {subject_id}...")
-                    subcortical_roi_fig = plot_roi_timeseries_result(subcortical_data)
-                    subcortical_roi_fig.suptitle(f'Subcortical ROI Timeseries - {subject_id}', fontsize=16, fontweight='bold')
+                    subcortical_roi_fig = plot_roi_timeseries_result(subcortical_data, subject_id=subject_id, atlas_type='Subcortical')
                     plots_for_subject += 1
 
-            # 3. Plot averaged signals (vmPFC and AMY)
-            mean_signals = result.get('mean_signals')
-            if mean_signals:
-                print(f"  Creating averaged signals plot for {subject_id}...")
-                avg_signals_fig = plot_averaged_signals(mean_signals, subject_id=subject_id)
-                avg_signals_fig.suptitle(f'Averaged ROI Signals - {subject_id}', fontsize=16, fontweight='bold')
-                plots_for_subject += 1
+            # 3. Skip averaged signals plot (no longer applicable with individual channels)
+            # Individual channel signals are preserved - averaging would destroy temporal information
 
-            # 4. Plot functional connectivity analysis results
+            # 4. Plot functional connectivity analysis results (clean version)
             if result.get('functional_connectivity'):
-                print(f"  Creating FC analysis plot for {subject_id}...")
+                print(f"  Creating clean FC analysis plot for {subject_id}...")
                 fc_data = result['functional_connectivity']
 
                 if fc_data.get('fc_matrix') is not None:
-                    fc_fig = plot_fc_results(
+                    fc_fig = plot_fc_results_clean(
                         fc_data['fc_matrix'],
                         fc_data['fc_labels'],
                         fc_data['fc_pvalues'],
-                        fc_data['connectivity_patterns']
+                        fc_data['connectivity_patterns'],
+                        fc_data.get('channel_label_map')
                     )
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
                     plots_for_subject += 1
