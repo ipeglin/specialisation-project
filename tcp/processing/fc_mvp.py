@@ -35,7 +35,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from scipy import stats
+from scipy import signal, stats
 
 from config.paths import get_analysis_path
 from tcp.processing import DataLoader, SubjectManager
@@ -587,6 +587,82 @@ def plot_averaged_signals(mean_signals, subject_id=None):
     return fig
 
 
+def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_envelope, channel_labels, subject_id=None, envelope_type='raw'):
+    """
+    Plot analytic signal with their envelopes (either raw or LP-filtered).
+
+    Args:
+        analytic_signal: Array of analytic (complex-valued) timeseries data (n_channels x n_timepoints)
+        analytic_envelope: Raw envelope from Hilbert transform
+        smoothed_envelope: LP-filtered envelope
+        channel_labels: List of channel label strings
+        subject_id: Optional subject identifier
+        envelope_type: 'raw' for analytic envelope, 'filtered' for LP-filtered envelope
+
+    Returns:
+        matplotlib.figure.Figure: Figure with analytic signal and envelope plots
+    """
+    n_channels = analytic_signal.shape[0]
+    n_cols = 2  # Plot 2 channels per row
+    n_rows = int(np.ceil(n_channels / n_cols))
+
+    # Choose which envelope to plot
+    envelope_to_plot = analytic_envelope if envelope_type == 'raw' else smoothed_envelope
+    envelope_label = 'Raw Envelope' if envelope_type == 'raw' else 'LP-Filtered Envelope'
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 3 * n_rows), sharex=True)
+
+    # Handle single row case
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    for ch_idx in range(n_channels):
+        row = ch_idx // n_cols
+        col = ch_idx % n_cols
+        ax = axes[row, col]
+
+        # Get channel label
+        if ch_idx < len(channel_labels):
+            label = channel_labels[ch_idx]
+        else:
+            label = f'Channel {ch_idx + 1}'
+
+        # Plot real part of analytic signal
+        ax.plot(np.real(analytic_signal[ch_idx]), color='steelblue', linewidth=0.8, alpha=0.7, label='Real(Analytic Signal)')
+
+        # Plot envelope
+        ax.plot(envelope_to_plot[ch_idx], color='crimson', linewidth=1.5, alpha=0.8, label=envelope_label)
+        ax.plot(-envelope_to_plot[ch_idx], color='crimson', linewidth=1.5, alpha=0.8)
+
+        ax.set_ylabel('Amplitude', fontsize=9)
+        ax.set_title(f'{label}', fontsize=10, fontweight='bold', pad=8)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend(loc='upper right', fontsize=8)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    # Hide unused subplots
+    for ch_idx in range(n_channels, n_rows * n_cols):
+        row = ch_idx // n_cols
+        col = ch_idx % n_cols
+        axes[row, col].axis('off')
+
+    # Set x-label on bottom plots
+    for col in range(n_cols):
+        if n_rows * n_cols - n_cols + col < n_channels:
+            axes[-1, col].set_xlabel('Time (volumes)', fontsize=11)
+
+    # Add figure title
+    title_parts = ['Timeseries with', envelope_label]
+    if subject_id:
+        title_parts.append(f'({subject_id})')
+
+    fig.suptitle(' - '.join(title_parts), fontsize=16, fontweight='bold', y=0.995)
+
+    # Use tight_layout with padding
+    plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.99])
+
+    return fig
 
 
 def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
@@ -1355,13 +1431,85 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 print(f"  Total channel mapping: {len(channel_label_map)} channels")
                 print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
 
-        # Functional connectivity analysis
-        fc_results = None
+        # Require all timeseries to perform analyses
         is_missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries,
                                                      subcortical_right_timeseries, subcortical_left_timeseries,
                                                      vmPFC_right_channels, vmPFC_left_channels,
                                                      amy_right_channels, amy_left_channels,
                                                      channel_label_map]])
+
+        # Keeping track of all original channel labels from atlases
+        all_channel_labels = cortical_channel_labels + subcortical_channel_labels
+
+        # Activity analysis
+        activity_results = None
+
+        if not is_missing_timeseries:
+            if verbose:
+                print(f"\n=== ACTIVITY ANALYSIS ===")
+
+            # Create Activity timeseries dictionary using actual parcel labels
+            activity_timeseries = {}
+
+            # Combine all channel timeseries in order
+            all_channels = np.vstack([
+                vmPFC_right_channels,
+                vmPFC_left_channels,
+                amy_right_channels,
+                amy_left_channels
+            ])
+
+            # Map each channel timeseries to its actual parcel label
+            for i, channel_label in enumerate(all_channel_labels):
+                activity_timeseries[channel_label] = all_channels[i]
+
+            # Perform Hilbert transform on each timeseries
+            hilbert_transforms = signal.hilbert(all_channels)
+
+            # Derive Analytic signals z(t) = x(t) + j * H{x(t)}
+            analytic_timeseries = all_channels + 1j * hilbert_transforms
+
+            # Compute envelope of analytic signal
+            analytic_envelope = np.abs(analytic_timeseries) # Activity
+
+            # Apply low-pass filter for smoothing envelope
+
+            # Signal properties
+            TR = 800e-3 # Repetition Time [seconds]
+            sampling_rate = 1 / TR  # 1.25 Hz
+            nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
+
+            # Filter properties
+            filter_order = 2
+            cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
+                                    # Digital filter critical frequencies must be 0 < Wn < 1
+            normalized_cutoff = cutoff_frequency / nyquist_frequency
+            b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
+
+            filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
+            filtered_envelope = np.abs(filtered_timeseries)
+
+            if verbose:
+                print(f"All Channels shape: {all_channels.shape}")
+                print(f"Hilbert Transformed channels shape: {hilbert_transforms.shape}")
+                print(f"Analytic channels shape: {analytic_timeseries.shape}")
+
+            activity_results = {
+                'all_channels': all_channels,
+                'analytic_signal': analytic_timeseries,
+                'hilbert_transforms': hilbert_transforms,
+                'analytic_envelope': analytic_envelope, # Activity
+                'smoothed_envelope': filtered_envelope, # LP-Filtered acitivty
+                'timeseries_used': activity_timeseries,
+                'filtered_timeseries': filtered_timeseries,
+                'filter_used': (b, a),
+                'channel_label_map': channel_label_map,
+                'channel_labels': all_channel_labels
+            }
+
+
+        # Functional connectivity analysis
+        static_fc_results = None
 
         if not is_missing_timeseries:
             if verbose:
@@ -1369,7 +1517,6 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
             # Create FC timeseries dictionary using actual parcel labels
             fc_timeseries = {}
-            all_channel_labels = cortical_channel_labels + subcortical_channel_labels
 
             # Combine all channel timeseries in order
             all_channels = np.vstack([
@@ -1438,6 +1585,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     'parcel_labels': subcortical_parcel_labels
                 }
             },
+            'activity': activity_results,
             'static_functional_connectivity': static_fc_results,
             'channel_signals': {
                 'vmPFC_right_channels': vmPFC_right_channels,
@@ -1845,7 +1993,53 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
             # 3. Skip averaged signals plot (no longer applicable with individual channels)
             # Individual channel signals are preserved - averaging would destroy temporal information
 
-            # 4. Plot static functional connectivity analysis results (clean version)
+            # 4. Plot analytic signal with envelopes (raw and LP-filtered)
+            activity_data = result.get('activity')
+            if activity_data:
+                # Extract required data
+                analytic_signal = activity_data.get('analytic_signal')
+                analytic_envelope = activity_data.get('analytic_envelope')
+                smoothed_envelope = activity_data.get('smoothed_envelope')
+                channel_labels = activity_data.get('channel_labels')
+
+                if analytic_signal is not None and analytic_envelope is not None and smoothed_envelope is not None:
+                    # Plot with raw analytic envelope
+                    print(f"  Creating analytic signal with raw envelope plot for {subject_id}...")
+                    raw_envelope_fig = plot_timeseries_with_envelopes(
+                        analytic_signal,
+                        analytic_envelope,
+                        smoothed_envelope,
+                        channel_labels,
+                        subject_id=subject_id,
+                        envelope_type='raw'
+                    )
+                    plots_for_subject += 1
+
+                    # Save figure if enabled
+                    if save_figures and figures_output_dir:
+                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_raw_envelope.svg'
+                        raw_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                    # Plot with LP-filtered envelope
+                    print(f"  Creating analytic signal with LP-filtered envelope plot for {subject_id}...")
+                    filtered_envelope_fig = plot_timeseries_with_envelopes(
+                        analytic_signal,
+                        analytic_envelope,
+                        smoothed_envelope,
+                        channel_labels,
+                        subject_id=subject_id,
+                        envelope_type='filtered'
+                    )
+                    plots_for_subject += 1
+
+                    # Save figure if enabled
+                    if save_figures and figures_output_dir:
+                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_filtered_envelope.svg'
+                        filtered_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+            # 5. Plot static functional connectivity analysis results (clean version)
             if result.get('static_functional_connectivity'):
                 print(f"  Creating static FC analysis plot for {subject_id}...")
                 static_fc_data = result['static_functional_connectivity']
@@ -1919,7 +2113,7 @@ if __name__ == '__main__':
     # Display configuration
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
     SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
-    SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
+    SAVE_FIGURES = True  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
