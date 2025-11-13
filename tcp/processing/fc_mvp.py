@@ -1458,7 +1458,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         }
 
 
-def main(mask_nonsignificant=False, show_plots=True):
+def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
 
@@ -1790,8 +1790,17 @@ def main(mask_nonsignificant=False, show_plots=True):
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
-    if not show_plots:
-        print(f"\n[INFO] No individual plots created (show_plots set to False)")
+    figures_saved_count = 0
+
+    # Create output directory for saved figures if needed
+    figures_output_dir = None
+    if save_figures and create_plots:
+        figures_output_dir = get_analysis_path('fc_analysis/figures')
+        figures_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[INFO] Figures will be saved to: {figures_output_dir}")
+
+    if not create_plots:
+        print(f"\n[INFO] No individual plots created (create_plots set to False)")
     elif SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
         print(f"\n{'='*80}")
         print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
@@ -1813,6 +1822,12 @@ def main(mask_nonsignificant=False, show_plots=True):
                     cortical_roi_fig = plot_roi_timeseries_result(cortical_data, subject_id=subject_id, atlas_type='Cortical')
                     plots_for_subject += 1
 
+                    # Save figure if enabled
+                    if save_figures and figures_output_dir:
+                        fig_path = figures_output_dir / f'{subject_id}_cortical_timeseries.svg'
+                        cortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
             # 2. Plot subcortical ROI timeseries
             if roi_results.get('subcortical'):
                 subcortical_data = roi_results['subcortical']
@@ -1820,6 +1835,12 @@ def main(mask_nonsignificant=False, show_plots=True):
                     print(f"  Creating subcortical ROI timeseries plot for {subject_id}...")
                     subcortical_roi_fig = plot_roi_timeseries_result(subcortical_data, subject_id=subject_id, atlas_type='Subcortical')
                     plots_for_subject += 1
+
+                    # Save figure if enabled
+                    if save_figures and figures_output_dir:
+                        fig_path = figures_output_dir / f'{subject_id}_subcortical_timeseries.svg'
+                        subcortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
 
             # 3. Skip averaged signals plot (no longer applicable with individual channels)
             # Individual channel signals are preserved - averaging would destroy temporal information
@@ -1841,11 +1862,21 @@ def main(mask_nonsignificant=False, show_plots=True):
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
                     plots_for_subject += 1
 
+                    # Save figure if enabled
+                    if save_figures and figures_output_dir:
+                        fig_path = figures_output_dir / f'{subject_id}_fc_analysis.svg'
+                        fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
             if plots_for_subject > 0:
                 individual_plots_created += 1
                 print(f"  ✓ Created {plots_for_subject} plots for {subject_id}")
 
         print(f"\nCreated plots for {individual_plots_created} subjects")
+
+        # Summary of saved figures
+        if save_figures and figures_saved_count > 0:
+            print(f"✓ Saved {figures_saved_count} figures to: {figures_output_dir}")
     elif total_success > 3:
         print(f"\n[INFO] Skipping individual plots (too many subjects: {total_success})")
         print(f"      Individual plots only shown for ≤3 subjects")
@@ -1886,14 +1917,16 @@ def main(mask_nonsignificant=False, show_plots=True):
 
 if __name__ == '__main__':
     # Display configuration
-    SHOW_PLOTS = True  # Whether to display plots at all
+    CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
+    SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
     # - True: Hide non-significant correlations (masked)
-    MASK_NONSIGNIFICANT = False
+    MASK_NONSIGNIFICANT = True
 
-    main(mask_nonsignificant=MASK_NONSIGNIFICANT, show_plots=SHOW_PLOTS)
+    main(mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES)
 
-    if SHOW_PLOTS:
+    if CREATE_PLOTS and SHOW_PLOTS:
         plt.show()
