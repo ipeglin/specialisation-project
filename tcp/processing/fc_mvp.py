@@ -139,20 +139,20 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     return corr_matrix, roi_labels, p_values
 
 
-def export_fc_results_to_csv(fc_results, subject_id, output_dir):
+def export_static_fc_results_to_csv(static_fc_results, subject_id, output_dir):
     """
     Export STATIC functional connectivity results to CSV files for later analysis.
 
     Creates three CSV files per subject:
-    1. {subject_id}_fc_matrix.csv - Full correlation matrix
-    2. {subject_id}_fc_pvalues.csv - P-values matrix
-    3. {subject_id}_fc_pairwise.csv - Pairwise connections with metadata
+    1. {subject_id}_static_fc_matrix.csv - Full correlation matrix
+    2. {subject_id}_static_fc_pvalues.csv - P-values matrix
+    3. {subject_id}_static_fc_pairwise.csv - Pairwise connections with metadata
 
     NOTE: This exports STATIC FC (whole-session correlations).
     Dynamic FC (time-windowed) is not yet implemented.
 
     Args:
-        fc_results: FC results dictionary from process_subject
+        static_fc_results: Static FC results dictionary from process_subject
         subject_id: Subject identifier
         output_dir: Directory to save CSV files (Path object or string)
 
@@ -162,20 +162,20 @@ def export_fc_results_to_csv(fc_results, subject_id, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not fc_results or 'fc_matrix' not in fc_results:
-        print(f"[WARNING] No FC results to export for {subject_id}")
+    if not static_fc_results or 'static_fc_matrix' not in static_fc_results:
+        print(f"[WARNING] No static FC results to export for {subject_id}")
         return None
 
-    fc_matrix = fc_results['fc_matrix']
-    fc_labels = fc_results['fc_labels']
-    fc_pvalues = fc_results.get('fc_pvalues')
-    connectivity_patterns = fc_results.get('connectivity_patterns', {})
-    channel_label_map = fc_results.get('channel_label_map', {})
+    fc_matrix = static_fc_results['static_fc_matrix']
+    fc_labels = static_fc_results['static_fc_labels']
+    fc_pvalues = static_fc_results.get('static_fc_pvalues')
+    connectivity_patterns = static_fc_results.get('static_connectivity_patterns', {})
+    channel_label_map = static_fc_results.get('channel_label_map', {})
 
     created_files = {}
 
-    # 1. Export FC correlation matrix
-    matrix_file = output_dir / f'{subject_id}_fc_matrix.csv'
+    # 1. Export static FC correlation matrix
+    matrix_file = output_dir / f'{subject_id}_static_fc_matrix.csv'
     with open(matrix_file, 'w', newline='') as f:
         writer = csv.writer(f)
 
@@ -192,7 +192,7 @@ def export_fc_results_to_csv(fc_results, subject_id, output_dir):
 
     # 2. Export p-values matrix (if available)
     if fc_pvalues is not None:
-        pvalues_file = output_dir / f'{subject_id}_fc_pvalues.csv'
+        pvalues_file = output_dir / f'{subject_id}_static_fc_pvalues.csv'
         with open(pvalues_file, 'w', newline='') as f:
             writer = csv.writer(f)
 
@@ -208,7 +208,7 @@ def export_fc_results_to_csv(fc_results, subject_id, output_dir):
         print(f"  Exported p-values to: {pvalues_file}")
 
     # 3. Export pairwise connections with metadata
-    pairwise_file = output_dir / f'{subject_id}_fc_pairwise.csv'
+    pairwise_file = output_dir / f'{subject_id}_static_fc_pairwise.csv'
     with open(pairwise_file, 'w', newline='') as f:
         writer = csv.writer(f)
 
@@ -887,8 +887,8 @@ def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name=
         }
 
         for fc_result in fc_results_list:
-            if fc_result and 'connectivity_patterns' in fc_result:
-                patterns = fc_result['connectivity_patterns']
+            if fc_result and 'static_connectivity_patterns' in fc_result:
+                patterns = fc_result['static_connectivity_patterns']
                 for pattern_type in group_patterns.keys():
                     if pattern_type in patterns:
                         correlations = [v['correlation'] for v in patterns[pattern_type].values()]
@@ -974,8 +974,8 @@ def create_research_summary(fc_results, subject_info=None):
         'results': {}
     }
 
-    if 'connectivity_patterns' in fc_results:
-        patterns = fc_results['connectivity_patterns']
+    if 'static_connectivity_patterns' in fc_results:
+        patterns = fc_results['static_connectivity_patterns']
 
         # Key findings
         summary['results']['key_findings'] = {
@@ -1399,11 +1399,11 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
                     print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
 
-                fc_results = {
-                    'fc_matrix': fc_matrix,
-                    'fc_labels': fc_labels,
-                    'fc_pvalues': fc_pvalues,
-                    'connectivity_patterns': connectivity_patterns,
+                static_fc_results = {
+                    'static_fc_matrix': fc_matrix,
+                    'static_fc_labels': fc_labels,
+                    'static_fc_pvalues': fc_pvalues,
+                    'static_connectivity_patterns': connectivity_patterns,
                     'timeseries_used': fc_timeseries,
                     'channel_label_map': channel_label_map
                 }
@@ -1438,7 +1438,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     'parcel_labels': subcortical_parcel_labels
                 }
             },
-            'functional_connectivity': fc_results,
+            'static_functional_connectivity': static_fc_results,
             'channel_signals': {
                 'vmPFC_right_channels': vmPFC_right_channels,
                 'vmPFC_left_channels': vmPFC_left_channels,
@@ -1721,12 +1721,12 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
     non_anhedonic_fc_results = []
 
     for subject_id, result in anhedonic_results.items():
-        if result['success'] and result.get('functional_connectivity'):
-            anhedonic_fc_results.append(result['functional_connectivity'])
+        if result['success'] and result.get('static_functional_connectivity'):
+            anhedonic_fc_results.append(result['static_functional_connectivity'])
 
     for subject_id, result in non_anhedonic_results.items():
-        if result['success'] and result.get('functional_connectivity'):
-            non_anhedonic_fc_results.append(result['functional_connectivity'])
+        if result['success'] and result.get('static_functional_connectivity'):
+            non_anhedonic_fc_results.append(result['static_functional_connectivity'])
 
     print(f"FC analysis available:")
     print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
@@ -1761,7 +1761,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
 
     # ===== EXPORT FC RESULTS TO CSV =====
     print(f"\n{'='*80}")
-    print(f"EXPORTING FC RESULTS TO CSV (STATIC FC)")
+    print(f"EXPORTING STATIC FC RESULTS TO CSV")
     print(f"{'='*80}")
 
     # Create output directory for FC CSV files using cross-platform path system
@@ -1778,14 +1778,14 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
         if not result['success']:
             continue
 
-        fc_data = result.get('functional_connectivity')
-        if fc_data:
-            print(f"\nExporting FC results for {subject_id}...")
-            exported_files = export_fc_results_to_csv(fc_data, subject_id, fc_output_dir)
+        static_fc_data = result.get('static_functional_connectivity')
+        if static_fc_data:
+            print(f"\nExporting static FC results for {subject_id}...")
+            exported_files = export_static_fc_results_to_csv(static_fc_data, subject_id, fc_output_dir)
             if exported_files:
                 csv_export_count += 1
 
-    print(f"\n✓ Exported FC results for {csv_export_count}/{total_success} subjects")
+    print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
     print(f"  Files saved to: {fc_output_dir}")
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
@@ -1845,18 +1845,18 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
             # 3. Skip averaged signals plot (no longer applicable with individual channels)
             # Individual channel signals are preserved - averaging would destroy temporal information
 
-            # 4. Plot functional connectivity analysis results (clean version)
-            if result.get('functional_connectivity'):
-                print(f"  Creating clean FC analysis plot for {subject_id}...")
-                fc_data = result['functional_connectivity']
+            # 4. Plot static functional connectivity analysis results (clean version)
+            if result.get('static_functional_connectivity'):
+                print(f"  Creating static FC analysis plot for {subject_id}...")
+                static_fc_data = result['static_functional_connectivity']
 
-                if fc_data.get('fc_matrix') is not None:
+                if static_fc_data.get('static_fc_matrix') is not None:
                     fc_fig = plot_fc_results_clean(
-                        fc_data['fc_matrix'],
-                        fc_data['fc_labels'],
-                        fc_data['fc_pvalues'],
-                        fc_data['connectivity_patterns'],
-                        fc_data.get('channel_label_map'),
+                        static_fc_data['static_fc_matrix'],
+                        static_fc_data['static_fc_labels'],
+                        static_fc_data['static_fc_pvalues'],
+                        static_fc_data['static_connectivity_patterns'],
+                        static_fc_data.get('channel_label_map'),
                         mask_nonsignificant=mask_nonsignificant
                     )
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
@@ -1864,7 +1864,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
 
                     # Save figure if enabled
                     if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_fc_analysis.svg'
+                        fig_path = figures_output_dir / f'{subject_id}_static_fc_analysis.svg'
                         fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
 
