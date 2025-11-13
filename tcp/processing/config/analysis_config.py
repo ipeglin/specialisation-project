@@ -115,15 +115,16 @@ class ProcessingConfig:
     This class aggregates all configuration objects needed for the
     functional connectivity analysis pipeline.
 
+    Note: Signal processing parameters (TR, filter settings) are dataset-specific
+    constants and are hardcoded in the analysis functions rather than configured here.
+
     Attributes:
         atlas_config: Configuration for atlases and ROI selection
-        signal_processing: Configuration for signal processing parameters
         output_config: Configuration for output paths and formats
         plotting_config: Configuration for plotting behavior
         verbose: Whether to print verbose output during processing
     """
     atlas_config: AtlasConfig
-    signal_processing: SignalProcessingConfig
     output_config: OutputConfig
     plotting_config: PlottingConfig
     verbose: bool = True
@@ -146,12 +147,6 @@ class ProcessingConfig:
             subcortical_rois=['AMY']
         )
 
-        signal_processing = SignalProcessingConfig(
-            tr_seconds=0.8,
-            filter_order=2,
-            cutoff_frequency_hz=0.2
-        )
-
         output_config = OutputConfig(
             base_output_dir=output_base,
             save_figures=False
@@ -165,7 +160,6 @@ class ProcessingConfig:
 
         return cls(
             atlas_config=atlas_config,
-            signal_processing=signal_processing,
             output_config=output_config,
             plotting_config=plotting_config,
             verbose=True

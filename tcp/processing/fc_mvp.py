@@ -602,7 +602,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -1103,13 +1103,14 @@ def process_subject(subject_id: str, context: ProcessingContext):
             analytic_envelope = np.abs(analytic_timeseries) # Activity
 
             # Apply low-pass filter for smoothing envelope
-            # Get signal processing parameters from config
-            sig_config = context.config.signal_processing
+            # Dataset-specific signal properties (hardcoded - specific to this fMRI dataset)
+            TR = 0.8  # Repetition Time [seconds] - fixed for this dataset
+            sampling_rate = 1 / TR  # 1.25 Hz
+            nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
 
-            filter_order = sig_config.filter_order
-            cutoff_frequency = sig_config.cutoff_frequency_hz
-            nyquist_frequency = sig_config.nyquist_frequency_hz
-
+            # Filter properties
+            filter_order = 2
+            cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate [Hz]
             # Digital filter critical frequencies must be 0 < Wn < 1
             normalized_cutoff = cutoff_frequency / nyquist_frequency
             b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
@@ -1683,7 +1684,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
                 static_fc_data = result['static_functional_connectivity']
 
                 if static_fc_data.get('static_fc_matrix') is not None:
-                    fc_fig = plot_fc_results_clean(
+                    fc_fig = plot_fc_results(
                         static_fc_data['static_fc_matrix'],
                         static_fc_data['static_fc_labels'],
                         static_fc_data['static_fc_pvalues'],
