@@ -45,6 +45,12 @@ from tcp.processing.roi import (
     ROIExtractionService,
     SubCorticalAtlasLookup,
 )
+from tcp.processing.services import (
+    ActivityAnalysisService,
+    DataLoadingService,
+    FCAnalysisService,
+    HemisphereExtractionService,
+)
 
 
 def is_actual_file(file_path: Path) -> bool:
@@ -733,28 +739,16 @@ def process_subject(subject_id: str, context: ProcessingContext):
     Process a single subject for ROI extraction and functional connectivity analysis.
 
     This function orchestrates the entire processing pipeline for a single subject,
-    using dependency injection through the ProcessingContext.
+    using dependency injection through the ProcessingContext and service classes.
 
     Args:
         subject_id: Subject identifier
-        context: ProcessingContext containing all dependencies (manager, loader,
-                extractors, config)
+        context: ProcessingContext containing all dependencies
 
     Returns:
         dict: Subject analysis results
     """
-    # Unpack context for convenience
-    manager = context.manager
-    loader = context.loader
-    cortical_roi_extractor = context.cortical_extractor
-    subcortical_roi_extractor = context.subcortical_extractor
-    cortical_ROIs = context.cortical_rois
-    subcortical_ROIs = context.subcortical_rois
     verbose = context.verbose
-
-    # Get atlases from extractors
-    cortical_atlas = cortical_roi_extractor.atlas_lookup
-    subcortical_atlas = subcortical_roi_extractor.atlas_lookup
 
     if verbose:
         print(f"\n{'='*60}")
@@ -762,8 +756,8 @@ def process_subject(subject_id: str, context: ProcessingContext):
         print(f"{'='*60}")
 
     try:
-        # Get subject files
-        hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
+        # 1. Get subject file path
+        hammer_files = context.manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
         if not hammer_files:
             return {
                 'subject_id': subject_id,
@@ -771,463 +765,131 @@ def process_subject(subject_id: str, context: ProcessingContext):
                 'success': False
             }
 
-        subject_file = loader.resolve_file_path(hammer_files[0])
+        subject_file = context.loader.resolve_file_path(hammer_files[0])
 
-        # Read data from .h5 file
-        data = None
-        with h5py.File(subject_file, 'r') as file:
-            a_group_key = list(file.keys())[0]
-            data = np.asarray(file[a_group_key])
+        # 2. Load and segment timeseries data
+        data_service = DataLoadingService()
+        segmented_data = data_service.load_and_segment_timeseries(subject_file, verbose=verbose)
+
+        # 3. Extract hemisphere-specific ROI timeseries with labels
+        hemisphere_service = HemisphereExtractionService()
+
+        # Cortical extraction
+        if verbose:
+            print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
+
+        cortical_R_channels, cortical_L_channels, cortical_R_labels, cortical_L_labels = \
+            hemisphere_service.extract_with_labels(
+                segmented_data['cortical'],  # Pass full 400-parcel cortical timeseries
+                context.cortical_extractor,
+                context.cortical_extractor.atlas_lookup,
+                context.cortical_rois,
+                verbose=verbose
+            )
+
+        cortical_channels = np.vstack([cortical_R_channels, cortical_L_channels])
+        cortical_labels = cortical_R_labels + cortical_L_labels
 
         if verbose:
-            print(f"Found data with shape: {data.shape}")
+            print(f"Individual cortical ({', '.join(context.cortical_rois)}) channel extraction results:")
+            print(f"  RIGHT channels: shape {cortical_R_channels.shape}")
+            print(f"  LEFT channels: shape {cortical_L_channels.shape}")
+            print(f"  Cortical channel labels: {len(cortical_labels)} channels")
 
-        # Segment into timeseries groups
-        cortical_timeseries = data[:400]
-        cortical_R, cortical_L = cortical_timeseries[:200], cortical_timeseries[200:]
-        cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R)))
-        subcortical_timeseries = data[400:432]
-        cerebellum_timeseries = data[432:]
+        # Subcortical extraction
+        if verbose:
+            print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
+
+        subcortical_R_channels, subcortical_L_channels, subcortical_R_labels, subcortical_L_labels = \
+            hemisphere_service.extract_with_labels(
+                segmented_data['subcortical'],  # Pass full 32-parcel subcortical timeseries
+                context.subcortical_extractor,
+                context.subcortical_extractor.atlas_lookup,
+                context.subcortical_rois,
+                verbose=verbose
+            )
+
+        subcortical_channels = np.vstack([subcortical_R_channels, subcortical_L_channels])
+        subcortical_labels = subcortical_R_labels + subcortical_L_labels
 
         if verbose:
-            print("Found parcels:")
-            print(f"Cortical: {cortical_timeseries.shape}")
-            print(f"\tLEFT Hemisphere: {cortical_L.shape}")
-            print(f"\tRIGHT Hemisphere: {cortical_R.shape}")
-            print(f"\tHomotopic Pairs: {cortical_homotopic_pairs.shape}")
-            print(f"Subcortical: {subcortical_timeseries.shape}")
-            print(f"Cerebellum: {cerebellum_timeseries.shape}")
+            print(f"Individual subcortical ({', '.join(context.subcortical_rois)}) channel extraction results:")
+            print(f"  RIGHT channels: shape {subcortical_R_channels.shape}")
+            print(f"  LEFT channels: shape {subcortical_L_channels.shape}")
+            print(f"  Subcortical channel labels: {len(subcortical_labels)} channels")
+            print(f"  Total channel mapping: {len(cortical_labels) + len(subcortical_labels)} channels")
 
-        # ROI Validation and Extraction
-        cortical_validation_result = cortical_roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
-        subcortical_validation_result = subcortical_roi_extractor.validate_roi_coverage(subcortical_timeseries, subcortical_ROIs)
+        # 4. Combine all channels
+        all_channels = np.vstack([cortical_channels, subcortical_channels])
+        all_labels = cortical_labels + subcortical_labels
 
-        if verbose:
-            print(f"\nCORTICAL ROI Validation Results:")
-            print(f"  Valid ROIs: {cortical_validation_result['valid_rois']}")
-            print(f"  Invalid ROIs: {cortical_validation_result['invalid_rois']}")
-
-            print(f"\nSUBCORTICAL ROI Validation Results:")
-            print(f"  Valid ROIs: {subcortical_validation_result['valid_rois']}")
-            print(f"  Invalid ROIs: {subcortical_validation_result['invalid_rois']}")
-
-        # Extract ROI timeseries
-        cortical_roi_timeseries = None
-        if cortical_validation_result['valid_rois'] and not cortical_validation_result['coverage_issues']:
-            cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
-                cortical_timeseries,
-                cortical_ROIs,
-                aggregation_method='all'
-            )
-
-        subcortical_roi_timeseries = None
-        if subcortical_validation_result['valid_rois'] and not subcortical_validation_result['coverage_issues']:
-            subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
-                subcortical_timeseries,
-                subcortical_ROIs,
-                aggregation_method='all'
-            )
-
-        # Hemisphere-specific extraction
-        cortical_right_timeseries = None
-        cortical_left_timeseries = None
-        subcortical_right_timeseries = None
-        subcortical_left_timeseries = None
-        # individual channel timeseries with label mapping
-        vmPFC_right_channels = None
-        vmPFC_left_channels = None
-        amy_right_channels = None
-        amy_left_channels = None
-        channel_label_map = None
-
-        cortical_valid_rois = cortical_validation_result['valid_rois']
-        cortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
-
-        if cortical_roi_extractor.supports_hemisphere_queries() and cortical_valid_rois:
-            if verbose:
-                print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
-
-            cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                cortical_timeseries,
-                cortical_valid_rois,
-                hemisphere='RH',
-                aggregation_method='all'
-            )
-
-            cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                cortical_timeseries,
-                cortical_valid_rois,
-                hemisphere='LH',
-                aggregation_method='all'
-            )
-
-            # Create parcel labels for each ROI and hemisphere
-            for roi_name in cortical_valid_rois:
-                if roi_name not in cortical_parcel_labels:
-                    cortical_parcel_labels[roi_name] = {'RH': [], 'LH': []}
-
-                # Right hemisphere labels - get actual parcel names with network info
-                if roi_name in cortical_right_timeseries:
-                    rh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='RH')
-                    rh_indices = rh_indices_dict.get(roi_name, [])
-                    rh_parcel_labels = []
-
-                    for idx in rh_indices:
-                        # Get full parcel name (e.g., '17networks_RH_DefaultA_PFCm_1')
-                        full_name = cortical_atlas.get_parcel_name(idx)
-                        if full_name:
-                            # Extract network and create compact label
-                            # Format: 17networks_{hemi}_{network}_{region}_{subarea}
-                            parts = full_name.split('_')
-                            if len(parts) >= 4:
-                                # parts: ['17networks', 'RH', 'DefaultA', 'PFCm', '1']
-                                hemi = parts[1]
-                                network = parts[2]
-                                region = parts[3]
-                                subarea = parts[4] if len(parts) > 4 else ''
-                                # Create label: PFCm_RH_DefaultA_p1 (includes network, p = parcel)
-                                label = f'{region}_{hemi}_{network}'
-                                if subarea:
-                                    label += f'_p{subarea}'
-                                rh_parcel_labels.append(label)
-                            else:
-                                # Fallback if parsing fails
-                                rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
-                        else:
-                            rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
-
-                    cortical_parcel_labels[roi_name]['RH'] = rh_parcel_labels
-
-                # Left hemisphere labels
-                if roi_name in cortical_left_timeseries:
-                    lh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='LH')
-                    lh_indices = lh_indices_dict.get(roi_name, [])
-                    lh_parcel_labels = []
-
-                    for idx in lh_indices:
-                        full_name = cortical_atlas.get_parcel_name(idx)
-                        if full_name:
-                            parts = full_name.split('_')
-                            if len(parts) >= 4:
-                                hemi = parts[1]
-                                network = parts[2]
-                                region = parts[3]
-                                subarea = parts[4] if len(parts) > 4 else ''
-                                label = f'{region}_{hemi}_{network}'
-                                if subarea:
-                                    label += f'_p{subarea}'
-                                lh_parcel_labels.append(label)
-                            else:
-                                lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
-                        else:
-                            lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
-
-                    cortical_parcel_labels[roi_name]['LH'] = lh_parcel_labels
-
-            if verbose:
-                print(f"RIGHT hemisphere extraction results:")
-                for roi_name, timeseries in cortical_right_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-                print(f"LEFT hemisphere extraction results:")
-                for roi_name, timeseries in cortical_left_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-            # Extract individual vmPFC channels with proper labeling (only 'all' aggregation)
-            # Assume 'all' aggregation: each ROI contains multiple parcels as 2D arrays
-            vmPFC_right_channels = np.vstack([cortical_right_timeseries['PFCm'],
-                                            cortical_right_timeseries['PFCv']])
-            vmPFC_left_channels = np.vstack([cortical_left_timeseries['PFCm'],
-                                           cortical_left_timeseries['PFCv']])
-
-            # Create channel labels directly from parcel labels (no need for mapping)
-            # Build list of all channel labels in the order they appear in vmPFC_right/left_channels
-            cortical_channel_labels = []
-
-            # Right hemisphere labels (PFCm first, then PFCv)
-            for roi_name in ['PFCm', 'PFCv']:
-                rh_labels = cortical_parcel_labels.get(roi_name, {}).get('RH', [])
-                cortical_channel_labels.extend(rh_labels)
-
-            # Left hemisphere labels (PFCm first, then PFCv)
-            for roi_name in ['PFCm', 'PFCv']:
-                lh_labels = cortical_parcel_labels.get(roi_name, {}).get('LH', [])
-                cortical_channel_labels.extend(lh_labels)
-
-            # Channel label map is now identity (label -> label) for display purposes
-            channel_label_map = {label: label for label in cortical_channel_labels}
-
-            if verbose:
-                print(f"Individual cortical (PFCm + PFCv) channel extraction results:")
-                print(f"  RIGHT channels: shape {vmPFC_right_channels.shape}")
-                print(f"  LEFT channels: shape {vmPFC_left_channels.shape}")
-                print(f"  Cortical channel labels: {len(cortical_channel_labels)} channels")
-
-        subcortical_valid_rois = subcortical_validation_result['valid_rois']
-        subcortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
-
-        if subcortical_roi_extractor.supports_hemisphere_queries() and subcortical_valid_rois:
-            if verbose:
-                print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
-
-            subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                subcortical_timeseries,
-                subcortical_valid_rois,
-                hemisphere='rh',
-                aggregation_method='all'
-            )
-
-            subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                subcortical_timeseries,
-                subcortical_valid_rois,
-                hemisphere='lh',
-                aggregation_method='all'
-            )
-
-            # Create parcel labels for each ROI and hemisphere
-            # For subcortical, get actual parcel names from atlas (e.g., lAMY-rh, mAMY-rh)
-            for roi_name in subcortical_valid_rois:
-                if roi_name not in subcortical_parcel_labels:
-                    subcortical_parcel_labels[roi_name] = {'rh': [], 'lh': []}
-
-                # Right hemisphere labels - get actual subdivision names from atlas
-                if roi_name in subcortical_right_timeseries:
-                    # Get parcel indices for this ROI in right hemisphere
-                    rh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='rh')
-                    rh_indices = rh_indices_dict.get(roi_name, [])
-                    rh_parcel_names = []
-
-                    for idx in rh_indices:
-                        # Get the actual parcel name from the atlas (e.g., 'lAMY-rh', 'mAMY-rh')
-                        parcel_name = subcortical_atlas.get_parcel_name(idx)
-                        if parcel_name:
-                            rh_parcel_names.append(parcel_name)
-                        else:
-                            # Fallback if parcel name not available
-                            rh_parcel_names.append(f'{roi_name}_rh_parcel{len(rh_parcel_names)+1}')
-
-                    subcortical_parcel_labels[roi_name]['rh'] = rh_parcel_names
-
-                # Left hemisphere labels
-                if roi_name in subcortical_left_timeseries:
-                    lh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='lh')
-                    lh_indices = lh_indices_dict.get(roi_name, [])
-                    lh_parcel_names = []
-
-                    for idx in lh_indices:
-                        parcel_name = subcortical_atlas.get_parcel_name(idx)
-                        if parcel_name:
-                            lh_parcel_names.append(parcel_name)
-                        else:
-                            lh_parcel_names.append(f'{roi_name}_lh_parcel{len(lh_parcel_names)+1}')
-
-                    subcortical_parcel_labels[roi_name]['lh'] = lh_parcel_names
-
-            if verbose:
-                print(f"RIGHT hemisphere extraction results:")
-                for roi_name, timeseries in subcortical_right_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-                print(f"LEFT hemisphere extraction results:")
-                for roi_name, timeseries in subcortical_left_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-            # Extract individual AMY channels with proper labeling (only 'all' aggregation)
-            # Assume 'all' aggregation: AMY contains multiple parcels as 2D arrays
-            amy_right_channels = subcortical_right_timeseries['AMY']
-            amy_left_channels = subcortical_left_timeseries['AMY']
-
-            # Build subcortical channel labels using actual parcel names from atlas (lAMY, mAMY)
-            subcortical_channel_labels = []
-            amy_rh_labels = subcortical_parcel_labels.get('AMY', {}).get('rh', [])
-            amy_lh_labels = subcortical_parcel_labels.get('AMY', {}).get('lh', [])
-
-            subcortical_channel_labels.extend(amy_rh_labels)
-            subcortical_channel_labels.extend(amy_lh_labels)
-
-            # Add subcortical labels to channel_label_map (identity mapping)
-            for label in subcortical_channel_labels:
-                channel_label_map[label] = label
-
-            if verbose:
-                print(f"Individual subcortical (AMY) channel extraction results:")
-                print(f"  RIGHT channels: shape {amy_right_channels.shape}")
-                print(f"  LEFT channels: shape {amy_left_channels.shape}")
-                print(f"  Subcortical channel labels: {len(subcortical_channel_labels)} channels")
-                print(f"  Total channel mapping: {len(channel_label_map)} channels")
-                print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
-
-        # Require all timeseries to perform analyses
-        is_missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries,
-                                                     subcortical_right_timeseries, subcortical_left_timeseries,
-                                                     vmPFC_right_channels, vmPFC_left_channels,
-                                                     amy_right_channels, amy_left_channels,
-                                                     channel_label_map]])
-
-        # Keeping track of all original channel labels from atlases
-        all_channel_labels = cortical_channel_labels + subcortical_channel_labels
-
-        # Activity analysis
+        # 5. Activity analysis (Hilbert transform, envelopes)
         activity_results = None
+        if verbose:
+            print(f"\n=== ACTIVITY ANALYSIS ===")
 
-        if not is_missing_timeseries:
-            if verbose:
-                print(f"\n=== ACTIVITY ANALYSIS ===")
+        activity_service = ActivityAnalysisService()
+        activity_results = activity_service.compute_envelope_analysis(
+            all_channels,
+            all_labels,
+            verbose=verbose
+        )
 
-            # Create Activity timeseries dictionary using actual parcel labels
-            activity_timeseries = {}
-
-            # Combine all channel timeseries in order
-            all_channels = np.vstack([
-                vmPFC_right_channels,
-                vmPFC_left_channels,
-                amy_right_channels,
-                amy_left_channels
-            ])
-
-            # Map each channel timeseries to its actual parcel label
-            for i, channel_label in enumerate(all_channel_labels):
-                activity_timeseries[channel_label] = all_channels[i]
-
-            # Perform Hilbert transform on each timeseries
-            hilbert_transforms = signal.hilbert(all_channels)
-
-            # Derive Analytic signals z(t) = x(t) + j * H{x(t)}
-            analytic_timeseries = all_channels + 1j * hilbert_transforms
-
-            # Compute envelope of analytic signal
-            analytic_envelope = np.abs(analytic_timeseries) # Activity
-
-            # Apply low-pass filter for smoothing envelope
-            # Dataset-specific signal properties (hardcoded - specific to this fMRI dataset)
-            TR = 0.8  # Repetition Time [seconds] - fixed for this dataset
-            sampling_rate = 1 / TR  # 1.25 Hz
-            nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
-
-            # Filter properties
-            filter_order = 2
-            cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate [Hz]
-            # Digital filter critical frequencies must be 0 < Wn < 1
-            normalized_cutoff = cutoff_frequency / nyquist_frequency
-            b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
-
-            filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
-            filtered_envelope = np.abs(filtered_timeseries)
-
-            if verbose:
-                print(f"All Channels shape: {all_channels.shape}")
-                print(f"Hilbert Transformed channels shape: {hilbert_transforms.shape}")
-                print(f"Analytic channels shape: {analytic_timeseries.shape}")
-
-            activity_results = {
-                'all_channels': all_channels,
-                'analytic_signal': analytic_timeseries,
-                'hilbert_transforms': hilbert_transforms,
-                'analytic_envelope': analytic_envelope, # Activity
-                'smoothed_envelope': filtered_envelope, # LP-Filtered acitivty
-                'timeseries_used': activity_timeseries,
-                'filtered_timeseries': filtered_timeseries,
-                'filter_used': (b, a),
-                'channel_label_map': channel_label_map,
-                'channel_labels': all_channel_labels
-            }
-
-
-        # Functional connectivity analysis
+        # 6. Static FC analysis
         static_fc_results = None
+        if verbose:
+            print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
 
-        if not is_missing_timeseries:
-            if verbose:
-                print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
+        fc_service = FCAnalysisService()
+        static_fc_results = fc_service.compute_static_fc(
+            all_channels,
+            all_labels,
+            verbose=verbose
+        )
 
-            # Create FC timeseries dictionary using actual parcel labels
-            fc_timeseries = {}
-
-            # Combine all channel timeseries in order
-            all_channels = np.vstack([
-                vmPFC_right_channels,
-                vmPFC_left_channels,
-                amy_right_channels,
-                amy_left_channels
-            ])
-
-            # Map each channel timeseries to its actual parcel label
-            for i, channel_label in enumerate(all_channel_labels):
-                fc_timeseries[channel_label] = all_channels[i]
-
-            fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
-
-            if fc_matrix is not None:
-                if verbose:
-                    print(f"FC Matrix shape: {fc_matrix.shape}")
-                    print(f"ROI labels (alphabetical): {sorted(fc_labels)}")
-
-                connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
-                print(f"Interhemispheric connections (ALL): {connectivity_patterns['interhemispheric'].keys()}")
-
-                if verbose:
-                    print(f"\nConnectivity Pattern Analysis:")
-                    print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
-                    print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
-                    print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
-
-                static_fc_results = {
-                    'static_fc_matrix': fc_matrix,
-                    'static_fc_labels': fc_labels,
-                    'static_fc_pvalues': fc_pvalues,
-                    'static_connectivity_patterns': connectivity_patterns,
-                    'timeseries_used': fc_timeseries,
-                    'channel_label_map': channel_label_map
-                }
-
+        # 7. Package results
         return {
             'subject_id': subject_id,
             'success': True,
-            'data_shape': data.shape,
             'roi_extraction_results': {
                 'cortical': {
-                    'atlas_name': cortical_atlas.atlas_name,
-                    'roi_timeseries': cortical_roi_timeseries,
-                    'requested_rois': cortical_ROIs,
-                    'extraction_successful': cortical_roi_timeseries is not None,
+                    'atlas_name': context.cortical_extractor.atlas_lookup.atlas_name,
+                    'roi_timeseries': segmented_data['cortical'],
+                    'requested_rois': context.cortical_rois,
+                    'extraction_successful': True,
                     'hemisphere_specific': {
-                        'right_hemisphere': cortical_right_timeseries,
-                        'left_hemisphere': cortical_left_timeseries,
-                        'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries()
+                        'right': cortical_R_channels,
+                        'left': cortical_L_channels
                     },
-                    'parcel_labels': cortical_parcel_labels
+                    'parcel_labels': {
+                        'right': cortical_R_labels,
+                        'left': cortical_L_labels
+                    }
                 },
                 'subcortical': {
-                    'atlas_name': subcortical_atlas.atlas_name,
-                    'roi_timeseries': subcortical_roi_timeseries,
-                    'requested_rois': subcortical_ROIs,
-                    'extraction_successful': subcortical_roi_timeseries is not None,
+                    'atlas_name': context.subcortical_extractor.atlas_lookup.atlas_name,
+                    'roi_timeseries': segmented_data['subcortical'],
+                    'requested_rois': context.subcortical_rois,
+                    'extraction_successful': True,
                     'hemisphere_specific': {
-                        'right_hemisphere': subcortical_right_timeseries,
-                        'left_hemisphere': subcortical_left_timeseries,
-                        'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries()
+                        'right': subcortical_R_channels,
+                        'left': subcortical_L_channels
                     },
-                    'parcel_labels': subcortical_parcel_labels
+                    'parcel_labels': {
+                        'right': subcortical_R_labels,
+                        'left': subcortical_L_labels
+                    }
                 }
             },
             'activity': activity_results,
             'static_functional_connectivity': static_fc_results,
             'channel_signals': {
-                'vmPFC_right_channels': vmPFC_right_channels,
-                'vmPFC_left_channels': vmPFC_left_channels,
-                'amy_right_channels': amy_right_channels,
-                'amy_left_channels': amy_left_channels,
-                'channel_label_map': channel_label_map
+                'all_channels': all_channels,
+                'all_labels': all_labels
             }
         }
 
     except Exception as e:
-        if verbose:
-            print(f"[ERROR] Failed to process subject {subject_id}: {str(e)}")
         return {
             'subject_id': subject_id,
             'error': str(e),
@@ -1750,7 +1412,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
 
 if __name__ == '__main__':
     # Display configuration
-    CREATE_PLOTS = False  # Whether to create plots (required for both displaying and saving)
+    CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
     SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
     SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 

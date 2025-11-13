@@ -19,7 +19,7 @@ class HemisphereExtractionService:
 
     def extract_with_labels(
         self,
-        timeseries_dict: Dict[str, np.ndarray],
+        full_timeseries: np.ndarray,
         roi_extractor,
         atlas,
         rois: List[str],
@@ -31,7 +31,8 @@ class HemisphereExtractionService:
         the duplication between cortical and subcortical extraction.
 
         Args:
-            timeseries_dict: Dictionary with 'right' and 'left' hemisphere timeseries
+            full_timeseries: Full timeseries array (all parcels x timepoints)
+                           For cortical: 400 parcels, for subcortical: 32 parcels
             roi_extractor: ROI extraction service instance
             atlas: Atlas lookup instance (cortical or subcortical)
             rois: List of ROI names to extract
@@ -47,19 +48,19 @@ class HemisphereExtractionService:
         Raises:
             ValueError: If ROI validation fails
         """
-        # Validate ROIs
+        # Validate ROIs using full timeseries
         validation_result = roi_extractor.validate_roi_coverage(
-            timeseries_dict['right'],
+            full_timeseries,
             rois
         )
 
-        if not validation_result['all_valid']:
+        if validation_result['invalid_rois']:
             invalid = validation_result['invalid_rois']
             raise ValueError(f"Invalid ROIs: {invalid}")
 
-        # Extract right hemisphere
+        # Extract right hemisphere from full timeseries
         right_timeseries, right_labels = self._extract_hemisphere(
-            timeseries_dict['right'],
+            full_timeseries,
             roi_extractor,
             atlas,
             rois,
@@ -67,9 +68,9 @@ class HemisphereExtractionService:
             verbose=verbose
         )
 
-        # Extract left hemisphere
+        # Extract left hemisphere from full timeseries
         left_timeseries, left_labels = self._extract_hemisphere(
-            timeseries_dict['left'],
+            full_timeseries,
             roi_extractor,
             atlas,
             rois,
@@ -101,18 +102,18 @@ class HemisphereExtractionService:
         Returns:
             Tuple of (channel_timeseries, channel_labels)
         """
-        # Get hemisphere-specific extraction method
+        # Determine hemisphere keys based on atlas type
+        # Cortical atlases use 'RH'/'LH', subcortical use 'rh'/'lh'
+        atlas_name = atlas.atlas_name if hasattr(atlas, 'atlas_name') else ''
+        is_subcortical = 'subcortex' in atlas_name.lower() or 'tian' in atlas_name.lower()
+
         if hemisphere == 'RH':
-            extraction_method = roi_extractor.extract_roi_timeseries_by_hemisphere
-            hemisphere_key = 'RH'
-            atlas_hemi_key = 'RH' if hasattr(atlas, 'get_roi_indices_by_hemisphere') else 'rh'
-        else:
-            extraction_method = roi_extractor.extract_roi_timeseries_by_hemisphere
-            hemisphere_key = 'LH'
-            atlas_hemi_key = 'LH' if hasattr(atlas, 'get_roi_indices_by_hemisphere') else 'lh'
+            hemisphere_key = 'rh' if is_subcortical else 'RH'
+        else:  # LH
+            hemisphere_key = 'lh' if is_subcortical else 'LH'
 
         # Extract timeseries
-        extracted = extraction_method(timeseries, rois, hemisphere_key)
+        extracted = roi_extractor.extract_roi_timeseries_by_hemisphere(timeseries, rois, hemisphere_key)
 
         if verbose:
             print(f"{hemisphere} hemisphere extraction results:")
@@ -123,8 +124,8 @@ class HemisphereExtractionService:
         # Build parcel labels
         parcel_labels = {}
         for roi_name in rois:
-            roi_indices_dict = atlas.get_roi_indices_by_hemisphere(roi_name)
-            hemisphere_indices = roi_indices_dict.get(atlas_hemi_key, [])
+            roi_indices_dict = atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere_key)
+            hemisphere_indices = roi_indices_dict.get(roi_name, [])
 
             roi_parcel_labels = []
             for idx in hemisphere_indices:
@@ -143,7 +144,7 @@ class HemisphereExtractionService:
                             label = f"{roi_name}_{hemisphere_key}_{network}"
                     else:
                         # Fallback for simpler naming (subcortical)
-                        label = f"{parcel_info}-{atlas_hemi_key}"
+                        label = f"{parcel_info}-{hemisphere_key}"
 
                     roi_parcel_labels.append(label)
 
