@@ -601,7 +601,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -624,14 +624,27 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     if channel_label_map:
         display_labels = [channel_label_map.get(label, label) for label in roi_labels]
 
-    # Create mask for diagonal (autocorrelation always = 1, not interesting)
-    mask_diagonal = np.eye(corr_matrix.shape[0], dtype=bool)
+    # Create mask
+    # Start with no masking
+    mask_combined = None
+
+    if mask_diagonal:
+        # Mask the diagonal
+        mask_combined = np.eye(corr_matrix.shape[0], dtype=bool)
 
     # Optionally mask non-significant correlations
-    mask_combined = mask_diagonal.copy()
     if mask_nonsignificant and p_values is not None:
-        # Mask both diagonal and non-significant correlations
-        mask_combined = mask_diagonal | (p_values >= alpha)
+        # Create non-significant mask, but exclude the diagonal from this check
+        nonsig_mask = p_values >= alpha
+        # Ensure diagonal is NOT masked by the nonsignificant filter (only by mask_diagonal flag)
+        np.fill_diagonal(nonsig_mask, False)
+
+        if mask_combined is not None:
+            # Combine diagonal mask with non-significant mask
+            mask_combined = mask_combined | nonsig_mask
+        else:
+            # Only mask non-significant correlations
+            mask_combined = nonsig_mask
 
     # Display correlations with appropriate masking
     # Remove annotations (annot=False) for cleaner visualization with large matrices
@@ -1324,7 +1337,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         }
 
 
-def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
 
@@ -1769,6 +1782,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
                         static_fc_data['static_fc_pvalues'],
                         static_fc_data['static_connectivity_patterns'],
                         static_fc_data.get('channel_label_map'),
+                        mask_diagonal=mask_diagonal,
                         mask_nonsignificant=mask_nonsignificant
                     )
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
@@ -1836,9 +1850,10 @@ if __name__ == '__main__':
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
     # - True: Hide non-significant correlations (masked)
-    MASK_NONSIGNIFICANT = True
+    MASK_NONSIGNIFICANT = False
+    MASK_DIAGONAL = False
 
-    main(mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES)
+    main(mask_diagonal=MASK_DIAGONAL, mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES)
 
     if CREATE_PLOTS and SHOW_PLOTS:
         plt.show()
