@@ -523,70 +523,6 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
         return fig
 
 
-def plot_averaged_signals(mean_signals, subject_id=None):
-    """
-    Create visualization for averaged ROI signals (vmPFC and AMY).
-
-    Args:
-        mean_signals: Dictionary with keys 'vmPFC_right', 'vmPFC_left', 'amy_right', 'amy_left'
-        subject_id: Optional subject identifier for title
-
-    Returns:
-        matplotlib.figure.Figure: Figure with averaged signal plots
-    """
-    vmPFC_right = mean_signals.get('vmPFC_right')
-    vmPFC_left = mean_signals.get('vmPFC_left')
-    amy_right = mean_signals.get('amy_right')
-    amy_left = mean_signals.get('amy_left')
-
-    # Check if we have any data
-    available_signals = [s for s in [vmPFC_right, vmPFC_left, amy_right, amy_left] if s is not None]
-    if not available_signals:
-        fig = plt.figure(figsize=(15, 8))
-        return fig
-
-    # Create 2x2 subplot layout with better spacing
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex=True)
-
-    title_suffix = f' ({subject_id})' if subject_id else ''
-
-    # Plot vmPFC signals
-    if vmPFC_right is not None:
-        axes[0, 0].plot(vmPFC_right, color='red', linewidth=2, label='vmPFC Right')
-        axes[0, 0].set_ylabel('Signal', fontsize=12)
-        axes[0, 0].set_title(f'vmPFC Right Hemisphere{title_suffix}', fontsize=13, fontweight='bold')
-        axes[0, 0].legend(loc='upper right')
-        axes[0, 0].grid(True, alpha=0.3)
-
-    if vmPFC_left is not None:
-        axes[0, 1].plot(vmPFC_left, color='blue', linewidth=2, label='vmPFC Left')
-        axes[0, 1].set_ylabel('Signal', fontsize=12)
-        axes[0, 1].set_title(f'vmPFC Left Hemisphere{title_suffix}', fontsize=13, fontweight='bold')
-        axes[0, 1].legend(loc='upper right')
-        axes[0, 1].grid(True, alpha=0.3)
-
-    # Plot AMY signals
-    if amy_right is not None:
-        axes[1, 0].plot(amy_right, color='red', linewidth=2, label='AMY Right')
-        axes[1, 0].set_ylabel('Signal', fontsize=12)
-        axes[1, 0].set_xlabel('Time (volumes)', fontsize=12)
-        axes[1, 0].set_title(f'Amygdala Right Hemisphere{title_suffix}', fontsize=13, fontweight='bold')
-        axes[1, 0].legend(loc='upper right')
-        axes[1, 0].grid(True, alpha=0.3)
-
-    if amy_left is not None:
-        axes[1, 1].plot(amy_left, color='blue', linewidth=2, label='AMY Left')
-        axes[1, 1].set_ylabel('Signal', fontsize=12)
-        axes[1, 1].set_xlabel('Time (volumes)', fontsize=12)
-        axes[1, 1].set_title(f'Amygdala Left Hemisphere{title_suffix}', fontsize=13, fontweight='bold')
-        axes[1, 1].legend(loc='upper right')
-        axes[1, 1].grid(True, alpha=0.3)
-
-    # Use tight_layout with padding to prevent title overlap
-    plt.tight_layout(pad=2.0, h_pad=1.5)
-    return fig
-
-
 def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_envelope, channel_labels, subject_id=None, envelope_type='raw'):
     """
     Plot analytic signal with their envelopes (either raw or LP-filtered).
@@ -665,7 +601,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results_clean(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_nonsignificant=False):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -1024,85 +960,6 @@ def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name=
         'group1_patterns': group1_patterns,
         'group2_patterns': group2_patterns
     }
-
-
-def create_research_summary(fc_results, subject_info=None):
-    """
-    Create a structured summary for research reporting.
-
-    Args:
-        fc_results: FC analysis results
-        subject_info: Optional subject information
-
-    Returns:
-        dict: Structured research summary
-    """
-    if not fc_results:
-        return {'error': 'No FC results available'}
-
-    summary = {
-        'sample_info': subject_info if subject_info else {},
-        'methodology': {
-            'roi_extraction': 'Hemisphere-specific extraction using atlas-based parcellation',
-            'fc_computation': 'Pearson correlation between ROI mean timeseries',
-            'significance_testing': 'Two-tailed correlation with p<0.05 threshold'
-        },
-        'results': {}
-    }
-
-    if 'static_connectivity_patterns' in fc_results:
-        patterns = fc_results['static_connectivity_patterns']
-
-        # Key findings
-        summary['results']['key_findings'] = {
-            'total_connections_tested': len(patterns.get('all_pairwise', {})),
-            'significant_connections': sum(1 for v in patterns.get('all_pairwise', {}).values()
-                                         if v.get('significant', False)),
-            'strongest_connection': None,
-            'interhemispheric_connectivity': {},
-            'cross_regional_connectivity': {}
-        }
-
-        # Find strongest connection
-        all_pairs = patterns.get('all_pairwise', {})
-        if all_pairs:
-            strongest = max(all_pairs.items(), key=lambda x: abs(x[1]['correlation']))
-            summary['results']['key_findings']['strongest_connection'] = {
-                'pair': strongest[0],
-                'correlation': strongest[1]['correlation'],
-                'p_value': strongest[1]['p_value'],
-                'significant': strongest[1]['significant']
-            }
-
-        # Interhemispheric summary
-        inter_connections = patterns.get('interhemispheric', {})
-        if inter_connections:
-            summary['results']['key_findings']['interhemispheric_connectivity'] = {
-                'vmPFC_hemispheric_correlation': inter_connections.get('vmPFC_RH_vmPFC_LH', {}).get('correlation'),
-                'AMY_hemispheric_correlation': inter_connections.get('AMY_rh_AMY_lh', {}).get('correlation'),
-                'significant_interhemispheric': sum(1 for v in inter_connections.values() if v.get('significant', False))
-            }
-
-        # Cross-regional summary
-        cross_connections = patterns.get('cross_regional', {})
-        if cross_connections:
-            summary['results']['key_findings']['cross_regional_connectivity'] = {
-                'vmPFC_AMY_connections': {pair: stats_dict['correlation']
-                                        for pair, stats_dict in cross_connections.items()},
-                'significant_cross_regional': sum(1 for v in cross_connections.values() if v.get('significant', False))
-            }
-
-        # Statistical summary
-        all_correlations = [v['correlation'] for v in all_pairs.values()]
-        if all_correlations:
-            summary['results']['statistical_summary'] = {
-                'mean_correlation   ': np.mean(all_correlations),
-                'std_correlation': np.std(all_correlations),
-                'range': [np.min(all_correlations), np.max(all_correlations)],
-                'median_correlation': np.median(all_correlations)
-            }
-
-    return summary
 
 
 def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atlas,
@@ -2045,7 +1902,7 @@ def main(mask_nonsignificant=False, create_plots=True, show_plots=True, save_fig
                 static_fc_data = result['static_functional_connectivity']
 
                 if static_fc_data.get('static_fc_matrix') is not None:
-                    fc_fig = plot_fc_results_clean(
+                    fc_fig = plot_fc_results(
                         static_fc_data['static_fc_matrix'],
                         static_fc_data['static_fc_labels'],
                         static_fc_data['static_fc_pvalues'],
