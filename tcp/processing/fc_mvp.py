@@ -678,7 +678,6 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             # Extract interhemispheric correlations and labels
             inter_pairs = list(inter_data.keys())
             inter_corrs = [v['correlation'] for v in inter_data.values()]
-            print('HERE => inter_pairs:', inter_pairs)
 
             # Create bar plot (no x-axis labels to avoid clutter with many connections)
             bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color='lightcoral',
@@ -1069,12 +1068,12 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             )
 
             # Create parcel labels for each ROI and hemisphere
-            # For subcortical, get actual parcel names from atlas (e.g., lAMY-rh, mAMY-rh)
+            # Normalize subcortical labels to match cortical format: ROI_HEMI_subdivision
             for roi_name in subcortical_valid_rois:
                 if roi_name not in subcortical_parcel_labels:
                     subcortical_parcel_labels[roi_name] = {'rh': [], 'lh': []}
 
-                # Right hemisphere labels - get actual subdivision names from atlas
+                # Right hemisphere labels - normalize to match cortical format
                 if roi_name in subcortical_right_timeseries:
                     # Get parcel indices for this ROI in right hemisphere
                     rh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='rh')
@@ -1085,14 +1084,18 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         # Get the actual parcel name from the atlas (e.g., 'lAMY-rh', 'mAMY-rh')
                         parcel_name = subcortical_atlas.get_parcel_name(idx)
                         if parcel_name:
-                            rh_parcel_names.append(parcel_name)
+                            # Normalize format: AMY_RH_lAMY (consistent with cortical labels)
+                            # Remove hemisphere suffix from atlas name and convert to standard format
+                            subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
+                            normalized_label = f'{roi_name}_RH_{subdivision}'
+                            rh_parcel_names.append(normalized_label)
                         else:
                             # Fallback if parcel name not available
-                            rh_parcel_names.append(f'{roi_name}_rh_parcel{len(rh_parcel_names)+1}')
+                            rh_parcel_names.append(f'{roi_name}_RH_parcel{len(rh_parcel_names)+1}')
 
                     subcortical_parcel_labels[roi_name]['rh'] = rh_parcel_names
 
-                # Left hemisphere labels
+                # Left hemisphere labels - normalize to match cortical format
                 if roi_name in subcortical_left_timeseries:
                     lh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='lh')
                     lh_indices = lh_indices_dict.get(roi_name, [])
@@ -1101,9 +1104,12 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     for idx in lh_indices:
                         parcel_name = subcortical_atlas.get_parcel_name(idx)
                         if parcel_name:
-                            lh_parcel_names.append(parcel_name)
+                            # Normalize format: AMY_LH_mAMY (consistent with cortical labels)
+                            subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
+                            normalized_label = f'{roi_name}_LH_{subdivision}'
+                            lh_parcel_names.append(normalized_label)
                         else:
-                            lh_parcel_names.append(f'{roi_name}_lh_parcel{len(lh_parcel_names)+1}')
+                            lh_parcel_names.append(f'{roi_name}_LH_parcel{len(lh_parcel_names)+1}')
 
                     subcortical_parcel_labels[roi_name]['lh'] = lh_parcel_names
 
