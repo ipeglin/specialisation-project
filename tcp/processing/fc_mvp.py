@@ -44,6 +44,7 @@ from tcp.processing.roi import (
     ROIExtractionService,
     SubCorticalAtlasLookup,
 )
+from tcp.processing.signal_processing.mvmd import MVMD
 
 
 def is_actual_file(file_path: Path) -> bool:
@@ -1239,23 +1240,32 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             }
 
 
-        # Functional connectivity analysis
-        static_fc_results = None
+        # TODO: Multiscale analysis
+        # 1. Static FC
+        # 2. Dynamic FC
 
-        if not is_missing_timeseries:
-            if verbose:
-                print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
+        # Multiscale functional connectivity analysis
+        mvmd_config = None
+        mvmd = MVMD(config=mvmd_config)
+        mvmd_result = mvmd.decompose(all_channels, num_modes=5)
 
-            # Create FC timeseries dictionary using actual parcel labels
-            fc_timeseries = {}
+        time_modes = mvmd_result['time_modes']
+        center_freqs = mvmd_result['center_freqs'][-1, :]
 
-            # Combine all channel timeseries in order
-            all_channels = np.vstack([
-                vmPFC_right_channels,
-                vmPFC_left_channels,
-                amy_right_channels,
-                amy_left_channels
-            ])
+        reconstructed_timeseries = np.sum(time_modes, axis=0)
+        reconstruction_error = np.linalg.norm(all_channels - reconstructed_timeseries) / np.linalg.norm(analytic_timeseries)
+
+        mvmd_result = {
+            **mvmd_result,
+            'ts_reconstruction': reconstructed_timeseries,
+            'reconstruction_error': reconstruction_error,
+            'channel_label_map': channel_label_map,
+        }
+
+        if verbose:
+            print(f"\nExtracted centre frequencies: {center_freqs} Hz")
+            print(f"Modes shape: {time_modes.shape}")
+            print(f"Signal reconstruction error: {reconstruction_error:.4f}")
 
             # Map each channel timeseries to its actual parcel label
             for i, channel_label in enumerate(all_channel_labels):
@@ -1324,7 +1334,8 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'amy_right_channels': amy_right_channels,
                 'amy_left_channels': amy_left_channels,
                 'channel_label_map': channel_label_map
-            }
+            },
+            'mvmd': mvmd_result,
         }
 
     except Exception as e:
