@@ -1164,81 +1164,132 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
 
         # Require all timeseries to perform analyses
-        is_missing_timeseries = any([v is None for v in [cortical_right_timeseries, cortical_left_timeseries,
+        required_timeseries = [cortical_right_timeseries, cortical_left_timeseries,
                                                      subcortical_right_timeseries, subcortical_left_timeseries,
                                                      vmPFC_right_channels, vmPFC_left_channels,
                                                      amy_right_channels, amy_left_channels,
-                                                     channel_label_map]])
+                                                     channel_label_map]
+        is_missing_timeseries = any([v is None for v in required_timeseries])
+
+        if is_missing_timeseries:
+            formatted_list = '\n\t- '.join(required_timeseries)
+            raise ValueError(f'Not all timeseries are present. Expected channels:\n\t{formatted_list}')
 
         # Keeping track of all original channel labels from atlases
         all_channel_labels = cortical_channel_labels + subcortical_channel_labels
 
+        # Combine into multivariate signal (multi-channel),
+        # and get analytical signals through Hilbert transform (HT)
+        # Combine all channel timeseries in order
+        all_channels = np.vstack([
+            vmPFC_right_channels,
+            vmPFC_left_channels,
+            amy_right_channels,
+            amy_left_channels
+        ])
+
+        if verbose:
+            print(f"Combined all channels into a multivariate signal shape: {all_channels.shape}")
+
+        # Perform Hilbert transform on each timeseries
+        hilbert_transforms = signal.hilbert(all_channels)
+
+        # Derive Analytic signals z(t) = x(t) + j * H{x(t)}
+        analytic_timeseries = all_channels + 1j * hilbert_transforms
+
         # Activity analysis
         activity_results = None
 
-        if not is_missing_timeseries:
+        if verbose:
+            print(f"\n=== ACTIVITY ANALYSIS ===")
+
+        # Create Activity timeseries dictionary using actual parcel labels
+        activity_timeseries = {}
+
+        # Map each channel timeseries to its actual parcel label
+        for i, channel_label in enumerate(all_channel_labels):
+            activity_timeseries[channel_label] = all_channels[i]
+
+        # Compute envelope of analytic signal
+        analytic_envelope = np.abs(analytic_timeseries) # Activity
+
+        # Apply low-pass filter for smoothing envelope
+
+        # Signal properties
+        TR = 800e-3 # Repetition Time [seconds]
+        sampling_rate = 1 / TR  # 1.25 Hz
+        nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
+
+        # Filter properties
+        filter_order = 2
+        cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
+                                # Digital filter critical frequencies must be 0 < Wn < 1
+        normalized_cutoff = cutoff_frequency / nyquist_frequency
+        b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
+
+        filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
+        filtered_envelope = np.abs(filtered_timeseries)
+
+        if verbose:
+            print(f"All Channels shape: {all_channels.shape}")
+            print(f"Hilbert Transformed channels shape: {hilbert_transforms.shape}")
+            print(f"Analytic channels shape: {analytic_timeseries.shape}")
+
+        activity_results = {
+            'all_channels': all_channels,
+            'analytic_signal': analytic_timeseries,
+            'hilbert_transforms': hilbert_transforms,
+            'analytic_envelope': analytic_envelope, # Activity
+            'smoothed_envelope': filtered_envelope, # LP-Filtered acitivty
+            'timeseries_used': activity_timeseries,
+            'filtered_timeseries': filtered_timeseries,
+            'filter_used': (b, a),
+            'channel_label_map': channel_label_map,
+            'channel_labels': all_channel_labels
+        }
+
+
+        # Static functional connectivity analysis
+        static_fc_results = None
+
+        if verbose:
+            print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
+
+        # Create FC timeseries dictionary using actual parcel labels
+        fc_timeseries = {}
+
+        # Map each channel timeseries to its actual parcel label
+        for i, channel_label in enumerate(all_channel_labels):
+            fc_timeseries[channel_label] = all_channels[i]
+
+        fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
+
+        if fc_matrix is not None:
             if verbose:
-                print(f"\n=== ACTIVITY ANALYSIS ===")
+                fc_labels_ordered = '\n\t- '.join(sorted(fc_labels))
+                print(f"FC Matrix shape: {fc_matrix.shape}")
+                print(f"ROI labels (alphabetical): \n\t- {fc_labels_ordered}")
 
-            # Create Activity timeseries dictionary using actual parcel labels
-            activity_timeseries = {}
-
-            # Combine all channel timeseries in order
-            all_channels = np.vstack([
-                vmPFC_right_channels,
-                vmPFC_left_channels,
-                amy_right_channels,
-                amy_left_channels
-            ])
-
-            # Map each channel timeseries to its actual parcel label
-            for i, channel_label in enumerate(all_channel_labels):
-                activity_timeseries[channel_label] = all_channels[i]
-
-            # Perform Hilbert transform on each timeseries
-            hilbert_transforms = signal.hilbert(all_channels)
-
-            # Derive Analytic signals z(t) = x(t) + j * H{x(t)}
-            analytic_timeseries = all_channels + 1j * hilbert_transforms
-
-            # Compute envelope of analytic signal
-            analytic_envelope = np.abs(analytic_timeseries) # Activity
-
-            # Apply low-pass filter for smoothing envelope
-
-            # Signal properties
-            TR = 800e-3 # Repetition Time [seconds]
-            sampling_rate = 1 / TR  # 1.25 Hz
-            nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
-
-            # Filter properties
-            filter_order = 2
-            cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
-                                    # Digital filter critical frequencies must be 0 < Wn < 1
-            normalized_cutoff = cutoff_frequency / nyquist_frequency
-            b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
-
-            filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
-            filtered_envelope = np.abs(filtered_timeseries)
+            connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
+            pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric'].keys())
+            print(f"Interhemispheric connections (ALL): \n\t- {pattern_labels}")
 
             if verbose:
-                print(f"All Channels shape: {all_channels.shape}")
-                print(f"Hilbert Transformed channels shape: {hilbert_transforms.shape}")
-                print(f"Analytic channels shape: {analytic_timeseries.shape}")
+                print(f"\nConnectivity Pattern Analysis:")
+                print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
+                print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
+                print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
 
-            activity_results = {
-                'all_channels': all_channels,
-                'analytic_signal': analytic_timeseries,
-                'hilbert_transforms': hilbert_transforms,
-                'analytic_envelope': analytic_envelope, # Activity
-                'smoothed_envelope': filtered_envelope, # LP-Filtered acitivty
-                'timeseries_used': activity_timeseries,
-                'filtered_timeseries': filtered_timeseries,
-                'filter_used': (b, a),
-                'channel_label_map': channel_label_map,
-                'channel_labels': all_channel_labels
+            static_fc_results = {
+                'static_fc_matrix': fc_matrix,
+                'static_fc_labels': fc_labels,
+                'static_fc_pvalues': fc_pvalues,
+                'static_connectivity_patterns': connectivity_patterns,
+                'timeseries_used': fc_timeseries,
+                'channel_label_map': channel_label_map
             }
 
+        # TODO: Dynamic functional connectivity analysis
 
         # TODO: Multiscale analysis
         # 1. Static FC
@@ -1267,34 +1318,6 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             print(f"Modes shape: {time_modes.shape}")
             print(f"Signal reconstruction error: {reconstruction_error:.4f}")
 
-            # Map each channel timeseries to its actual parcel label
-            for i, channel_label in enumerate(all_channel_labels):
-                fc_timeseries[channel_label] = all_channels[i]
-
-            fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
-
-            if fc_matrix is not None:
-                if verbose:
-                    print(f"FC Matrix shape: {fc_matrix.shape}")
-                    print(f"ROI labels (alphabetical): {sorted(fc_labels)}")
-
-                connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
-                print(f"Interhemispheric connections (ALL): {connectivity_patterns['interhemispheric'].keys()}")
-
-                if verbose:
-                    print(f"\nConnectivity Pattern Analysis:")
-                    print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
-                    print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
-                    print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
-
-                static_fc_results = {
-                    'static_fc_matrix': fc_matrix,
-                    'static_fc_labels': fc_labels,
-                    'static_fc_pvalues': fc_pvalues,
-                    'static_connectivity_patterns': connectivity_patterns,
-                    'timeseries_used': fc_timeseries,
-                    'channel_label_map': channel_label_map
-                }
 
         return {
             'subject_id': subject_id,
@@ -1856,7 +1879,7 @@ if __name__ == '__main__':
     # Display configuration
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
     SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
-    SAVE_FIGURES = True  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
+    SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
