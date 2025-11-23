@@ -212,6 +212,8 @@ class MVMD:
         return {
             'success': True,
             'message': f'Successfully decomposed signal with shape {time_signal.shape}',
+            'original': time_signal,
+            'mode_count': num_modes,
             'time_modes': time_modes,
             'freq_modes': modes,
             'center_freqs': center_freqs,
