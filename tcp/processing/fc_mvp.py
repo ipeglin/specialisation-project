@@ -386,6 +386,85 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
     return results
 
+def combine_slow_band_components(time_modes, center_freqs):
+    """
+    Combine all signal components within specific slow bands into multi-component signals.
+
+    Args:
+        time_modes: Time signals from which the original is a superposition of (modes x channels x samples)
+        center_freqs: Center frequencies of all modes, used to decide which modes to combine
+
+    Bands:
+        Slow-6: 0–0.01Hz
+        Slow-5: 0.01–0.027Hz
+        Slow-4: 0.027–0.073Hz
+        Slow-3: 0.073–0.198Hz
+        Slow-2: 0.198–0.25Hz
+
+    Returns:
+        dict: Dictionary with band names as keys, each containing:
+            - 'band_signal': Combined signal for the band (sum of all components)
+            - 'components': List of individual mode signals in this band
+            - 'indeces': List of mode indices that belong to this band
+    """
+    # Initialize separate dictionaries for each band to avoid shared reference issue
+    band_signals = {
+        '2': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+        '3': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+        '4': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+        '5': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+        '6': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+        'excluded': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
+    }
+
+    def get_band_number(frequency):
+        if 0.0 < frequency <= 0.01:
+            return "6"
+        elif 0.01 < frequency <= 0.027:
+            return "5"
+        elif 0.027 < frequency <= 0.073:
+            return "4"
+        elif 0.073 < frequency <= 0.198:
+            return "3"
+        elif 0.198 < frequency <= 0.25:
+            return "2"
+        else:
+            return 'excluded'
+
+    for idx, (center_frequency, mode_signal) in enumerate(zip(center_freqs, time_modes)):
+        band_number = get_band_number(center_frequency)
+        print(f'HERE: freq={center_frequency}, band={band_number}, mode_signal shape ({mode_signal.shape})')
+
+        band_signals[band_number]['indeces'].append(idx)
+        band_signals[band_number]['components'].append(mode_signal)
+        band_signals[band_number]['center_freqs'].append(center_frequency)
+
+    # Combine components within each band and convert to arrays
+    for key, val in band_signals.items():
+        if len(val['components']) > 0:
+            comps_array = np.array(val['components'])
+            idcs_array = np.array(val['indeces'])
+            freqs_array = np.array(val['center_freqs'])
+
+            band_signals[key]['components'] = comps_array
+            band_signals[key]['indeces'] = idcs_array
+            band_signals[key]['center_freqs'] = freqs_array
+
+            # Only sum components for actual slow bands, not for excluded frequencies
+            if key != 'excluded':
+                # Sum all components in this band to create the band signal
+                band_signal = np.sum(comps_array, axis=0)
+                band_signals[key]['band_signal'] = band_signal
+                print(f'HERE: key={key}, components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, band_signal={band_signal.shape}')
+            else:
+                # Keep excluded components separate (do not sum them)
+                band_signals[key]['band_signal'] = None
+                print(f'HERE: key={key}, components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, signals kept separate (not summed)')
+        else:
+            print(f'HERE: key={key}, no components in this band')
+
+    return band_signals
+
 
 def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_type=''):
     """
@@ -924,6 +1003,212 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     plt.tight_layout(pad=2.8)
     return fig
 
+def plot_signal_decomposition(original, components, subject_id=None, channel_label_map=None, center_freqs=None):
+    """
+    Plot signal decomposition for each channel separately.
+
+    Args:
+        original: The original signal that has been decomposed (channels x samples)
+        components: The decomposed modes of the original signal (modes x channels x samples)
+        subject_id: Optional subject identifier to add to figure title
+        channel_label_map: Optional dictionary mapping channel indices to labels
+        center_freqs: Optional array of center frequencies for each mode
+
+    Returns:
+        list: List of matplotlib.figure.Figure objects (one per channel)
+    """
+    mode_count = components.shape[0]
+    channel_count = original.shape[0]
+    subplot_count = mode_count + 1  # Original signal + all components
+
+    figures = []
+
+    # Create a separate figure for each channel
+    for channel_idx in range(channel_count):
+        fig, axes = plt.subplots(subplot_count, 1, figsize=(14, 2 * subplot_count), sharex=True)
+
+        # Handle single subplot case
+        if subplot_count == 1:
+            axes = [axes]
+
+        # Plot original signal for this channel
+        axes[0].plot(original[channel_idx], color='black', linewidth=1.2, alpha=0.8)
+        axes[0].set_ylabel('Amplitude', fontsize=10)
+        axes[0].set_title('Original Signal', fontsize=11, fontweight='bold', pad=8)
+        axes[0].grid(True, alpha=0.3, linestyle='--')
+        axes[0].spines['top'].set_visible(False)
+        axes[0].spines['right'].set_visible(False)
+
+        # Plot each decomposed component for this channel
+        for mode_idx in range(mode_count):
+            axes[mode_idx + 1].plot(components[mode_idx, channel_idx], color='steelblue', linewidth=1.0, alpha=0.8)
+            axes[mode_idx + 1].set_ylabel('Amplitude', fontsize=10)
+
+            # Include center frequency in title if available
+            if center_freqs is not None:
+                title = f'$u_{{{mode_idx+1}}}$ (f = {center_freqs[mode_idx]:.2f} Hz)'
+            else:
+                title = f'$u_{{{mode_idx+1}}}$'
+
+            axes[mode_idx + 1].set_title(title, fontsize=11, fontweight='bold', pad=8)
+            axes[mode_idx + 1].grid(True, alpha=0.3, linestyle='--')
+            axes[mode_idx + 1].spines['top'].set_visible(False)
+            axes[mode_idx + 1].spines['right'].set_visible(False)
+
+        # Set x-label on bottom plot
+        axes[-1].set_xlabel('Time (samples)', fontsize=11)
+
+        # Add figure title with channel information
+        title_parts = ['Signal Decomposition']
+
+        # Add channel number and label if available
+        if channel_label_map is not None:
+            channel_label = channel_label_map.get(channel_idx, f'Channel {channel_idx}')
+            title_parts.append(f'Channel {channel_idx}: {channel_label}')
+        else:
+            title_parts.append(f'Channel {channel_idx}')
+
+        # Add subject ID if available
+        if subject_id is not None:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=14, fontweight='bold', y=0.995)
+
+        # Use tight_layout
+        plt.tight_layout(pad=1.5, h_pad=1.5, rect=[0, 0, 1, 0.99])
+
+        figures.append(fig)
+
+    return figures
+
+def plot_slow_band_decomposition(original, band_signals, subject_id=None, channel_label_map=None):
+    """
+    Plot signal decomposition organized by slow frequency bands for each channel separately.
+
+    Args:
+        original: The original signal that has been decomposed (channels x samples)
+        band_signals: Dictionary from combine_slow_band_components() containing band-separated signals
+        subject_id: Optional subject identifier to add to figure title
+        channel_label_map: Optional dictionary mapping channel indices to labels
+
+    Returns:
+        list: List of matplotlib.figure.Figure objects (one per channel)
+    """
+    channel_count = original.shape[0]
+    figures = []
+
+    # Define band order for plotting: Slow-6 through Slow-2, then excluded
+    band_order = ['6', '5', '4', '3', '2', 'excluded']
+    band_names = {
+        '6': 'Slow-6 (0-0.01 Hz)',
+        '5': 'Slow-5 (0.01-0.027 Hz)',
+        '4': 'Slow-4 (0.027-0.073 Hz)',
+        '3': 'Slow-3 (0.073-0.198 Hz)',
+        '2': 'Slow-2 (0.198-0.25 Hz)',
+        'excluded': 'Excluded (>0.25 Hz)'
+    }
+
+    # Count total subplots needed per channel (original + bands with data)
+    bands_with_data = []
+    for band_key in band_order:
+        if band_key in band_signals and len(band_signals[band_key]['components']) > 0:
+            bands_with_data.append(band_key)
+
+    # Count excluded components separately (they are plotted individually)
+    excluded_count = 0
+    if 'excluded' in bands_with_data:
+        excluded_count = len(band_signals['excluded']['components'])
+        bands_with_data.remove('excluded')  # We'll handle excluded separately
+
+    subplot_count = 1 + len(bands_with_data) + excluded_count  # Original + slow bands + individual excluded
+
+    # Create a separate figure for each channel
+    for channel_idx in range(channel_count):
+        fig, axes = plt.subplots(subplot_count, 1, figsize=(14, 2 * subplot_count), sharex=True)
+
+        # Handle single subplot case
+        if subplot_count == 1:
+            axes = [axes]
+
+        current_subplot = 0
+
+        # Plot original signal for this channel
+        axes[current_subplot].plot(original[channel_idx], color='black', linewidth=1.2, alpha=0.8)
+        axes[current_subplot].set_ylabel('Amplitude', fontsize=10)
+        axes[current_subplot].set_title('Original Signal', fontsize=11, fontweight='bold', pad=8)
+        axes[current_subplot].grid(True, alpha=0.3, linestyle='--')
+        axes[current_subplot].spines['top'].set_visible(False)
+        axes[current_subplot].spines['right'].set_visible(False)
+        current_subplot += 1
+
+        # Plot slow band signals (summed components for each band)
+        for band_key in ['6', '5', '4', '3', '2']:
+            if band_key in band_signals and len(band_signals[band_key]['components']) > 0:
+                band_signal = band_signals[band_key]['band_signal']
+                center_freqs = band_signals[band_key]['center_freqs']
+
+                axes[current_subplot].plot(band_signal[channel_idx], color='steelblue', linewidth=1.0, alpha=0.8)
+                axes[current_subplot].set_ylabel('Amplitude', fontsize=10)
+
+                # Create title with band name and center frequencies
+                freq_str = ', '.join([f'{f:.3f}' for f in center_freqs])
+                # Extract frequency range from band_names
+                freq_range = band_names[band_key].split('(')[1].rstrip(')')
+                title = f'Slow-{band_key} ({freq_range}) - f = [{freq_str}] Hz'
+
+                axes[current_subplot].set_title(title, fontsize=11, fontweight='bold', pad=8)
+                axes[current_subplot].grid(True, alpha=0.3, linestyle='--')
+                axes[current_subplot].spines['top'].set_visible(False)
+                axes[current_subplot].spines['right'].set_visible(False)
+                current_subplot += 1
+
+        # Plot excluded components individually in decreasing order of center frequency
+        if 'excluded' in band_signals and len(band_signals['excluded']['components']) > 0:
+            excluded_components = band_signals['excluded']['components']
+            excluded_freqs = band_signals['excluded']['center_freqs']
+            excluded_indices = band_signals['excluded']['indeces']
+
+            # Sort by center frequency in decreasing order
+            sorted_indices = np.argsort(excluded_freqs)[::-1]
+
+            for sorted_idx in sorted_indices:
+                component = excluded_components[sorted_idx]
+                freq = excluded_freqs[sorted_idx]
+                original_mode_idx = excluded_indices[sorted_idx]
+
+                axes[current_subplot].plot(component[channel_idx], color='coral', linewidth=1.0, alpha=0.8)
+                axes[current_subplot].set_ylabel('Amplitude', fontsize=10)
+                axes[current_subplot].set_title(f'$u_{{{original_mode_idx + 1}}}$ (f = {freq:.3f} Hz)', fontsize=11, fontweight='bold', pad=8)
+                axes[current_subplot].grid(True, alpha=0.3, linestyle='--')
+                axes[current_subplot].spines['top'].set_visible(False)
+                axes[current_subplot].spines['right'].set_visible(False)
+                current_subplot += 1
+
+        # Set x-label on bottom plot
+        axes[-1].set_xlabel('Time (samples)', fontsize=11)
+
+        # Add figure title with channel information
+        title_parts = ['Slow Band Decomposition']
+
+        # Add channel number and label if available
+        if channel_label_map is not None:
+            channel_label = channel_label_map.get(channel_idx, f'Channel {channel_idx}')
+            title_parts.append(f'Channel {channel_idx}: {channel_label}')
+        else:
+            title_parts.append(f'Channel {channel_idx}')
+
+        # Add subject ID if available
+        if subject_id is not None:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=14, fontweight='bold', y=0.995)
+
+        # Use tight_layout
+        plt.tight_layout(pad=1.5, h_pad=1.5, rect=[0, 0, 1, 0.99])
+
+        figures.append(fig)
+
+    return figures
 
 def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name="Group1", group2_name="Group2"):
     """
@@ -1485,7 +1770,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         # Multiscale functional connectivity analysis
         mvmd_config = None
         mvmd = MVMD(config=mvmd_config)
-        mvmd_result = mvmd.decompose(all_channels, num_modes=5)
+        mvmd_result = mvmd.decompose(all_channels, num_modes=17)
 
         time_modes = mvmd_result['time_modes']
         center_freqs = mvmd_result['center_freqs'][-1, :]
@@ -1493,11 +1778,17 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         reconstructed_timeseries = np.sum(time_modes, axis=0)
         reconstruction_error = np.linalg.norm(all_channels - reconstructed_timeseries) / np.linalg.norm(analytic_timeseries)
 
+        # Combine into slow-bands
+        slow_bands = combine_slow_band_components(time_modes, center_freqs)
+
+        # Create index-based channel label map for MVMD plots
+        mvmd_channel_label_map = {idx: label for idx, label in enumerate(all_channel_labels)}
+
         mvmd_result = {
             **mvmd_result,
             'ts_reconstruction': reconstructed_timeseries,
             'reconstruction_error': reconstruction_error,
-            'channel_label_map': channel_label_map,
+            'channel_label_map': mvmd_channel_label_map,
         }
 
         if verbose:
@@ -1889,12 +2180,24 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     individual_plots_created = 0
     figures_saved_count = 0
 
-    # Create output directory for saved figures if needed
-    figures_output_dir = None
+    # Create output directories for different analysis types
+    fc_figures_dir = None
+    mvmd_figures_dir = None
+    roi_figures_dir = None
+
     if save_figures and create_plots:
-        figures_output_dir = get_analysis_path('fc_analysis/figures')
-        figures_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n[INFO] Figures will be saved to: {figures_output_dir}")
+        fc_figures_dir = get_analysis_path('fc_analysis/figures')
+        mvmd_figures_dir = get_analysis_path('mvmd_analysis/figures')
+        roi_figures_dir = get_analysis_path('roi_extraction/figures')
+
+        fc_figures_dir.mkdir(parents=True, exist_ok=True)
+        mvmd_figures_dir.mkdir(parents=True, exist_ok=True)
+        roi_figures_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n[INFO] Figures will be saved to:")
+        print(f"  FC analysis: {fc_figures_dir}")
+        print(f"  MVMD analysis: {mvmd_figures_dir}")
+        print(f"  ROI extraction: {roi_figures_dir}")
 
     if create_plots and total_success > 0:
         print(f"\n{'='*80}")
@@ -1932,8 +2235,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plots_for_subject += 1
 
                     # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_cortical_timeseries.svg'
+                    if save_figures and roi_figures_dir:
+                        fig_path = roi_figures_dir / f'{subject_id}_roi_timeseries_cortical_yeo17.svg'
                         cortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
 
@@ -1946,59 +2249,60 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plots_for_subject += 1
 
                     # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_subcortical_timeseries.svg'
+                    if save_figures and roi_figures_dir:
+                        fig_path = roi_figures_dir / f'{subject_id}_roi_timeseries_subcortical_tian.svg'
                         subcortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
 
             # 3. Skip averaged signals plot (no longer applicable with individual channels)
             # Individual channel signals are preserved - averaging would destroy temporal information
 
-            # 4. Plot analytic signal with envelopes (raw and LP-filtered)
-            activity_data = result.get('activity')
-            if activity_data:
-                # Extract required data
-                analytic_signal = activity_data.get('analytic_signal')
-                analytic_envelope = activity_data.get('analytic_envelope')
-                smoothed_envelope = activity_data.get('smoothed_envelope')
-                channel_labels = activity_data.get('channel_labels')
-
-                if analytic_signal is not None and analytic_envelope is not None and smoothed_envelope is not None:
-                    # Plot with raw analytic envelope
-                    print(f"  Creating analytic signal with raw envelope plot for {subject_id}...")
-                    raw_envelope_fig = plot_timeseries_with_envelopes(
-                        analytic_signal,
-                        analytic_envelope,
-                        smoothed_envelope,
-                        channel_labels,
-                        subject_id=subject_id,
-                        envelope_type='raw'
-                    )
-                    plots_for_subject += 1
-
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_raw_envelope.svg'
-                        raw_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
-
-                    # Plot with LP-filtered envelope
-                    print(f"  Creating analytic signal with LP-filtered envelope plot for {subject_id}...")
-                    filtered_envelope_fig = plot_timeseries_with_envelopes(
-                        analytic_signal,
-                        analytic_envelope,
-                        smoothed_envelope,
-                        channel_labels,
-                        subject_id=subject_id,
-                        envelope_type='filtered'
-                    )
-                    plots_for_subject += 1
-
-                    # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_analytic_signal_filtered_envelope.svg'
-                        filtered_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+            # # 4. Plot analytic signal with envelopes (raw and LP-filtered)
+            # # COMMENTED OUT: Generates a large number of figures (one per channel) which can cause memory issues
+            # activity_data = result.get('activity')
+            # if activity_data:
+            #     # Extract required data
+            #     analytic_signal = activity_data.get('analytic_signal')
+            #     analytic_envelope = activity_data.get('analytic_envelope')
+            #     smoothed_envelope = activity_data.get('smoothed_envelope')
+            #     channel_labels = activity_data.get('channel_labels')
+            #
+            #     if analytic_signal is not None and analytic_envelope is not None and smoothed_envelope is not None:
+            #         # Plot with raw analytic envelope
+            #         print(f"  Creating analytic signal with raw envelope plot for {subject_id}...")
+            #         raw_envelope_fig = plot_timeseries_with_envelopes(
+            #             analytic_signal,
+            #             analytic_envelope,
+            #             smoothed_envelope,
+            #             channel_labels,
+            #             subject_id=subject_id,
+            #             envelope_type='raw'
+            #         )
+            #         plots_for_subject += 1
+            #
+            #         # Save figure if enabled
+            #         if save_figures and roi_figures_dir:
+            #             fig_path = roi_figures_dir / f'{subject_id}_analytic_signal_raw_envelope.svg'
+            #             raw_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+            #             figures_saved_count += 1
+            #
+            #         # Plot with LP-filtered envelope
+            #         print(f"  Creating analytic signal with LP-filtered envelope plot for {subject_id}...")
+            #         filtered_envelope_fig = plot_timeseries_with_envelopes(
+            #             analytic_signal,
+            #             analytic_envelope,
+            #             smoothed_envelope,
+            #             channel_labels,
+            #             subject_id=subject_id,
+            #             envelope_type='filtered'
+            #         )
+            #         plots_for_subject += 1
+            #
+            #         # Save figure if enabled
+            #         if save_figures and roi_figures_dir:
+            #             fig_path = roi_figures_dir / f'{subject_id}_analytic_signal_filtered_envelope.svg'
+            #             filtered_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+            #             figures_saved_count += 1
 
             # 5. Plot static functional connectivity analysis results (clean version)
             if result.get('static_functional_connectivity'):
@@ -2020,10 +2324,103 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plots_for_subject += 1
 
                     # Save figure if enabled
-                    if save_figures and figures_output_dir:
-                        fig_path = figures_output_dir / f'{subject_id}_static_fc_analysis.svg'
+                    if save_figures and fc_figures_dir:
+                        fig_path = fc_figures_dir / f'{subject_id}_static_fc_pearson_correlation.svg'
                         fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
+
+            # 6. Plot MVMD results
+            if result.get('mvmd'):
+                print(f"  Creating MVMD decomposition plots for {subject_id}...")
+                mvmd_data = result['mvmd']
+
+                if mvmd_data.get('time_modes') is not None:
+                    # Extract center frequencies (last iteration)
+                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+
+                    # Get channel label map if available
+                    channel_label_map = mvmd_data.get('channel_label_map')
+
+                    # Create separate figures for each channel
+                    mvmd_figures = plot_signal_decomposition(
+                        mvmd_data['original'],
+                        mvmd_data['time_modes'],
+                        subject_id=subject_id,
+                        channel_label_map=channel_label_map,
+                        center_freqs=center_freqs
+                    )
+
+                    channel_count = len(mvmd_figures)
+                    plots_for_subject += channel_count
+
+                    # Save figures if enabled
+                    if save_figures and mvmd_figures_dir:
+                        for channel_idx, fig in enumerate(mvmd_figures):
+                            # Determine channel label for filename
+                            if channel_label_map is not None:
+                                channel_label = channel_label_map.get(channel_idx, f'ch{channel_idx}')
+                                # Clean label for filename (remove special characters)
+                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                            else:
+                                channel_label_clean = f'ch{channel_idx}'
+
+                            fig_path = mvmd_figures_dir / f'{subject_id}_mvmd_modes_decomposition_{channel_label_clean}.svg'
+                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                            figures_saved_count += 1
+
+                            # Close figure to free memory (only if not showing plots)
+                            if not show_plots:
+                                plt.close(fig)
+
+                    print(f"  ✓ Created {channel_count} MVMD decomposition plots (one per channel)")
+
+            # 7. Compose into slow-bands and plot
+            if result.get('mvmd'):
+                print(f"  Creating MVMD slow-band plots for {subject_id}...")
+                mvmd_data = result['mvmd']
+
+                if mvmd_data.get('time_modes') is not None:
+                    # Extract center frequencies (last iteration)
+                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+
+                    # Combine components into slow bands
+                    band_signals = combine_slow_band_components(mvmd_data['time_modes'], center_freqs)
+
+                    # Get channel label map if available
+                    channel_label_map = mvmd_data.get('channel_label_map')
+
+                    # Create separate figures for each channel
+                    slow_band_figures = plot_slow_band_decomposition(
+                        mvmd_data['original'],
+                        band_signals,
+                        subject_id=subject_id,
+                        channel_label_map=channel_label_map
+                    )
+
+                    channel_count = len(slow_band_figures)
+                    plots_for_subject += channel_count
+
+                    # Save figures if enabled
+                    if save_figures and mvmd_figures_dir:
+                        for channel_idx, fig in enumerate(slow_band_figures):
+                            # Determine channel label for filename
+                            if channel_label_map is not None:
+                                channel_label = channel_label_map.get(channel_idx, f'ch{channel_idx}')
+                                # Clean label for filename (remove special characters)
+                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                            else:
+                                channel_label_clean = f'ch{channel_idx}'
+
+                            fig_path = mvmd_figures_dir / f'{subject_id}_mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
+                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                            figures_saved_count += 1
+
+                            # Close figure to free memory (only if not showing plots)
+                            if not show_plots:
+                                plt.close(fig)
+
+                    print(f"  ✓ Created {channel_count} MVMD slow-band plots (one per channel)")
+
 
             if plots_for_subject > 0:
                 individual_plots_created += 1
@@ -2033,7 +2430,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Summary of saved figures
         if save_figures and figures_saved_count > 0:
-            print(f"✓ Saved {figures_saved_count} figures to: {figures_output_dir}")
+            print(f"✓ Saved {figures_saved_count} figures across multiple directories:")
+            print(f"  FC analysis: {fc_figures_dir}")
+            print(f"  MVMD analysis: {mvmd_figures_dir}")
+            print(f"  ROI extraction: {roi_figures_dir}")
     elif not create_plots:
         print(f"\n[INFO] Plot creation disabled (CREATE_PLOTS=False)")
     else:
@@ -2075,7 +2475,7 @@ if __name__ == '__main__':
     # Display configuration
     VERBOSE_OUTPUT = True
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
-    SHOW_PLOTS = True  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
     SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
