@@ -221,8 +221,8 @@ def export_static_fc_results_to_csv(static_fc_results, subject_id, output_dir):
             'Connection_type', 'Regions', 'Hemispheres'
         ])
 
-        # Extract all pairwise data
-        all_pairwise = connectivity_patterns.get('all_pairwise', {})
+        # Extract all pairwise data (using new 'pairs' structure)
+        all_pairwise = connectivity_patterns.get('all_pairwise', {}).get('pairs', {})
 
         for pair_key, pair_data in all_pairwise.items():
             # Parse pair key (e.g., 'vmPFC_RH_ch0_vmPFC_LH_ch2')
@@ -245,19 +245,19 @@ def export_static_fc_results_to_csv(static_fc_results, subject_id, output_dir):
             regions = ''
             hemispheres = ''
 
-            # Check in connectivity patterns
-            if pair_key in connectivity_patterns.get('interhemispheric', {}):
+            # Check in connectivity patterns (using new 'pairs' structure)
+            if pair_key in connectivity_patterns.get('interhemispheric', {}).get('pairs', {}):
                 connection_type = 'interhemispheric'
-                regions = connectivity_patterns['interhemispheric'][pair_key].get('region', '')
-            elif pair_key in connectivity_patterns.get('cross_regional', {}):
+                regions = connectivity_patterns['interhemispheric']['pairs'][pair_key].get('region', '')
+            elif pair_key in connectivity_patterns.get('cross_regional', {}).get('pairs', {}):
                 connection_type = 'cross_regional'
-                regions = connectivity_patterns['cross_regional'][pair_key].get('regions', '')
-                if pair_key in connectivity_patterns.get('ipsilateral', {}):
+                regions = connectivity_patterns['cross_regional']['pairs'][pair_key].get('regions', '')
+                if pair_key in connectivity_patterns.get('ipsilateral', {}).get('pairs', {}):
                     connection_type = 'ipsilateral_cross_regional'
-                    hemispheres = connectivity_patterns['ipsilateral'][pair_key].get('hemisphere', '')
-                elif pair_key in connectivity_patterns.get('contralateral', {}):
+                    hemispheres = connectivity_patterns['ipsilateral']['pairs'][pair_key].get('hemisphere', '')
+                elif pair_key in connectivity_patterns.get('contralateral', {}).get('pairs', {}):
                     connection_type = 'contralateral_cross_regional'
-                    hemispheres = connectivity_patterns['contralateral'][pair_key].get('hemispheres', '')
+                    hemispheres = connectivity_patterns['contralateral']['pairs'][pair_key].get('hemispheres', '')
 
             # Write row
             writer.writerow([
@@ -288,14 +288,15 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
         alpha: Significance threshold
 
     Returns:
-        dict: Dictionary with different connectivity pattern results
+        dict: Dictionary with different connectivity pattern results.
+              Each pattern type has 'pairs' (dict of connections) and 'stats' (metadata/statistics)
     """
     results = {
-        'interhemispheric': {},
-        'cross_regional': {},
-        'ipsilateral': {},
-        'contralateral': {},
-        'all_pairwise': {}
+        'interhemispheric': {'pairs': {}, 'stats': {}},
+        'cross_regional': {'pairs': {}, 'stats': {}},
+        'ipsilateral': {'pairs': {}, 'stats': {}},
+        'contralateral': {'pairs': {}, 'stats': {}},
+        'all_pairwise': {'pairs': {}, 'stats': {}}
     }
 
     n_rois = len(roi_labels)
@@ -309,7 +310,7 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
             is_significant = p_val < alpha if p_val is not None else None
 
             pair_key = f"{roi1}_{roi2}"
-            results['all_pairwise'][pair_key] = {
+            results['all_pairwise']['pairs'][pair_key] = {
                 'correlation': corr_val,
                 'p_value': p_val,
                 'significant': is_significant
@@ -329,7 +330,7 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                 # Interhemispheric (same region, different hemispheres)
                 if roi1_region == roi2_region and roi1_hemi != roi2_hemi:
-                    results['interhemispheric'][pair_key] = {
+                    results['interhemispheric']['pairs'][pair_key] = {
                         'correlation': corr_val,
                         'p_value': p_val,
                         'significant': is_significant,
@@ -338,7 +339,7 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                 # Cross-regional (different regions)
                 elif roi1_region != roi2_region:
-                    results['cross_regional'][pair_key] = {
+                    results['cross_regional']['pairs'][pair_key] = {
                         'correlation': corr_val,
                         'p_value': p_val,
                         'significant': is_significant,
@@ -347,7 +348,7 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                     # Ipsilateral (same hemisphere, different regions)
                     if roi1_hemi == roi2_hemi:
-                        results['ipsilateral'][pair_key] = {
+                        results['ipsilateral']['pairs'][pair_key] = {
                             'correlation': corr_val,
                             'p_value': p_val,
                             'significant': is_significant,
@@ -357,13 +358,31 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                     # Contralateral (different hemisphere, different regions)
                     elif roi1_hemi != roi2_hemi:
-                        results['contralateral'][pair_key] = {
+                        results['contralateral']['pairs'][pair_key] = {
                             'correlation': corr_val,
                             'p_value': p_val,
                             'significant': is_significant,
                             'hemispheres': f"{roi1_hemi}_{roi2_hemi}",
                             'regions': f"{roi1_region}_{roi2_region}"
                         }
+
+    # Compute statistics for each connection type
+    for connection_type in results.keys():
+        pairs = results[connection_type]['pairs']
+        pair_count = len(pairs)
+
+        if pair_count > 0:
+            significant_count = sum(pair.get('significant', False) for pair in pairs.values())
+            significance_pct = significant_count / pair_count
+        else:
+            significance_pct = 0.0
+
+        # Store statistics separately from pair data
+        results[connection_type]['stats'] = {
+            'total_pairs': pair_count,
+            'significant_pairs': significant_count if pair_count > 0 else 0,
+            'significance_percentage': significance_pct
+        }
 
     return results
 
@@ -686,42 +705,188 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     ax2 = plt.subplot(1, 2, 2)
 
     if connectivity_patterns and 'interhemispheric' in connectivity_patterns:
-        inter_data = connectivity_patterns['interhemispheric']
+        inter_data = connectivity_patterns['interhemispheric']['pairs']
 
         if inter_data:
             # Extract interhemispheric correlations and labels
             inter_pairs = list(inter_data.keys())
             inter_corrs = [v['correlation'] for v in inter_data.values()]
 
-            # Create bar plot (no x-axis labels to avoid clutter with many connections)
-            bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color='lightcoral',
-                          edgecolor='darkred', alpha=0.7, width=0.8)
+            # Helper function to extract region/network information from pair labels
+            def parse_region_network(pair_key):
+                """
+                Parse pair key to extract region and network information.
+                Returns (region_network_key, display_label, is_cortical)
+
+                Cortical format: {region}_{hemi}_{network}_p{subarea}_{region}_{hemi}_{network}_p{subarea}
+                Subcortical format: {region}_{hemi}_{subdivision}_{region}_{hemi}_{subdivision}
+                """
+                parts = pair_key.split('_')
+
+                # Try to identify if this is cortical (has network info) or subcortical
+                # Cortical labels have format: PFCm_RH_DefaultA_p1_PFCm_LH_DefaultA_p2
+                # Subcortical labels have format: AMY_RH_lAMY_AMY_LH_lAMY
+
+                if len(parts) >= 8:  # Cortical with network
+                    # Extract first ROI components
+                    region = parts[0]
+                    network = parts[2] if len(parts) > 2 else 'Unknown'
+
+                    # Create unique key: region+network (e.g., "PFCm_DefaultA")
+                    region_network_key = f"{region}_{network}"
+                    display_label = f"{region} ({network})"
+                    is_cortical = True
+
+                elif len(parts) >= 6:  # Subcortical without network
+                    # Extract region and subdivision
+                    region = parts[0]
+                    subdivision = parts[2] if len(parts) > 2 else 'Unknown'
+
+                    # Create unique key: region+subdivision (e.g., "AMY_lAMY")
+                    region_network_key = f"{region}_{subdivision}"
+                    display_label = f"{region} ({subdivision})"
+                    is_cortical = False
+
+                else:
+                    # Fallback for unexpected formats
+                    region_network_key = parts[0] if parts else 'Unknown'
+                    display_label = region_network_key
+                    is_cortical = False
+
+                return region_network_key, display_label, is_cortical
+
+            # Assign colors to unique region/network combinations
+            unique_region_networks = {}
+            pair_region_networks = []
+
+            for pair_key in inter_pairs:
+                region_network_key, display_label, is_cortical = parse_region_network(pair_key)
+                pair_region_networks.append((region_network_key, display_label, is_cortical))
+
+                if region_network_key not in unique_region_networks:
+                    unique_region_networks[region_network_key] = {
+                        'display_label': display_label,
+                        'is_cortical': is_cortical,
+                        'indices': []
+                    }
+                unique_region_networks[region_network_key]['indices'].append(len(pair_region_networks) - 1)
+
+            # Define distinct color palette (using colorblind-friendly colors)
+            # Using a qualitative palette with good distinction
+            base_colors = [
+                '#1f77b4',  # Blue
+                '#ff7f0e',  # Orange
+                '#2ca02c',  # Green
+                '#d62728',  # Red
+                '#9467bd',  # Purple
+                '#8c564b',  # Brown
+                '#e377c2',  # Pink
+                '#7f7f7f',  # Gray
+                '#bcbd22',  # Olive
+                '#17becf',  # Cyan
+                '#aec7e8',  # Light blue
+                '#ffbb78',  # Light orange
+                '#98df8a',  # Light green
+                '#ff9896',  # Light red
+                '#c5b0d5',  # Light purple
+            ]
+
+            # Assign colors to each unique region/network
+            color_map = {}
+            for idx, (region_network_key, info) in enumerate(unique_region_networks.items()):
+                color_map[region_network_key] = base_colors[idx % len(base_colors)]
+
+            # Prepare bar colors and hatching
+            bar_colors = []
+            bar_hatches = []
+            for i, (corr_val, pair_data) in enumerate(zip(inter_corrs, inter_data.values())):
+                region_network_key, _, _ = pair_region_networks[i]
+                bar_colors.append(color_map[region_network_key])
+
+                # Set hatch pattern for non-significant correlations
+                # Use dense hatching pattern for better visibility
+                if p_values is not None and not pair_data.get('significant', False):
+                    bar_hatches.append('//////')  # Dense diagonal lines
+                else:
+                    bar_hatches.append(None)
+
+            # Create all bars at once
+            bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color=bar_colors,
+                          edgecolor='black', alpha=0.8, width=0.8, linewidth=0.8)
+
+            # Apply hatching to non-significant bars
+            for bar, hatch in zip(bars, bar_hatches):
+                if hatch:
+                    bar.set_hatch(hatch)
+                    bar.set_alpha(0.7)
 
             # Remove x-axis tick labels (too cluttered with many connections)
             ax2.set_xticks([])
             ax2.set_xlabel(f'{len(inter_corrs)} interhemispheric connections', fontsize=11)
             ax2.set_ylabel('Pearson Correlation', fontsize=12)
-            # Main title larger, subtitle smaller
             ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
-                         fontsize=12, fontweight='bold', pad=23)
+                         fontsize=12, fontweight='bold', pad=20)
             ax2.set_ylim(-1, 1)
             ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2.grid(True, alpha=0.3, axis='y')
 
-            # Mark significant correlations with different color (no text labels)
-            if p_values is not None:
-                for i, (pair_key, pair_data) in enumerate(inter_data.items()):
-                    if pair_data.get('significant', False):
-                        bars[i].set_color('darkred')
-                        bars[i].set_alpha(0.9)
+            # Find the maximum correlation value to position indicators above it
+            max_corr = max(inter_corrs)
+            indicator_offset = 0.08  # Offset above the max correlation
+            bar_indicator_height = 0.03  # Height of the indicator bar
+            bar_indicator_y = max_corr + indicator_offset
 
-            # Add legend for significance
+            # Threshold for determining if a region group is "narrow" (needs diagonal text)
+            narrow_threshold = 12  # Groups with ≤12 bars are considered narrow
+            # Character width estimate for determining if label is too wide (roughly 0.04 units per char at fontsize 7)
+            char_width = 0.04
+
+            # Determine the rightmost group index to apply reverse slant
+            max_index = max(max(info['indices']) for info in unique_region_networks.values() if info['indices'])
+            rightmost_threshold = max_index * 0.75  # Last 25% of bars
+
+            for region_network_key, info in unique_region_networks.items():
+                indices = info['indices']
+                if not indices:
+                    continue
+
+                x_start = min(indices) - 0.4
+                x_width = max(indices) - min(indices) + 0.8
+                color = color_map[region_network_key]
+                group_size = len(indices)
+
+                # Estimate if label text is wider than the bar
+                label_text_width = len(info['display_label']) * char_width
+                is_label_too_wide = label_text_width > x_width
+
+                # Draw compact colored rectangle spanning the group
+                rect = plt.Rectangle(
+                    (x_start, bar_indicator_y), x_width, bar_indicator_height,
+                    facecolor=color, edgecolor='black', linewidth=0.5,
+                    clip_on=False, alpha=0.9
+                )
+                ax2.add_patch(rect)
+
+            # Create legend with color-coded region/network pairs
             from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='lightcoral', edgecolor='darkred', alpha=0.7, label='Non-significant'),
-                Patch(facecolor='darkred', edgecolor='darkred', alpha=0.9, label='Significant (p<0.05)')
-            ]
-            ax2.legend(handles=legend_elements, loc='upper right', fontsize=10)
+            legend_elements = []
+
+            # Add color patches for each region/network
+            for region_network_key, info in unique_region_networks.items():
+                color = color_map[region_network_key]
+                legend_elements.append(
+                    Patch(facecolor=color, edgecolor='black', linewidth=0.5,
+                         alpha=0.9, label=info['display_label'])
+                )
+
+            # Add hatching pattern explanation
+            legend_elements.append(
+                Patch(facecolor='gray', edgecolor='black', hatch='//////',
+                     alpha=0.8, label='Non-significant (p ≥ 0.05)')
+            )
+
+            ax2.legend(handles=legend_elements, loc='lower right', fontsize=8,
+                      framealpha=0.95, edgecolor='black')
 
         else:
             ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found',
@@ -770,8 +935,9 @@ def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name=
             if fc_result and 'static_connectivity_patterns' in fc_result:
                 patterns = fc_result['static_connectivity_patterns']
                 for pattern_type in group_patterns.keys():
-                    if pattern_type in patterns:
-                        correlations = [v['correlation'] for v in patterns[pattern_type].values()]
+                    if pattern_type in patterns and 'pairs' in patterns[pattern_type]:
+                        # Extract correlations from pairs dictionary
+                        correlations = [v['correlation'] for v in patterns[pattern_type]['pairs'].values()]
                         group_patterns[pattern_type].extend(correlations)
 
         return group_patterns
@@ -1271,14 +1437,16 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 print(f"ROI labels (alphabetical): \n\t- {fc_labels_ordered}")
 
             connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
-            pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric'].keys())
-            print(f"Interhemispheric connections (ALL): \n\t- {pattern_labels}")
+
+            if verbose:
+                pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric']['pairs'].keys())
+                print(f"\nInterhemispheric connections (alphabetical): \n\t- {pattern_labels}")
 
             if verbose:
                 print(f"\nConnectivity Pattern Analysis:")
-                print(f"  Total pairwise connections: {len(connectivity_patterns['all_pairwise'])}")
-                print(f"  Interhemispheric connections: {len(connectivity_patterns['interhemispheric'])}")
-                print(f"  Cross-regional connections: {len(connectivity_patterns['cross_regional'])}")
+                print(f"  Total pairwise connections: {connectivity_patterns['all_pairwise']['stats']['total_pairs']}")
+                print(f"  Interhemispheric connections: {connectivity_patterns['interhemispheric']['stats']['total_pairs']}")
+                print(f"  Cross-regional connections: {connectivity_patterns['cross_regional']['stats']['total_pairs']}")
 
             static_fc_results = {
                 'static_fc_matrix': fc_matrix,
@@ -1371,23 +1539,20 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         }
 
 
-def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True):
     """Main function for FC MVP analysis"""
     print("=== Functional Connectivity MVP ===")
 
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
     LIMIT_SUBJECTS = True  # Set False for full analysis
     MAX_SUBJECTS_PER_GROUP = 2  # Limit when testing (only used if LIMIT_SUBJECTS=True)
-    SHOW_INDIVIDUAL_PLOTS = True  # Show individual subject plots
-    VERBOSE_SUBJECT_OUTPUT = True  # Detailed per-subject printing
-    SHOW_GROUP_SUMMARY = True  # Show aggregated group analysis
 
     print(f"Configuration:")
     print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
     if LIMIT_SUBJECTS:
         print(f"  Max subjects per group: {MAX_SUBJECTS_PER_GROUP}")
-    print(f"  Individual plots: {'ENABLED' if SHOW_INDIVIDUAL_PLOTS else 'DISABLED'}")
-    print(f"  Verbose output: {'ENABLED' if VERBOSE_SUBJECT_OUTPUT else 'DISABLED'}")
+    print(f"  Individual plots: {'ENABLED' if show_plots else 'DISABLED'}")
+    print(f"  Verbose output: {'ENABLED' if verbose else 'DISABLED'}")
     print()
 
     # Initialize data infrastructure
@@ -1584,7 +1749,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-            verbose=VERBOSE_SUBJECT_OUTPUT
+            verbose=verbose
         )
 
         anhedonic_results[subject_id] = subject_result
@@ -1605,7 +1770,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-            verbose=VERBOSE_SUBJECT_OUTPUT
+            verbose=verbose
         )
 
         non_anhedonic_results[subject_id] = subject_result
@@ -1712,12 +1877,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         figures_output_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n[INFO] Figures will be saved to: {figures_output_dir}")
 
-    if not create_plots:
-        print(f"\n[INFO] No individual plots created (create_plots set to False)")
-    elif SHOW_INDIVIDUAL_PLOTS and total_success <= 3:  # Only show individual plots for ≤3 subjects
+    if create_plots and total_success > 0:
         print(f"\n{'='*80}")
         print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
         print(f"{'='*80}")
+
+        if show_plots and total_success > 3:
+            print(f"[WARNING] {total_success} subjects processed - plots will be created but not displayed (too many)")
+            print(f"          Set SHOW_PLOTS=False to suppress this warning")
 
         all_results = {**anhedonic_results, **non_anhedonic_results}
         for subject_id, result in all_results.items():
@@ -1837,11 +2004,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Summary of saved figures
         if save_figures and figures_saved_count > 0:
             print(f"✓ Saved {figures_saved_count} figures to: {figures_output_dir}")
-    elif total_success > 3:
-        print(f"\n[INFO] Skipping individual plots (too many subjects: {total_success})")
-        print(f"      Individual plots only shown for ≤3 subjects")
+    elif not create_plots:
+        print(f"\n[INFO] Plot creation disabled (CREATE_PLOTS=False)")
     else:
-        print(f"\n[INFO] No individual plots created (no successful subjects)")
+        print(f"\n[INFO] No plots created (no successful subjects)")
 
     # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {
@@ -1851,8 +2017,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         'configuration': {
             'limit_subjects': LIMIT_SUBJECTS,
             'max_subjects_per_group': MAX_SUBJECTS_PER_GROUP if LIMIT_SUBJECTS else None,
-            'show_individual_plots': SHOW_INDIVIDUAL_PLOTS,
-            'verbose_subject_output': VERBOSE_SUBJECT_OUTPUT
+            'show_plots': show_plots,
+            'verbose_subject_output': verbose
         },
         'summary': {
             'total_processed': total_processed,
@@ -1877,8 +2043,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
 if __name__ == '__main__':
     # Display configuration
+    VERBOSE_OUTPUT = True
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
-    SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SHOW_PLOTS = True  # Whether to display plots interactively (requires CREATE_PLOTS=True)
     SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
@@ -1887,7 +2054,7 @@ if __name__ == '__main__':
     MASK_NONSIGNIFICANT = False
     MASK_DIAGONAL = False
 
-    main(mask_diagonal=MASK_DIAGONAL, mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES)
+    main(mask_diagonal=MASK_DIAGONAL, mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES, verbose=VERBOSE_OUTPUT)
 
     if CREATE_PLOTS and SHOW_PLOTS:
         plt.show()
