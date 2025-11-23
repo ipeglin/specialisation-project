@@ -621,7 +621,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -633,6 +633,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         channel_label_map: Dictionary mapping channel keys to descriptive labels
         alpha: Significance threshold for marking significant correlations
         mask_nonsignificant: If True, hide non-significant correlations. If False, mark them with asterisks.
+        subject_group: Optional group name for the subject (e.g., "Anhedonic", "Non-anhedonic")
     """
     fig = plt.figure(figsize=(16, 8))
 
@@ -818,7 +819,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             for bar, hatch in zip(bars, bar_hatches):
                 if hatch:
                     bar.set_hatch(hatch)
-                    bar.set_alpha(0.7)
+                    bar.set_alpha(0.5)
 
             # Remove x-axis tick labels (too cluttered with many connections)
             ax2.set_xticks([])
@@ -867,6 +868,24 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                 )
                 ax2.add_patch(rect)
 
+            # Calculate significance statistics
+            total_pairs = len(inter_data)
+            significant_pairs = sum(1 for pair_data in inter_data.values()
+                                   if pair_data.get('significant', False))
+            significance_pct = (significant_pairs / total_pairs * 100) if total_pairs > 0 else 0
+
+            # Add group label in upper left if provided
+            if subject_group:
+                ax2.text(0.02, 0.98, f'Group: {subject_group}',
+                        transform=ax2.transAxes, fontsize=10, verticalalignment='top',
+                        fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
+
+            # Add significance percentage text in lower left
+            ax2.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
+                    transform=ax2.transAxes, fontsize=9, verticalalignment='bottom',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
+
             # Create legend with color-coded region/network pairs
             from matplotlib.patches import Patch
             legend_elements = []
@@ -882,7 +901,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             # Add hatching pattern explanation
             legend_elements.append(
                 Patch(facecolor='gray', edgecolor='black', hatch='//////',
-                     alpha=0.8, label='Non-significant (p ≥ 0.05)')
+                     alpha=0.5, label='Non-significant (p ≥ 0.05)')
             )
 
             ax2.legend(handles=legend_elements, loc='lower right', fontsize=8,
@@ -1891,6 +1910,16 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             if not result['success']:
                 continue
 
+            # Determine which group this subject belongs to
+            if subject_id in low_anhedonic_subjects:
+                subject_group = "Low Anhedonic"
+            elif subject_id in high_anhedonic_subjects:
+                subject_group = "High Anhedonic"
+            elif subject_id in non_anhedonic_subjects:
+                subject_group = "Non-anhedonic"
+            else:
+                subject_group = None
+
             plots_for_subject = 0
 
             # 1. Plot cortical ROI timeseries
@@ -1984,7 +2013,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         static_fc_data['static_connectivity_patterns'],
                         static_fc_data.get('channel_label_map'),
                         mask_diagonal=mask_diagonal,
-                        mask_nonsignificant=mask_nonsignificant
+                        mask_nonsignificant=mask_nonsignificant,
+                        subject_group=subject_group
                     )
                     fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
                     plots_for_subject += 1
