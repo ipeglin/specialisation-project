@@ -2176,11 +2176,22 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
         print(f"{'='*80}")
 
-        if show_plots and total_success > 3:
-            print(f"[WARNING] {total_success} subjects processed - plots will be created but not displayed (too many)")
-            print(f"          Set SHOW_PLOTS=False to suppress this warning")
+        if show_plots:
+            print(f"[INFO] Figures will be displayed in batches by analysis type")
+            print(f"       Close all figures in each batch to proceed to the next batch")
 
         all_results = {**anhedonic_results, **non_anhedonic_results}
+
+        # Organize plotting by type to display in batches
+        # This prevents overwhelming the system with 177+ figures at once
+        plot_batches = {
+            'roi_cortical': [],
+            'roi_subcortical': [],
+            'fc_static': [],
+            'mvmd_modes': [],
+            'mvmd_slow_bands': []
+        }
+
         for subject_id, result in all_results.items():
             if not result['success']:
                 continue
@@ -2197,34 +2208,28 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
             plots_for_subject = 0
 
-            # 1. Plot cortical ROI timeseries
+            # 1. Prepare cortical ROI timeseries plot
             roi_results = result.get('roi_extraction_results', {})
             if roi_results.get('cortical'):
                 cortical_data = roi_results['cortical']
                 if cortical_data.get('extraction_successful'):
-                    print(f"  Creating cortical ROI timeseries plot for {subject_id}...")
-                    cortical_roi_fig = plot_roi_timeseries_result(cortical_data, subject_id=subject_id, atlas_type='Cortical')
+                    plot_batches['roi_cortical'].append({
+                        'subject_id': subject_id,
+                        'data': cortical_data,
+                        'save_path': roi_figures_dir / f'{subject_id}_roi_timeseries_cortical_yeo17.svg' if save_figures and roi_figures_dir else None
+                    })
                     plots_for_subject += 1
 
-                    # Save figure if enabled
-                    if save_figures and roi_figures_dir:
-                        fig_path = roi_figures_dir / f'{subject_id}_roi_timeseries_cortical_yeo17.svg'
-                        cortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
-
-            # 2. Plot subcortical ROI timeseries
+            # 2. Prepare subcortical ROI timeseries plot
             if roi_results.get('subcortical'):
                 subcortical_data = roi_results['subcortical']
                 if subcortical_data.get('extraction_successful'):
-                    print(f"  Creating subcortical ROI timeseries plot for {subject_id}...")
-                    subcortical_roi_fig = plot_roi_timeseries_result(subcortical_data, subject_id=subject_id, atlas_type='Subcortical')
+                    plot_batches['roi_subcortical'].append({
+                        'subject_id': subject_id,
+                        'data': subcortical_data,
+                        'save_path': roi_figures_dir / f'{subject_id}_roi_timeseries_subcortical_tian.svg' if save_figures and roi_figures_dir else None
+                    })
                     plots_for_subject += 1
-
-                    # Save figure if enabled
-                    if save_figures and roi_figures_dir:
-                        fig_path = roi_figures_dir / f'{subject_id}_roi_timeseries_subcortical_tian.svg'
-                        subcortical_roi_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
 
             # 3. Skip averaged signals plot (no longer applicable with individual channels)
             # Individual channel signals are preserved - averaging would destroy temporal information
@@ -2276,129 +2281,191 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             #             filtered_envelope_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
             #             figures_saved_count += 1
 
-            # 5. Plot static functional connectivity analysis results (clean version)
+            # 5. Prepare static functional connectivity analysis plot
             if result.get('static_functional_connectivity'):
-                print(f"  Creating static FC analysis plot for {subject_id}...")
                 static_fc_data = result['static_functional_connectivity']
-
                 if static_fc_data.get('static_fc_matrix') is not None:
-                    fc_fig = plot_fc_results(
-                        static_fc_data['static_fc_matrix'],
-                        static_fc_data['static_fc_labels'],
-                        static_fc_data['static_fc_pvalues'],
-                        static_fc_data['static_connectivity_patterns'],
-                        static_fc_data.get('channel_label_map'),
-                        mask_diagonal=mask_diagonal,
-                        mask_nonsignificant=mask_nonsignificant,
-                        subject_group=subject_group
-                    )
-                    fc_fig.suptitle(f'Functional Connectivity Analysis - {subject_id}', fontsize=16, fontweight='bold')
+                    plot_batches['fc_static'].append({
+                        'subject_id': subject_id,
+                        'subject_group': subject_group,
+                        'data': static_fc_data,
+                        'mask_diagonal': mask_diagonal,
+                        'mask_nonsignificant': mask_nonsignificant,
+                        'save_path': fc_figures_dir / f'{subject_id}_static_fc_pearson_correlation.svg' if save_figures and fc_figures_dir else None
+                    })
                     plots_for_subject += 1
 
-                    # Save figure if enabled
-                    if save_figures and fc_figures_dir:
-                        fig_path = fc_figures_dir / f'{subject_id}_static_fc_pearson_correlation.svg'
-                        fc_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
-
-            # 6. Plot MVMD results
+            # 6. Prepare MVMD decomposition plots
             if result.get('mvmd'):
-                print(f"  Creating MVMD decomposition plots for {subject_id}...")
                 mvmd_data = result['mvmd']
-
                 if mvmd_data.get('time_modes') is not None:
-                    # Extract center frequencies (last iteration)
                     center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
-
-                    # Get channel label map if available
                     channel_label_map = mvmd_data.get('channel_label_map')
 
-                    # Create separate figures for each channel
-                    mvmd_figures = plot_signal_decomposition(
-                        mvmd_data['original'],
-                        mvmd_data['time_modes'],
-                        subject_id=subject_id,
-                        channel_label_map=channel_label_map,
-                        center_freqs=center_freqs
-                    )
+                    plot_batches['mvmd_modes'].append({
+                        'subject_id': subject_id,
+                        'mvmd_data': mvmd_data,
+                        'center_freqs': center_freqs,
+                        'channel_label_map': channel_label_map,
+                        'save_dir': mvmd_figures_dir if save_figures and mvmd_figures_dir else None
+                    })
 
-                    channel_count = len(mvmd_figures)
+                    # Estimate channel count for progress tracking
+                    channel_count = mvmd_data['original'].shape[0] if 'original' in mvmd_data else 0
                     plots_for_subject += channel_count
 
-                    # Save figures if enabled
-                    if save_figures and mvmd_figures_dir:
-                        for channel_idx, fig in enumerate(mvmd_figures):
-                            # Determine channel label for filename
-                            if channel_label_map is not None:
-                                channel_label = channel_label_map.get(channel_idx, f'ch{channel_idx}')
-                                # Clean label for filename (remove special characters)
-                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-                            else:
-                                channel_label_clean = f'ch{channel_idx}'
-
-                            fig_path = mvmd_figures_dir / f'{subject_id}_mvmd_modes_decomposition_{channel_label_clean}.svg'
-                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                            figures_saved_count += 1
-
-                            # Close figure to free memory (only if not showing plots)
-                            if not show_plots:
-                                plt.close(fig)
-
-                    print(f"  ✓ Created {channel_count} MVMD decomposition plots (one per channel)")
-
-            # 7. Compose into slow-bands and plot
+            # 7. Prepare MVMD slow-band plots
             if result.get('mvmd'):
-                print(f"  Creating MVMD slow-band plots for {subject_id}...")
                 mvmd_data = result['mvmd']
-
                 if mvmd_data.get('time_modes') is not None:
-                    # Extract center frequencies (last iteration)
                     center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
-
-                    # Combine components into slow bands
                     band_signals = combine_slow_band_components(mvmd_data['time_modes'], center_freqs)
-
-                    # Get channel label map if available
                     channel_label_map = mvmd_data.get('channel_label_map')
 
-                    # Create separate figures for each channel
-                    slow_band_figures = plot_slow_band_decomposition(
-                        mvmd_data['original'],
-                        band_signals,
-                        subject_id=subject_id,
-                        channel_label_map=channel_label_map
-                    )
+                    plot_batches['mvmd_slow_bands'].append({
+                        'subject_id': subject_id,
+                        'mvmd_data': mvmd_data,
+                        'band_signals': band_signals,
+                        'channel_label_map': channel_label_map,
+                        'save_dir': mvmd_figures_dir if save_figures and mvmd_figures_dir else None
+                    })
 
-                    channel_count = len(slow_band_figures)
+                    # Estimate channel count for progress tracking
+                    channel_count = mvmd_data['original'].shape[0] if 'original' in mvmd_data else 0
                     plots_for_subject += channel_count
-
-                    # Save figures if enabled
-                    if save_figures and mvmd_figures_dir:
-                        for channel_idx, fig in enumerate(slow_band_figures):
-                            # Determine channel label for filename
-                            if channel_label_map is not None:
-                                channel_label = channel_label_map.get(channel_idx, f'ch{channel_idx}')
-                                # Clean label for filename (remove special characters)
-                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-                            else:
-                                channel_label_clean = f'ch{channel_idx}'
-
-                            fig_path = mvmd_figures_dir / f'{subject_id}_mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
-                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                            figures_saved_count += 1
-
-                            # Close figure to free memory (only if not showing plots)
-                            if not show_plots:
-                                plt.close(fig)
-
-                    print(f"  ✓ Created {channel_count} MVMD slow-band plots (one per channel)")
 
 
             if plots_for_subject > 0:
                 individual_plots_created += 1
-                print(f"  ✓ Created {plots_for_subject} plots for {subject_id}")
+                print(f"  ✓ Prepared {plots_for_subject} plots for {subject_id}")
 
-        print(f"\nCreated plots for {individual_plots_created} subjects")
+        print(f"\nPrepared plots for {individual_plots_created} subjects")
+
+        # Now create and display plots in batches by type
+        print(f"\n{'='*80}")
+        print(f"CREATING AND DISPLAYING PLOTS BY TYPE")
+        print(f"{'='*80}")
+
+        # Batch 1: ROI Cortical Timeseries
+        if plot_batches['roi_cortical']:
+            print(f"\n[Batch 1/5] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            for plot_info in plot_batches['roi_cortical']:
+                fig = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
+                if plot_info['save_path']:
+                    fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+                if not show_plots:
+                    plt.close(fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 2: ROI Subcortical Timeseries
+        if plot_batches['roi_subcortical']:
+            print(f"\n[Batch 2/5] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            for plot_info in plot_batches['roi_subcortical']:
+                fig = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
+                if plot_info['save_path']:
+                    fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+                if not show_plots:
+                    plt.close(fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 3: Static FC Analysis
+        if plot_batches['fc_static']:
+            print(f"\n[Batch 3/5] Creating {len(plot_batches['fc_static'])} static FC plots...")
+            for plot_info in plot_batches['fc_static']:
+                fc_fig = plot_fc_results(
+                    plot_info['data']['static_fc_matrix'],
+                    plot_info['data']['static_fc_labels'],
+                    plot_info['data']['static_fc_pvalues'],
+                    plot_info['data']['static_connectivity_patterns'],
+                    plot_info['data'].get('channel_label_map'),
+                    mask_diagonal=plot_info['mask_diagonal'],
+                    mask_nonsignificant=plot_info['mask_nonsignificant'],
+                    subject_group=plot_info['subject_group']
+                )
+                fc_fig.suptitle(f'Functional Connectivity Analysis - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                if plot_info['save_path']:
+                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+                if not show_plots:
+                    plt.close(fc_fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 4: MVMD Mode Decomposition
+        if plot_batches['mvmd_modes']:
+            total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
+            print(f"\n[Batch 4/5] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+            for plot_info in plot_batches['mvmd_modes']:
+                mvmd_figures = plot_signal_decomposition(
+                    plot_info['mvmd_data']['original'],
+                    plot_info['mvmd_data']['time_modes'],
+                    subject_id=plot_info['subject_id'],
+                    channel_label_map=plot_info['channel_label_map'],
+                    center_freqs=plot_info['center_freqs']
+                )
+
+                if plot_info['save_dir']:
+                    for channel_idx, fig in enumerate(mvmd_figures):
+                        if plot_info['channel_label_map'] is not None:
+                            channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+                            channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                        else:
+                            channel_label_clean = f'ch{channel_idx}'
+
+                        fig_path = plot_info['save_dir'] / f'{plot_info["subject_id"]}_mvmd_modes_decomposition_{channel_label_clean}.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for fig in mvmd_figures:
+                        plt.close(fig)
+
+            if show_plots:
+                print(f"  Displaying {total_mode_figs} MVMD mode plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 5: MVMD Slow-Band Decomposition
+        if plot_batches['mvmd_slow_bands']:
+            total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
+            print(f"\n[Batch 5/5] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            for plot_info in plot_batches['mvmd_slow_bands']:
+                slow_band_figures = plot_slow_band_decomposition(
+                    plot_info['mvmd_data']['original'],
+                    plot_info['band_signals'],
+                    subject_id=plot_info['subject_id'],
+                    channel_label_map=plot_info['channel_label_map']
+                )
+
+                if plot_info['save_dir']:
+                    for channel_idx, fig in enumerate(slow_band_figures):
+                        if plot_info['channel_label_map'] is not None:
+                            channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+                            channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                        else:
+                            channel_label_clean = f'ch{channel_idx}'
+
+                        fig_path = plot_info['save_dir'] / f'{plot_info["subject_id"]}_mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for fig in slow_band_figures:
+                        plt.close(fig)
+
+            if show_plots:
+                print(f"  Displaying {total_band_figs} MVMD slow-band plots. Close all figures to continue...")
+                plt.show()
+
+        print(f"\n{'='*80}")
+        print(f"PLOTTING COMPLETE")
+        print(f"{'='*80}")
 
         # Summary of saved figures
         if save_figures and figures_saved_count > 0:
@@ -2458,5 +2525,4 @@ if __name__ == '__main__':
 
     main(mask_diagonal=MASK_DIAGONAL, mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES, verbose=VERBOSE_OUTPUT)
 
-    if CREATE_PLOTS and SHOW_PLOTS:
-        plt.show()
+    # Note: plt.show() is now called within each batch in main(), not here
