@@ -386,7 +386,7 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
     return results
 
-def combine_slow_band_components(time_modes, center_freqs):
+def combine_slow_band_components(time_modes, center_freqs, verbose=True):
     """
     Combine all signal components within specific slow bands into multi-component signals.
 
@@ -454,12 +454,16 @@ def combine_slow_band_components(time_modes, center_freqs):
                 # Sum all components in this band to create the band signal
                 band_signal = np.sum(comps_array, axis=0)
                 band_signals[key]['band_signal'] = band_signal
-                print(f'Band Slow-{key}: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, band_signal={band_signal.shape}')
+
+                if verbose:
+                    print(f'Band Slow-{key}: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, band_signal={band_signal.shape}')
             else:
                 # Keep excluded components separate (do not sum them)
                 band_signals[key]['band_signal'] = None
-                print(f'Outside of bands: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, signals kept separate (not summed)')
-        else:
+
+                if verbose:
+                    print(f'Outside of bands: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, signals kept separate (not summed)')
+        elif verbose:
             print(f'Band Slow-{key}: no components in this band')
 
     return band_signals
@@ -1749,9 +1753,6 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         reconstructed_timeseries = np.sum(time_modes, axis=0)
         reconstruction_error = np.linalg.norm(all_channels - reconstructed_timeseries) / np.linalg.norm(analytic_timeseries)
 
-        # Combine into slow-bands
-        slow_bands = combine_slow_band_components(time_modes, center_freqs)
-
         # Create index-based channel label map for MVMD plots
         mvmd_channel_label_map = {idx: label for idx, label in enumerate(all_channel_labels)}
 
@@ -2318,7 +2319,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 mvmd_data = result['mvmd']
                 if mvmd_data.get('time_modes') is not None:
                     center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
-                    band_signals = combine_slow_band_components(mvmd_data['time_modes'], center_freqs)
+                    band_signals = combine_slow_band_components(mvmd_data['time_modes'], center_freqs, verbose=verbose)
                     channel_label_map = mvmd_data.get('channel_label_map')
 
                     plot_batches['mvmd_slow_bands'].append({
