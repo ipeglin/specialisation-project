@@ -1084,6 +1084,7 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
 def plot_slow_band_decomposition(original, band_signals, subject_id=None, channel_label_map=None):
     """
     Plot signal decomposition organized by slow frequency bands for each channel separately.
+    Only plots the banded signals (Slow-2 through Slow-6), excluding frequencies outside all bands.
 
     Args:
         original: The original signal that has been decomposed (channels x samples)
@@ -1097,30 +1098,23 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
     channel_count = original.shape[0]
     figures = []
 
-    # Define band order for plotting: Slow-6 through Slow-2, then excluded
-    band_order = ['6', '5', '4', '3', '2', 'excluded']
+    # Define band order for plotting: Slow-6 through Slow-2 (exclude 'excluded')
+    band_order = ['6', '5', '4', '3', '2']
     band_names = {
         '6': 'Slow-6 (0-0.01 Hz)',
         '5': 'Slow-5 (0.01-0.027 Hz)',
         '4': 'Slow-4 (0.027-0.073 Hz)',
         '3': 'Slow-3 (0.073-0.198 Hz)',
         '2': 'Slow-2 (0.198-0.25 Hz)',
-        'excluded': 'Excluded (>0.25 Hz)'
     }
 
-    # Count total subplots needed per channel (original + bands with data)
+    # Count total subplots needed per channel (original + slow bands only)
     bands_with_data = []
     for band_key in band_order:
         if band_key in band_signals and len(band_signals[band_key]['components']) > 0:
             bands_with_data.append(band_key)
 
-    # Count excluded components separately (they are plotted individually)
-    excluded_count = 0
-    if 'excluded' in bands_with_data:
-        excluded_count = len(band_signals['excluded']['components'])
-        bands_with_data.remove('excluded')  # We'll handle excluded separately
-
-    subplot_count = 1 + len(bands_with_data) + excluded_count  # Original + slow bands + individual excluded
+    subplot_count = 1 + len(bands_with_data)  # Original + slow bands only
 
     # Create a separate figure for each channel
     for channel_idx in range(channel_count):
@@ -1157,28 +1151,6 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
                 title = f'Slow-{band_key} ({freq_range}) - f = [{freq_str}] Hz'
 
                 axes[current_subplot].set_title(title, fontsize=11, fontweight='bold', pad=8)
-                axes[current_subplot].grid(True, alpha=0.3, linestyle='--')
-                axes[current_subplot].spines['top'].set_visible(False)
-                axes[current_subplot].spines['right'].set_visible(False)
-                current_subplot += 1
-
-        # Plot excluded components individually in decreasing order of center frequency
-        if 'excluded' in band_signals and len(band_signals['excluded']['components']) > 0:
-            excluded_components = band_signals['excluded']['components']
-            excluded_freqs = band_signals['excluded']['center_freqs']
-            excluded_indices = band_signals['excluded']['indeces']
-
-            # Sort by center frequency in decreasing order
-            sorted_indices = np.argsort(excluded_freqs)[::-1]
-
-            for sorted_idx in sorted_indices:
-                component = excluded_components[sorted_idx]
-                freq = excluded_freqs[sorted_idx]
-                original_mode_idx = excluded_indices[sorted_idx]
-
-                axes[current_subplot].plot(component[channel_idx], color='coral', linewidth=1.0, alpha=0.8)
-                axes[current_subplot].set_ylabel('Amplitude', fontsize=10)
-                axes[current_subplot].set_title(f'$u_{{{original_mode_idx + 1}}}$ (f = {freq:.3f} Hz)', fontsize=11, fontweight='bold', pad=8)
                 axes[current_subplot].grid(True, alpha=0.3, linestyle='--')
                 axes[current_subplot].spines['top'].set_visible(False)
                 axes[current_subplot].spines['right'].set_visible(False)
