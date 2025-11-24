@@ -433,7 +433,6 @@ def combine_slow_band_components(time_modes, center_freqs):
 
     for idx, (center_frequency, mode_signal) in enumerate(zip(center_freqs, time_modes)):
         band_number = get_band_number(center_frequency)
-        print(f'HERE: freq={center_frequency}, band={band_number}, mode_signal shape ({mode_signal.shape})')
 
         band_signals[band_number]['indeces'].append(idx)
         band_signals[band_number]['components'].append(mode_signal)
