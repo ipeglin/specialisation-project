@@ -2008,9 +2008,16 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     # Apply subject limiting if enabled
     if LIMIT_SUBJECTS:
-        anhedonic_subjects_to_process = accessible_anhedonic[:MAX_SUBJECTS_PER_GROUP]
+        # Separate low-anhedonic and high-anhedonic subjects for proper sampling
+        low_anhedonic_to_process = low_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
+        high_anhedonic_to_process = high_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
         non_anhedonic_subjects_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
-        print(f"LIMITING ENABLED: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
+
+        # Combine anhedonic subjects after sampling
+        anhedonic_subjects_to_process = low_anhedonic_to_process + high_anhedonic_to_process
+
+        print(f"LIMITING ENABLED: Processing {len(low_anhedonic_to_process)} low-anhedonic + {len(high_anhedonic_to_process)} high-anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
+        print(f"  Total: {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic = {len(anhedonic_subjects_to_process) + len(non_anhedonic_subjects_to_process)} subjects")
     else:
         anhedonic_subjects_to_process = accessible_anhedonic
         non_anhedonic_subjects_to_process = accessible_non_anhedonic
