@@ -455,13 +455,13 @@ def combine_slow_band_components(time_modes, center_freqs):
                 # Sum all components in this band to create the band signal
                 band_signal = np.sum(comps_array, axis=0)
                 band_signals[key]['band_signal'] = band_signal
-                print(f'HERE: key={key}, components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, band_signal={band_signal.shape}')
+                print(f'Band Slow-{key}: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, band_signal={band_signal.shape}')
             else:
                 # Keep excluded components separate (do not sum them)
                 band_signals[key]['band_signal'] = None
-                print(f'HERE: key={key}, components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, signals kept separate (not summed)')
+                print(f'Outside of bands: components={comps_array.shape}, indeces={idcs_array}, center_freqs={freqs_array}, signals kept separate (not summed)')
         else:
-            print(f'HERE: key={key}, no components in this band')
+            print(f'Band Slow-{key}: no components in this band')
 
     return band_signals
 
@@ -1708,15 +1708,15 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
         if fc_matrix is not None:
             if verbose:
-                fc_labels_ordered = '\n\t- '.join(sorted(fc_labels))
+                fc_labels_ordered = '\n\t- '.join(fc_labels)
                 print(f"FC Matrix shape: {fc_matrix.shape}")
-                print(f"ROI labels (alphabetical): \n\t- {fc_labels_ordered}")
+                print(f"ROI labels (same order): \n\t- {fc_labels_ordered}")
 
             connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
 
             if verbose:
                 pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric']['pairs'].keys())
-                print(f"\nInterhemispheric connections (alphabetical): \n\t- {pattern_labels}")
+                print(f"\nInterhemispheric connections (same order): \n\t- {pattern_labels}")
 
             if verbose:
                 print(f"\nConnectivity Pattern Analysis:")
@@ -1742,7 +1742,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         # Multiscale functional connectivity analysis
         mvmd_config = None
         mvmd = MVMD(config=mvmd_config)
-        mvmd_result = mvmd.decompose(all_channels, num_modes=17)
+        mvmd_result = mvmd.decompose(all_channels, num_modes=10)
 
         time_modes = mvmd_result['time_modes']
         center_freqs = mvmd_result['center_freqs'][-1, :]
