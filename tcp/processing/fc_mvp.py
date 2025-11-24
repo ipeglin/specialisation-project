@@ -2411,6 +2411,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 )
 
                 if plot_info['save_dir']:
+                    # Create subject-specific subdirectory for organization
+                    subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+
                     for channel_idx, fig in enumerate(mvmd_figures):
                         if plot_info['channel_label_map'] is not None:
                             channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
@@ -2418,7 +2422,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         else:
                             channel_label_clean = f'ch{channel_idx}'
 
-                        fig_path = plot_info['save_dir'] / f'{plot_info["subject_id"]}_mvmd_modes_decomposition_{channel_label_clean}.svg'
+                        fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
                         fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
 
@@ -2443,6 +2447,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 )
 
                 if plot_info['save_dir']:
+                    # Create subject-specific subdirectory for organization
+                    subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+
                     for channel_idx, fig in enumerate(slow_band_figures):
                         if plot_info['channel_label_map'] is not None:
                             channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
@@ -2450,7 +2458,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         else:
                             channel_label_clean = f'ch{channel_idx}'
 
-                        fig_path = plot_info['save_dir'] / f'{plot_info["subject_id"]}_mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
+                        fig_path = subject_mvmd_dir / f'mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
                         fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
 
