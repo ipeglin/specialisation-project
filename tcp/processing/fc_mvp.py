@@ -615,14 +615,14 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
         plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.97])
         figures.append(fig)
 
-    # Return the first figure (or create empty if none)
+    # Return all figures (or create empty if none)
     if figures:
-        return figures[0]
+        return figures
     else:
         fig = plt.figure(figsize=(16, 6))
         fig.text(0.5, 0.5, 'No matching ROIs found',
                 ha='center', va='center', fontsize=14, color='gray')
-        return fig
+        return [fig]
 
 
 def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_envelope, channel_labels, subject_id=None, envelope_type='raw'):
@@ -2357,12 +2357,26 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['roi_cortical']:
             print(f"\n[Batch 1/5] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
-                fig = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
-                if plot_info['save_path']:
-                    fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
-                    figures_saved_count += 1
-                if not show_plots:
-                    plt.close(fig)
+                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
+                # plot_roi_timeseries_result now returns a list of figures (one per ROI)
+                for fig in figures:
+                    if plot_info['save_path']:
+                        # Generate separate filenames for each ROI
+                        # Extract ROI name from figure title
+                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+                        roi_name = 'unknown'
+                        if 'PFCm' in fig_title:
+                            roi_name = 'PFCm'
+                        elif 'PFCv' in fig_title:
+                            roi_name = 'PFCv'
+
+                        # Create ROI-specific filename
+                        save_path = plot_info['save_path']
+                        save_path_with_roi = save_path.parent / f"{save_path.stem}_{roi_name}{save_path.suffix}"
+                        fig.savefig(save_path_with_roi, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+                    if not show_plots:
+                        plt.close(fig)
             if show_plots:
                 print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
                 plt.show()
@@ -2371,12 +2385,24 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['roi_subcortical']:
             print(f"\n[Batch 2/5] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
-                fig = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
-                if plot_info['save_path']:
-                    fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
-                    figures_saved_count += 1
-                if not show_plots:
-                    plt.close(fig)
+                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
+                # plot_roi_timeseries_result now returns a list of figures (one per ROI)
+                for fig in figures:
+                    if plot_info['save_path']:
+                        # Generate separate filenames for each ROI
+                        # Extract ROI name from figure title
+                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+                        roi_name = 'unknown'
+                        if 'AMY' in fig_title:
+                            roi_name = 'AMY'
+
+                        # Create ROI-specific filename
+                        save_path = plot_info['save_path']
+                        save_path_with_roi = save_path.parent / f"{save_path.stem}_{roi_name}{save_path.suffix}"
+                        fig.savefig(save_path_with_roi, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+                    if not show_plots:
+                        plt.close(fig)
             if show_plots:
                 print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
                 plt.show()
