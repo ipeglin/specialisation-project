@@ -62,7 +62,7 @@
       "subdir": "tcp"
     },
     "tcp_processing": {
-      "category": "analysis", 
+      "category": "analysis",
       "subdir": "tcp"
     },
     "tcp_analysis": {
@@ -88,6 +88,7 @@
   },
   "common_subdirectories": {
     "tcp_dataset": "ds005237",
+    "parcellations": "parcellations",
     "tcp_analysis": "tcp_analysis",
     "mdd_analysis": "mdd_analysis",
     "preprocessing": "preprocessing",
@@ -96,29 +97,16 @@
     "models": "models"
   },
   "environment_detection": {
-    "idun_hostnames": [
-      "idun",
-      "login",
-      "idun-login"
-    ],
+    "idun_hostnames": ["idun", "login", "idun-login"],
     "hostname_patterns": {
-      "idun": [
-        "idun*",
-        "login*"
-      ]
+      "idun": ["idun*", "login*"]
     }
   },
   "validation": {
     "required_subdirs": {
-      "tcp_dataset": [
-        "participants.tsv",
-        "phenotype"
-      ],
+      "tcp_dataset": ["participants.tsv", "phenotype"],
       "output_base": []
     },
-    "create_if_missing": [
-      "output_base",
-      "temp_base"
-    ]
+    "create_if_missing": ["output_base", "temp_base"]
   }
 }

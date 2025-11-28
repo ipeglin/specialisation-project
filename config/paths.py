@@ -18,12 +18,13 @@ Author: Ian Philip Eglin
 Date: 2025-09-11
 """
 
+import json
 import os
 import platform
 import socket
-import json
 from pathlib import Path
 from typing import Dict, Optional, Union
+
 
 class PathConfig:
     """Cross-platform path configuration manager"""
@@ -145,38 +146,38 @@ class PathConfig:
         # Look for .env file in project root (where config/ directory is located)
         project_root = Path(__file__).parent.parent
         env_file = project_root / '.env'
-        
+
         if not env_file.exists():
             return
-        
+
         try:
             with open(env_file, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    
+
                     # Skip empty lines and comments
                     if not line or line.startswith('#'):
                         continue
-                    
+
                     # Parse KEY=VALUE format
                     if '=' in line:
                         key, value = line.split('=', 1)
                         key = key.strip()
                         value = value.strip()
-                        
+
                         # Remove inline comments (everything after # character)
                         if '#' in value:
                             value = value.split('#')[0].strip()
-                        
+
                         # Remove quotes if present (handle both single and double quotes)
                         if (value.startswith('"') and value.endswith('"')) or \
                            (value.startswith("'") and value.endswith("'")):
                             value = value[1:-1]
-                        
+
                         # Only set if not already in environment (system env takes precedence)
                         if key and key not in os.environ:
                             os.environ[key] = value
-                            
+
         except (IOError, UnicodeDecodeError) as e:
             # Silently continue if .env file can't be read
             # This ensures the script works even with .env file issues
@@ -239,6 +240,13 @@ class PathConfig:
         """Get path for temporary files"""
         base = self._get_base_path('temp_base')
         return base / subpath if subpath else base
+
+    def get_parcellations_path(self, subpath: str = '') -> Path:
+        """Get path to atlas/parcellation files (at project root)"""
+        # Parcellations are at project root (specialisation-project/parcellations/)
+        code_base = self._get_base_path('code_base')
+        parcellations_base = code_base / 'specialisation-project' / 'parcellations'
+        return parcellations_base / subpath if subpath else parcellations_base
 
     def get_script_output_path(self, script_type: str, script_name: str = '', subpath: str = '') -> Path:
         """
@@ -353,6 +361,10 @@ def get_reports_path(subpath: str = '') -> Path:
 def get_temp_path(subpath: str = '') -> Path:
     """Get path for temporary files"""
     return _path_config.get_temp_path(subpath)
+
+def get_parcellations_path(subpath: str = '') -> Path:
+    """Get path to atlas/parcellation files"""
+    return _path_config.get_parcellations_path(subpath)
 
 def get_script_output_path(script_type: str, script_name: str = '', subpath: str = '') -> Path:
     """
