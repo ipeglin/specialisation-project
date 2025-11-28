@@ -1,16 +1,12 @@
-# Cross-Platform Conda Environment for TCP Preprocessing Pipeline
+# macOS Conda Environment for TCP Preprocessing Pipeline
+# Compatible with both Intel (x86_64) and Apple Silicon (arm64)
 #
-# This is the base environment specification that works across platforms.
-# For platform-specific setups, use:
-#   - environment-windows.yml  (Windows 11)
-#   - environment-macos.yml    (macOS Intel/ARM64)
-#   - environment-linux.yml    (Linux/CentOS/IDUN cluster)
-#
-# Setup (generic):
-#   conda env create -f environment.yml
+# Setup:
+#   conda env create -f environment-macos.yml
 #   conda activate masters_thesis
 #
-# See INSTALL.md for platform-specific installation instructions.
+# Note: This is identical to environment.yml as macOS supports all packages.
+# Kept as separate file for clarity and potential future macOS-specific needs.
 
 name: masters_thesis
 channels:
@@ -62,7 +58,7 @@ dependencies:
 
   # Git and version control
   - git
-  - git-annex # May need manual installation on some platforms (macOS ARM64, Windows)
+  - git-annex
 
   # File handling
   - patool
@@ -84,7 +80,7 @@ dependencies:
   # Keyring and secrets
   - keyring
   - keyrings.alt
-  - secretstorage
+  - secretstorage  # Works on macOS
 
   # Audio/metadata
   - mutagen

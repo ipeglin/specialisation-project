@@ -1,16 +1,14 @@
-# Cross-Platform Conda Environment for TCP Preprocessing Pipeline
+# Linux/CentOS Conda Environment for TCP Preprocessing Pipeline
+# Optimized for CentOS and general Linux distributions (including IDUN cluster)
 #
-# This is the base environment specification that works across platforms.
-# For platform-specific setups, use:
-#   - environment-windows.yml  (Windows 11)
-#   - environment-macos.yml    (macOS Intel/ARM64)
-#   - environment-linux.yml    (Linux/CentOS/IDUN cluster)
-#
-# Setup (generic):
-#   conda env create -f environment.yml
+# Setup:
+#   conda env create -f environment-linux.yml
 #   conda activate masters_thesis
 #
-# See INSTALL.md for platform-specific installation instructions.
+# For IDUN cluster:
+#   module load Anaconda3
+#   conda env create -f environment-linux.yml
+#   conda activate masters_thesis
 
 name: masters_thesis
 channels:
@@ -62,7 +60,7 @@ dependencies:
 
   # Git and version control
   - git
-  - git-annex # May need manual installation on some platforms (macOS ARM64, Windows)
+  - git-annex
 
   # File handling
   - patool
@@ -84,7 +82,7 @@ dependencies:
   # Keyring and secrets
   - keyring
   - keyrings.alt
-  - secretstorage
+  - secretstorage  # Linux-specific - required for keyring functionality
 
   # Audio/metadata
   - mutagen

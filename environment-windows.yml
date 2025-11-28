@@ -1,16 +1,19 @@
-# Cross-Platform Conda Environment for TCP Preprocessing Pipeline
+# Windows 11 Conda Environment for TCP Preprocessing Pipeline
 #
-# This is the base environment specification that works across platforms.
-# For platform-specific setups, use:
-#   - environment-windows.yml  (Windows 11)
-#   - environment-macos.yml    (macOS Intel/ARM64)
-#   - environment-linux.yml    (Linux/CentOS/IDUN cluster)
+# Prerequisites:
+#   Install scoop (https://scoop.sh):
+#     Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+#     irm get.scoop.sh | iex
 #
-# Setup (generic):
-#   conda env create -f environment.yml
+#   Install Windows-specific tools via scoop:
+#     scoop install git-annex 7zip
+#
+# Setup:
+#   conda env create -f environment-windows.yml
 #   conda activate masters_thesis
 #
-# See INSTALL.md for platform-specific installation instructions.
+# Note: scipy is excluded as it had issues on Windows conda.
+# If needed, install via pip: pip install scipy
 
 name: masters_thesis
 channels:
@@ -22,9 +25,10 @@ dependencies:
   # Core scientific computing
   - numpy
   - pandas
-  - scipy
+  # - scipy  # Install separately via pip if needed: pip install scipy
   - matplotlib
   - pillow
+  - h5py # Added - required for .h5 file handling
 
   # Jupyter and IPython
   - ipython
@@ -51,7 +55,6 @@ dependencies:
   - yarl
   - sniffio
   - anyio
-  - h5py
 
   # Development tools
   - debugpy
@@ -62,11 +65,11 @@ dependencies:
 
   # Git and version control
   - git
-  - git-annex # May need manual installation on some platforms (macOS ARM64, Windows)
+  # - git-annex  # Not available via conda on Windows - install via scoop instead
 
   # File handling
   - patool
-  - p7zip
+  # - p7zip  # Not available via conda on Windows - 7zip installed via scoop instead
   - bzip2
   - zstd
   - zstandard
@@ -84,7 +87,7 @@ dependencies:
   # Keyring and secrets
   - keyring
   - keyrings.alt
-  - secretstorage
+  # - secretstorage  # Linux-specific - not available on Windows
 
   # Audio/metadata
   - mutagen
