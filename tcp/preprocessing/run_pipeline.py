@@ -228,7 +228,7 @@ class TCPPipeline:
         with open(state_file, 'w') as f:
             json.dump(state, f, indent=2)
 
-    def check_step_completed(self, step: PipelineStep) -> bool:
+    def check_step_completed(self, step: PipelineStep, **kwargs) -> bool:
         """Check if a step has been completed successfully"""
         if step == PipelineStep.INITIALIZE_DATASET:
             # Check if dataset exists and is valid
@@ -316,11 +316,11 @@ class TCPPipeline:
 
         return False
 
-    def update_step_status(self) -> None:
+    def update_step_status(self, **kwargs) -> None:
         """Update step status based on output files"""
         for step in PipelineStep:
             if self.step_status[step] == StepStatus.NOT_STARTED:
-                if self.check_step_completed(step):
+                if self.check_step_completed(step, **kwargs):
                     self.step_status[step] = StepStatus.COMPLETED
                     print(f"  {CHECK} {step.value}: Already completed")
 
@@ -483,7 +483,7 @@ class TCPPipeline:
 
         # Update status based on existing files
         print("Checking existing pipeline state...")
-        self.update_step_status()
+        self.update_step_status(**kwargs)
 
         if self.pipeline_start_time is None:
             self.pipeline_start_time = datetime.now()
