@@ -33,6 +33,7 @@ if str(project_root) not in sys.path:
 
 # Now import local modules (after path is set up)
 from config.paths import get_parcellations_path
+from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, SUCCESS
 
 
 class FMRIPrepParcellator:
@@ -502,7 +503,7 @@ Examples:
             run_range=run_range,
             output_dir=args.output_dir
         )
-        print(f"\n✓ Success! Parcellated timeseries saved to: {output_path}")
+        print(f"\n{SUCCESS} Success! Parcellated timeseries saved to: {output_path}")
 
     else:
         # Parallel mode
@@ -515,7 +516,7 @@ Examples:
             output_dir=args.output_dir,
             n_jobs=args.n_jobs
         )
-        print(f"\n✓ Success! Parcellated {len(output_paths)} subjects")
+        print(f"\n{SUCCESS} Success! Parcellated {len(output_paths)} subjects")
         print(f"Output directory: {args.output_dir}")
 
 
