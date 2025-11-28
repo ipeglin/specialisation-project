@@ -20,149 +20,37 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  # Python
   - python=3.11
   - pip
-  # Core scientific computing
+
+  # Core scientific computing (directly used)
   - numpy
   - pandas
-  # - scipy  # Install separately via pip if needed: pip install scipy
+  - scipy # Install via pip if conda fails: pip install scipy
   - matplotlib
-  - pillow
-  - h5py # Added - required for .h5 file handling
+  - seaborn
+  - h5py
 
-  # Jupyter and IPython
+  # Neuroimaging (directly used)
+  - nilearn
+  - nibabel
+
+  # Data processing utilities
+  - tqdm
+  - joblib
+
+  # Jupyter/IPython (for notebooks and development)
   - ipython
   - ipykernel
   - jupyter_core
   - jupyter_client
 
-  # Network and HTTP
-  - requests
-  - urllib3
-  - certifi
-  - cryptography
-  - pysocks
-
-  # AWS SDK
-  - boto3
-  - botocore
-  - s3transfer
-
-  # Data processing
-  - tqdm
-  - msgpack-python
-  - multidict
-  - yarl
-  - sniffio
-  - anyio
-
-  # Development tools
-  - debugpy
-  - pygments
-  - colorama
-  - setuptools
-  - wheel
-
-  # Git and version control
-  - git
+  # DataLad and git-annex (for dataset management)
+  - datalad
   # - git-annex  # Not available via conda on Windows - install via scoop instead
+  - git
 
-  # File handling
-  - patool
+  # File compression (for DataLad)
   # - p7zip  # Not available via conda on Windows - 7zip installed via scoop instead
   - bzip2
-  - zstd
-  - zstandard
-
-  # GraphQL
-  - gql
-  - graphql-core
-
-  # System utilities
-  - psutil
-  - distro
-  - humanize
-  - fasteners
-
-  # Keyring and secrets
-  - keyring
-  - keyrings.alt
-  # - secretstorage  # Linux-specific - not available on Windows
-
-  # Audio/metadata
-  - mutagen
-  - exifread
-
-  # CLI utilities
-  - pyperclip
-
-  # Data science
-  - whoosh
-  - iso8601
-
-  # HTTP/2 support
-  - h2
-  - hpack
-  - hyperframe
-
-  # DataLad dependencies
-  - annexremote
-  - datalad
-
-  # Additional utilities
-  - backoff
-  - chardet
-  - charset-normalizer
-  - decorator
-  - executing
-  - exceptiongroup
-  - importlib-metadata
-  - importlib_resources
-  - jedi
-  - jmespath
-  - looseversion
-  - more-itertools
-  - nest-asyncio
-  - packaging
-  - parso
-  - pexpect
-  - pickleshare
-  - platformdirs
-  - prompt-toolkit
-  - propcache
-  - ptyprocess
-  - pure_eval
-  - pycparser
-  - python-dateutil
-  - python-gitlab
-  - pyzmq
-  - simplejson
-  - six
-  - stack_data
-  - traitlets
-  - typing_extensions
-  - wcwidth
-  - zipp
-
-  # Jaraco packages
-  - jaraco.classes
-  - jaraco.context
-  - jaraco.functools
-
-  # Backports
-  - backports
-  - backports.tarfile
-
-  # Requests extensions
-  - requests-ftp
-  - requests-toolbelt
-
-  # Communication
-  - comm
-
-  # Other
-  - asttokens
-  - cffi
-  - idna
-  - jeepney
-  - matplotlib-inline
