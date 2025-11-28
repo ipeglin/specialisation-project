@@ -379,8 +379,21 @@ class TCPPipeline:
                 if 'n_jobs' in kwargs:
                     cmd.extend(['--n-jobs', str(kwargs['n_jobs'])])
 
-                # Add subject IDs for parallel processing
+                # Load subject IDs from sampled subjects file
                 subject_ids = kwargs.get('parcellate_subject_ids', [])
+                if not subject_ids:
+                    # Auto-load from sampled_subjects_for_download.csv
+                    import pandas as pd
+                    sample_dir = get_script_output_path('tcp_preprocessing', 'sample_subjects_for_download')
+                    sample_file = sample_dir / 'sampled_subjects_for_download.csv'
+
+                    if sample_file.exists():
+                        df = pd.read_csv(sample_file)
+                        subject_ids = df['participant_id'].tolist()
+                        print(f"  Loaded {len(subject_ids)} subject IDs from {sample_file.name}")
+                    else:
+                        raise ValueError(f"No subject IDs provided and sample file not found: {sample_file}")
+
                 if subject_ids:
                     cmd.extend(['--subject-ids'] + subject_ids)
 
