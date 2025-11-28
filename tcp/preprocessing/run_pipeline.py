@@ -389,7 +389,8 @@ class TCPPipeline:
 
                     if sample_file.exists():
                         df = pd.read_csv(sample_file)
-                        subject_ids = df['participant_id'].tolist()
+                        # Use subject_id column (BIDS format: sub-NDARINVXXXXX)
+                        subject_ids = df['subject_id'].tolist()
                         print(f"  Loaded {len(subject_ids)} subject IDs from {sample_file.name}")
                     else:
                         raise ValueError(f"No subject IDs provided and sample file not found: {sample_file}")
