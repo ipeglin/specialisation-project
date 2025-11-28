@@ -250,7 +250,8 @@ class FMRIPrepParcellator:
                           subject_id: str,
                           task: str = "hammer",
                           run_range: Tuple[int, int] = (1, 9),
-                          output_dir: Optional[Path] = None) -> Path:
+                          output_dir: Optional[Path] = None,
+                          force_overwrite: bool = False) -> Path:
         """
         Parcellate all runs for a subject and save to .h5 file.
 
@@ -260,10 +261,25 @@ class FMRIPrepParcellator:
             task: Task name (default: 'hammer')
             run_range: Range of run numbers to process (inclusive)
             output_dir: Directory to save .h5 output
+            force_overwrite: If True, overwrite existing files; if False, skip existing
 
         Returns:
-            Path to saved .h5 file
+            Path to saved .h5 file (or existing file if skipped)
         """
+        # Check if output already exists
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to timeseries ID format (NDAR_INVXXXXX)
+            timeseries_id = subject_id.replace('sub-NDAR', 'NDAR_')
+            output_filename = f"{timeseries_id}_{task}.h5"
+            output_path = output_dir / output_filename
+
+            if output_path.exists() and not force_overwrite:
+                if self.verbose:
+                    print(f"\n{CHECK} Skipping {subject_id}: output already exists at {output_path}")
+                return output_path
         # Find all matching BOLD files
         bold_files = self._find_bold_files(fmriprep_root, subject_id, task, run_range)
 
@@ -297,7 +313,8 @@ class FMRIPrepParcellator:
                                     task: str = "hammer",
                                     run_range: Tuple[int, int] = (1, 9),
                                     output_dir: Optional[Path] = None,
-                                    n_jobs: int = 4) -> Dict[str, Path]:
+                                    n_jobs: int = 4,
+                                    force_overwrite: bool = False) -> Dict[str, Path]:
         """
         Parcellate multiple subjects in parallel using joblib.
 
@@ -308,12 +325,17 @@ class FMRIPrepParcellator:
             run_range: Range of run numbers
             output_dir: Output directory for .h5 files
             n_jobs: Number of parallel jobs (default: 4)
+            force_overwrite: If True, overwrite existing files; if False, skip existing
 
         Returns:
             Dictionary mapping subject_id to output .h5 path
         """
         print(f"\nParallel parcellation of {len(subject_ids)} subjects ({n_jobs} jobs)")
         print(f"Task: {task}, Runs: {run_range[0]}-{run_range[1]}")
+        if not force_overwrite:
+            print(f"Mode: Skip existing files (use --force-overwrite to reprocess)")
+        else:
+            print(f"Mode: Force overwrite existing files")
 
         # Create a non-verbose parcellator for parallel processing
         def process_one_subject(subject_id):
@@ -325,7 +347,8 @@ class FMRIPrepParcellator:
                     subject_id=subject_id,
                     task=task,
                     run_range=run_range,
-                    output_dir=output_dir
+                    output_dir=output_dir,
+                    force_overwrite=force_overwrite
                 )
                 return subject_id, output_path, None
             except Exception as e:
@@ -482,6 +505,8 @@ Examples:
                        help='Last run number (default: 9)')
     parser.add_argument('--n-jobs', type=int, default=4,
                        help='Number of parallel jobs (default: 4, only used with --subject-ids)')
+    parser.add_argument('--force-overwrite', action='store_true',
+                       help='Force overwrite of existing .h5 files (default: skip existing)')
 
     args = parser.parse_args()
 
@@ -501,7 +526,8 @@ Examples:
             subject_id=args.subject_id,
             task=args.task,
             run_range=run_range,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            force_overwrite=args.force_overwrite
         )
         print(f"\n{SUCCESS} Success! Parcellated timeseries saved to: {output_path}")
 
@@ -514,7 +540,8 @@ Examples:
             task=args.task,
             run_range=run_range,
             output_dir=args.output_dir,
-            n_jobs=args.n_jobs
+            n_jobs=args.n_jobs,
+            force_overwrite=args.force_overwrite
         )
         print(f"\n{SUCCESS} Success! Parcellated {len(output_paths)} subjects")
         print(f"Output directory: {args.output_dir}")

@@ -382,6 +382,8 @@ class TCPPipeline:
                     cmd.extend(['--run-end', str(kwargs['run_end'])])
                 if 'n_jobs' in kwargs:
                     cmd.extend(['--n-jobs', str(kwargs['n_jobs'])])
+                if kwargs.get('force_overwrite', False):
+                    cmd.append('--force-overwrite')
 
                 # Load subject IDs from sampled subjects file
                 subject_ids = kwargs.get('parcellate_subject_ids', [])
@@ -693,6 +695,8 @@ def main():
                        help='Last run number for parcellation (default: 9)')
     parser.add_argument('--n-jobs', type=int, default=4,
                        help='Number of parallel jobs for parcellation (default: 4)')
+    parser.add_argument('--force-overwrite', action='store_true',
+                       help='Force overwrite of existing parcellated .h5 files (fMRIPrep mode only)')
 
     args = parser.parse_args()
 
@@ -742,6 +746,7 @@ def main():
         'run_start': args.run_start,
         'run_end': args.run_end,
         'n_jobs': args.n_jobs,
+        'force_overwrite': args.force_overwrite,
         'task': args.tasks[0] if args.tasks else 'hammer'
     }
 
