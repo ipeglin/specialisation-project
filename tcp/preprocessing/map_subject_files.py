@@ -272,8 +272,8 @@ class SubjectFileMapper:
                     h5_path = timeseries_path / h5_filename
 
                     if h5_path.exists():
-                        # Store just the filename (files are directly in parcellated_output_dir)
-                        file_map['timeseries'][task] = [h5_filename]
+                        # Store absolute path for fMRIPrep mode (files are not in dataset)
+                        file_map['timeseries'][task] = [str(h5_path.absolute())]
 
         return file_map
 
