@@ -26,10 +26,12 @@ from nilearn.image import load_img
 from nilearn.maskers import NiftiLabelsMasker
 from tqdm import tqdm
 
-# Add project root to path
+# Add project root to path BEFORE importing local modules
 project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
+# Now import local modules (after path is set up)
 from config.paths import get_parcellations_path
 
 

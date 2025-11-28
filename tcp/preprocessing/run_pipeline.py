@@ -27,10 +27,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Add project root to path to import config
+# Add project root to path BEFORE importing local modules
 project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
+# Now import local modules (after path is set up)
 from config.paths import get_script_output_path
 from tcp.preprocessing.utils.unicode_compat import (
     CHECK,
