@@ -100,6 +100,7 @@ fMRIPrep NIfTI → Parcellation Engine → parcellated/*.h5 → Processing
 ```
 
 **Example**:
+
 ```
 sub-NDARINV001_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz
 ```
@@ -119,7 +120,7 @@ with h5py.File('NDAR_INVXXXXX_hammer.h5', 'r') as f:
     # Datasets (one per run)
     for run_name in f.keys():
         data = f[run_name][:]  # Shape: (434, timepoints)
-    
+
     # Metadata
     f.attrs['subject_id']  # 'NDAR_INVXXXXX'
     f.attrs['task']        # 'hammer'
@@ -150,6 +151,7 @@ with h5py.File('NDAR_INVXXXXX_hammer.h5', 'r') as f:
 --run-start N                        # First run number (default: 1)
 --run-end N                          # Last run number (default: 9)
 --n-jobs N                           # Parallel jobs for parcellation (default: 4)
+--force-overwrite                    # Force reprocess existing .h5 files (default: skip existing)
 ```
 
 ## Usage Examples
@@ -203,13 +205,27 @@ python tcp/preprocessing/fmriprep_parcellation.py \
     --n-jobs 4
 ```
 
+### Example 5: Force Reprocess Existing Files
+
+```bash
+# Reprocess all subjects, overwriting existing .h5 files
+python tcp/preprocessing/run_pipeline.py \
+    --data-source fmriprep \
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \
+    --parcellated-output-dir Data/fmriprep_parcellated \
+    --start-from parcellate_fmriprep \
+    --force-overwrite
+```
+
 ## Performance Considerations
 
 ### Parcellation Speed
 
-- **Single subject**: ~2-5 minutes (9 runs)
-- **Parallel (4 jobs)**: ~0.5-1.5 minutes per subject
-- **100 subjects (4 jobs)**: ~1-3 hours total
+- **Single subject**: ~60-90 seconds (9 runs)
+- **Parallel (4 jobs)**: ~15-25 seconds per subject
+- **Skipping existing**: <1 second per subject
+- **100 subjects (4 jobs)**: ~25-40 minutes total (first run)
+- **100 subjects (skip existing)**: ~1-2 minutes total (subsequent runs)
 
 ### Memory Requirements
 
@@ -297,7 +313,7 @@ with h5py.File('Data/fmriprep_parcellated/NDAR_INVXXXXX_hammer.h5', 'r') as f:
     # Verify structure
     assert 'subject_id' in f.attrs
     assert f.attrs['n_rois'] == 434
-    
+
     # Check each run
     for run_name in f.keys():
         data = f[run_name][:]
@@ -312,6 +328,7 @@ with h5py.File('Data/fmriprep_parcellated/NDAR_INVXXXXX_hammer.h5', 'r') as f:
 **Cause**: fMRIPrep output doesn't match expected file pattern.
 
 **Solutions**:
+
 1. Check file naming: `sub-{id}_task-{task}<AP|PA>_run-{run}_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz`
 2. Verify task name matches (default: `hammer`)
 3. Check run range (default: 01-09)
@@ -321,6 +338,7 @@ with h5py.File('Data/fmriprep_parcellated/NDAR_INVXXXXX_hammer.h5', 'r') as f:
 **Cause**: Parcellations directory not at project root.
 
 **Solution**:
+
 ```bash
 # Verify parcellations location
 ls parcellations/cortical/yeo17/
@@ -332,6 +350,7 @@ ls parcellations/subcortical/tian/
 **Cause**: Atlas file mismatch or corruption.
 
 **Solution**:
+
 1. Verify atlas files match expected parcels (400 + 32 + 2 = 434)
 2. Re-download atlas files if corrupted
 
@@ -369,6 +388,7 @@ ls parcellations/subcortical/tian/
 ## Support
 
 For issues or questions:
+
 1. Check this documentation
 2. Review error messages carefully
 3. Verify file paths and permissions
