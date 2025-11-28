@@ -366,8 +366,12 @@ class TCPPipeline:
                 if not fmriprep_root or not parcellated_output_dir:
                     raise ValueError("fMRIPrep parcellation requires --fmriprep-root and --parcellated-output-dir")
 
-                cmd.extend(['--fmriprep-root', str(fmriprep_root)])
-                cmd.extend(['--output-dir', str(parcellated_output_dir)])
+                # Convert paths to forward slashes to avoid escape sequence issues
+                fmriprep_root_str = str(Path(fmriprep_root).as_posix())
+                parcellated_output_str = str(Path(parcellated_output_dir).as_posix())
+
+                cmd.extend(['--fmriprep-root', fmriprep_root_str])
+                cmd.extend(['--output-dir', parcellated_output_str])
 
                 # Add task and run range if specified
                 if 'task' in kwargs:
