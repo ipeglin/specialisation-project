@@ -404,6 +404,22 @@ class TCPPipeline:
                 if subject_ids:
                     cmd.extend(['--subject-ids'] + subject_ids)
 
+            elif step == PipelineStep.MAP_SUBJECT_FILES:
+                # Add data source arguments for file mapping
+                data_source = kwargs.get('data_source', 'datalad')
+                cmd.extend(['--data-source', data_source])
+
+                if data_source == 'fmriprep':
+                    parcellated_output_dir = kwargs.get('parcellated_output_dir')
+                    if parcellated_output_dir:
+                        # Convert to forward slashes to avoid escape sequence issues
+                        parcellated_output_str = str(Path(parcellated_output_dir).as_posix())
+                        cmd.extend(['--parcellated-output-dir', parcellated_output_str])
+
+                    # Pass task if specified
+                    if 'task' in kwargs:
+                        cmd.extend(['--task', kwargs['task']])
+
             elif step == PipelineStep.FETCH_FILTERED_DATA:
                 # Add data fetching arguments if provided
                 if 'data_types' in kwargs:

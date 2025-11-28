@@ -13,20 +13,22 @@ Author: Ian Philip Eglin
 Date: 2025-10-16
 """
 
-import sys
 import argparse
+import glob
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-import json
-from datetime import datetime
-import glob
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
+from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.config.data_source_config import DataSourceConfig, DataSourceType
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
@@ -36,13 +38,28 @@ class SubjectFileMapper:
     def __init__(self,
                  filtered_subjects_dir: Optional[Path] = None,
                  dataset_path: Optional[Path] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 data_source_config: Optional[DataSourceConfig] = None):
         self.filtered_subjects_dir = Path(filtered_subjects_dir) if filtered_subjects_dir else \
             get_script_output_path('tcp_preprocessing', 'filter_subjects')
-        self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
+
+        # Use data source config if provided, otherwise default to datalad mode
+        if data_source_config:
+            self.data_source_config = data_source_config
+            self.dataset_path = data_source_config.dataset_path
+            self.source_type = data_source_config.source_type
+        else:
+            # Fallback to datalad mode for backward compatibility
+            from tcp.preprocessing.config.data_source_config import (
+                create_datalad_config,
+            )
+            self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
+            self.source_type = DataSourceType.DATALAD
+            self.data_source_config = create_datalad_config(self.dataset_path)
+
         self.output_dir = Path(output_dir) if output_dir else \
             get_script_output_path('tcp_preprocessing', 'map_subject_files')
-            
+
         # Directory for sampled subjects (priority input)
         self.sampled_subjects_dir = get_script_output_path('tcp_preprocessing', 'sample_subjects_for_download')
 
@@ -81,19 +98,19 @@ class SubjectFileMapper:
 
         # Try to load sampled subjects first (priority)
         sampled_subjects_file = self.sampled_subjects_dir / "sampled_subjects_for_download.csv"
-        
+
         if sampled_subjects_file.exists():
             print(f"  Found sampled subjects file: {sampled_subjects_file}")
             subjects_df = pd.read_csv(sampled_subjects_file)
-            
+
             if 'subject_id' not in subjects_df.columns:
                 raise ValueError("subject_id column not found in sampled subjects data")
-                
+
             subject_ids = subjects_df['subject_id'].tolist()
             print(f"  Loaded {len(subject_ids)} SAMPLED subjects for mapping")
             print(f"  (This will significantly reduce mapping time and storage requirements)")
             return subject_ids
-        
+
         # Fallback to task-filtered subjects
         subjects_file = self.filtered_subjects_dir / "task_filtered_subjects.csv"
 
@@ -121,22 +138,46 @@ class SubjectFileMapper:
     def map_subject_files(self, subject_ids: List[str]) -> Dict[str, Dict]:
         """Map all file paths for each subject"""
         print(f"\nMapping files for {len(subject_ids)} subjects...")
+        print(f"Data source: {self.source_type.value}")
 
         subject_file_mapping = {}
-        timeseries_path = self.dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated"
+
+        # Get timeseries path from data source config
+        timeseries_path = self.data_source_config.get_timeseries_output_path()
+        print(f"Timeseries path: {timeseries_path}")
+
+        # Validate timeseries path exists for fMRIPrep mode
+        if self.source_type == DataSourceType.FMRIPREP:
+            if not timeseries_path.exists():
+                raise FileNotFoundError(
+                    f"Parcellated output directory does not exist: {timeseries_path}\n"
+                    f"Please run parcellate_fmriprep step first to generate .h5 files."
+                )
+
+            # Check if directory has any .h5 files
+            h5_files = list(timeseries_path.glob('*.h5'))
+            if not h5_files:
+                print(f"WARNING: No .h5 files found in {timeseries_path}")
+                print(f"         Ensure parcellation completed successfully")
 
         for i, subject_id in enumerate(subject_ids, 1):
             if i % 50 == 0 or i == len(subject_ids):
                 print(f"  Progress: {i}/{len(subject_ids)} subjects")
 
-            file_map = self._map_single_subject(subject_id, timeseries_path)
+            if self.source_type == DataSourceType.FMRIPREP:
+                # fMRIPrep mode: Only map timeseries
+                file_map = self._map_fmriprep_subject(subject_id, timeseries_path)
+            else:
+                # Datalad mode: Map all data types
+                file_map = self._map_datalad_subject(subject_id, timeseries_path)
+
             subject_file_mapping[subject_id] = file_map
 
         print(f"  File mapping complete")
         return subject_file_mapping
 
-    def _map_single_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
-        """Map files for a single subject"""
+    def _map_datalad_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
+        """Map files for a single subject in datalad mode"""
         file_map = {
             'raw_nifti': {'hammer': [], 'stroop': []},
             'events': {'hammer': [], 'stroop': []},
@@ -194,32 +235,91 @@ class SubjectFileMapper:
 
         return file_map
 
+    def _map_fmriprep_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
+        """Map files for a single subject in fMRIPrep mode
+
+        In fMRIPrep mode, we only have parcellated timeseries (.h5 files).
+        Raw NIFTI, events, and anatomical files are not available in the
+        parcellated output directory.
+
+        Args:
+            subject_id: Subject ID in BIDS format (sub-NDARINVXXXXX)
+            timeseries_path: Path to parcellated output directory
+
+        Returns:
+            Dict with only timeseries entries (other fields empty)
+        """
+        file_map = {
+            'raw_nifti': {'hammer': [], 'stroop': []},
+            'events': {'hammer': [], 'stroop': []},
+            'json_metadata': {'hammer': [], 'stroop': []},
+            'anatomical': {'t1w': [], 't2w': []},
+            'anatomical_json': {'t1w': [], 't2w': []},
+            'timeseries': {'hammer': [], 'stroop': []}
+        }
+
+        # Map timeseries data from parcellated output directory
+        if timeseries_path.exists():
+            # Convert BIDS ID to timeseries ID format
+            # sub-NDARINVXXXXX -> NDAR_INVXXXXX
+            if subject_id.startswith('sub-NDAR'):
+                timeseries_id = subject_id.replace('sub-NDAR', 'NDAR_')
+
+                # In fMRIPrep mode, .h5 files are directly in parcellated_output_dir
+                # Naming: NDAR_INVXXXXX_{task}.h5
+                for task in ['hammer', 'stroop']:
+                    h5_filename = f"{timeseries_id}_{task}.h5"
+                    h5_path = timeseries_path / h5_filename
+
+                    if h5_path.exists():
+                        # Store just the filename (files are directly in parcellated_output_dir)
+                        file_map['timeseries'][task] = [h5_filename]
+
+        return file_map
+
     def find_global_files(self) -> List[str]:
-        """Find dataset-wide files (phenotype, participants, etc.)"""
+        """Find dataset-wide files (phenotype, participants, etc.)
+
+        In fMRIPrep mode, phenotype files are still fetched from datalad dataset.
+        In datalad mode, all global files are in the dataset.
+        """
         print("\nFinding global dataset files...")
 
         global_files = []
 
-        # Phenotype files
-        phenotype_dir = self.dataset_path / "phenotype"
-        if phenotype_dir.exists():
-            for tsv_file in phenotype_dir.glob("*.tsv"):
-                global_files.append(str(tsv_file.relative_to(self.dataset_path)))
+        if self.source_type == DataSourceType.FMRIPREP:
+            # fMRIPrep mode: Phenotype files come from datalad dataset
+            phenotype_source = self.data_source_config.get_phenotype_source_path()
 
-        # Participants file
-        participants_file = self.dataset_path / "participants.tsv"
-        if participants_file.exists():
-            global_files.append(str(participants_file.relative_to(self.dataset_path)))
+            phenotype_dir = phenotype_source / "phenotype"
+            if phenotype_dir.exists():
+                for tsv_file in phenotype_dir.glob("*.tsv"):
+                    global_files.append(str(tsv_file.relative_to(phenotype_source)))
 
-        # Dataset description
-        dataset_desc = self.dataset_path / "dataset_description.json"
-        if dataset_desc.exists():
-            global_files.append(str(dataset_desc.relative_to(self.dataset_path)))
+            # Participants file
+            participants_file = phenotype_source / "participants.tsv"
+            if participants_file.exists():
+                global_files.append(str(participants_file.relative_to(phenotype_source)))
+        else:
+            # Datalad mode: Use existing logic
+            phenotype_dir = self.dataset_path / "phenotype"
+            if phenotype_dir.exists():
+                for tsv_file in phenotype_dir.glob("*.tsv"):
+                    global_files.append(str(tsv_file.relative_to(self.dataset_path)))
 
-        # README
-        readme = self.dataset_path / "README"
-        if readme.exists():
-            global_files.append(str(readme.relative_to(self.dataset_path)))
+            participants_file = self.dataset_path / "participants.tsv"
+            if participants_file.exists():
+                global_files.append(str(participants_file.relative_to(self.dataset_path)))
+
+            # Dataset description
+            dataset_desc = self.dataset_path / "dataset_description.json"
+            if dataset_desc.exists():
+                global_files.append(str(dataset_desc.relative_to(self.dataset_path)))
+
+            # README
+            readme = self.dataset_path / "README"
+            if readme.exists():
+                global_files.append(str(readme.relative_to(self.dataset_path)))
 
         print(f"  Found {len(global_files)} global files")
         return global_files
@@ -265,7 +365,7 @@ class SubjectFileMapper:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\nExporting results to {self.output_dir}")
-        
+
         # Determine input source that was used
         sampled_subjects_file = self.sampled_subjects_dir / "sampled_subjects_for_download.csv"
         using_sampled_subjects = sampled_subjects_file.exists()
@@ -276,7 +376,9 @@ class SubjectFileMapper:
             'global_files': global_files,
             'metadata': {
                 'timestamp': datetime.now().isoformat(),
+                'data_source': self.source_type.value,
                 'dataset_path': str(self.dataset_path),
+                'timeseries_path': str(self.data_source_config.get_timeseries_output_path()),
                 'total_subjects': len(subject_file_mapping),
                 'total_global_files': len(global_files),
                 'input_source': 'sampled_subjects' if using_sampled_subjects else 'filtered_subjects'
@@ -362,17 +464,49 @@ def main():
     parser.add_argument('--output-dir', type=Path,
                         help='Override output directory')
 
+    # Data source configuration arguments
+    parser.add_argument('--data-source',
+                       choices=['datalad', 'fmriprep'],
+                       default='datalad',
+                       help='Data source type (default: datalad)')
+    parser.add_argument('--parcellated-output-dir', type=Path,
+                       help='Parcellated output directory (required for fmriprep mode)')
+    parser.add_argument('--task', type=str, default='hammer',
+                       help='Task name (for fmriprep mode, default: hammer)')
+
     args = parser.parse_args()
 
     print("TCP Subject File Mapping")
     print("=" * 50)
 
     try:
+        # Create data source config based on mode
+        if args.data_source == 'fmriprep':
+            if not args.parcellated_output_dir:
+                parser.error("--parcellated-output-dir is required for fmriprep mode")
+
+            from tcp.preprocessing.config.data_source_config import (
+                create_fmriprep_config,
+            )
+            data_source_config = create_fmriprep_config(
+                fmriprep_root=Path('/dummy'),  # Not needed for mapping
+                parcellated_output_dir=args.parcellated_output_dir,
+                dataset_path=args.dataset_path,
+                task=args.task
+            )
+        else:
+            from tcp.preprocessing.config.data_source_config import (
+                create_datalad_config,
+            )
+            data_source_config = create_datalad_config(
+                dataset_path=args.dataset_path
+            )
+
         # Initialize mapper
         mapper = SubjectFileMapper(
             filtered_subjects_dir=args.filtered_subjects_dir,
-            dataset_path=args.dataset_path,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            data_source_config=data_source_config
         )
 
         # Load filtered subjects
