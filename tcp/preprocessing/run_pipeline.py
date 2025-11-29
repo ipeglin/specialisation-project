@@ -425,6 +425,24 @@ class TCPPipeline:
                     if 'task' in kwargs:
                         cmd.extend(['--task', kwargs['task']])
 
+            elif step == PipelineStep.INTEGRATE_CROSS_ANALYSIS:
+                # Add data source arguments for manifest generation
+                data_source = kwargs.get('data_source', 'datalad')
+                cmd.extend(['--data-source', data_source])
+
+                if data_source == 'fmriprep':
+                    fmriprep_root = kwargs.get('fmriprep_root')
+                    if fmriprep_root:
+                        # Convert to forward slashes to avoid escape sequence issues
+                        fmriprep_root_str = str(Path(fmriprep_root).as_posix())
+                        cmd.extend(['--fmriprep-root', fmriprep_root_str])
+
+                    parcellated_output_dir = kwargs.get('parcellated_output_dir')
+                    if parcellated_output_dir:
+                        # Convert to forward slashes to avoid escape sequence issues
+                        parcellated_output_str = str(Path(parcellated_output_dir).as_posix())
+                        cmd.extend(['--parcellated-output-dir', parcellated_output_str])
+
             elif step == PipelineStep.FETCH_FILTERED_DATA:
                 # Add data fetching arguments if provided
                 if 'data_types' in kwargs:
