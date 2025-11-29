@@ -15,14 +15,15 @@ Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import pandas as pd
+
 import numpy as np
-import json
-from datetime import datetime
+import pandas as pd
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -42,8 +43,14 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
-from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
+from tcp.preprocessing.config.data_source_config import (
+    DataSourceConfig,
+    DataSourceType,
+    create_datalad_config,
+    create_fmriprep_config,
+)
 from tcp.preprocessing.utils.subject_id_transform import manifest_to_directory_id
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class CrossAnalysisIntegrator:
@@ -51,7 +58,8 @@ class CrossAnalysisIntegrator:
 
     def __init__(self,
                  analysis_groups_dir: Optional[Path] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 data_source_config: Optional[DataSourceConfig] = None):
         self.analysis_groups_dir = Path(analysis_groups_dir) if analysis_groups_dir else \
             get_script_output_path('tcp_preprocessing', 'generate_analysis_groups')
         self.output_dir = Path(output_dir) if output_dir else \
@@ -59,8 +67,12 @@ class CrossAnalysisIntegrator:
 
         self.combined_subjects: Optional[pd.DataFrame] = None
 
+        # Set data source configuration (default to datalad if not specified)
+        self.data_source_config = data_source_config if data_source_config else create_datalad_config()
+
         print(f"Analysis groups input: {self.analysis_groups_dir}")
         print(f"Output directory: {self.output_dir}")
+        print(f"Data source: {self.data_source_config.source_type.value}")
 
     def load_combined_subjects_data(self) -> None:
         """Load the combined subjects data with all classifications"""
@@ -111,7 +123,7 @@ class CrossAnalysisIntegrator:
         # 3. Analysis group membership overlap
         analysis_groups = ['primary', 'secondary', 'tertiary', 'quaternary']
         group_membership = {}
-        
+
         for group in analysis_groups:
             group_file = self.analysis_groups_dir / f"{group}_analysis_subjects.csv"
             if group_file.exists():
@@ -293,65 +305,79 @@ class CrossAnalysisIntegrator:
         with open(master_file, 'w') as f:
             json.dump(master_summary, f, indent=2, cls=NumpyEncoder)
         print(f"  {CHECK} Master summary: {master_file}")
-        
+
         # 6. Export comprehensive data manifest for processing pipeline
         self._export_data_manifest(analysis_datasets)
 
     def _export_data_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> None:
         """Export comprehensive data manifest for processing pipeline"""
         print("  Creating comprehensive data manifest for processing pipeline...")
-        
+
         # Load additional subject data for complete manifest
         manifest_data = self._build_comprehensive_manifest(analysis_datasets)
-        
+
         # Export the manifest
         manifest_file = self.output_dir / "processing_data_manifest.json"
         with open(manifest_file, 'w') as f:
             json.dump(manifest_data, f, indent=2, cls=NumpyEncoder)
         print(f"  {CHECK} Processing data manifest: {manifest_file}")
-        
+
     def _build_comprehensive_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> Dict:
         """Build comprehensive data manifest with subject files and metadata"""
         from config.paths import get_tcp_dataset_path
-        
+
         dataset_path = get_tcp_dataset_path()
-        
+
+        # Determine timeseries source path and path format based on data source
+        is_fmriprep_mode = self.data_source_config.source_type == DataSourceType.FMRIPREP
+
+        if is_fmriprep_mode:
+            timeseries_root = self.data_source_config.parcellated_output_dir
+            use_relative_paths = False  # fMRIPrep uses absolute paths
+            timeseries_pattern = "{subject_id}_*.h5"
+        else:
+            timeseries_root = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated"
+            use_relative_paths = True  # datalad uses relative paths
+            timeseries_pattern = "fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_id}/*_parcellated.h5"
+
         # Base manifest structure
         manifest = {
             "manifest_metadata": {
                 "created_timestamp": datetime.now().isoformat(),
                 "preprocessing_version": "1.0.0",
                 "source_dataset": str(dataset_path),
+                "data_source_type": self.data_source_config.source_type.value,
                 "total_subjects": len(self.combined_subjects),
                 "analysis_groups": list(analysis_datasets.keys()),
                 "data_types_available": ["timeseries", "motion", "phenotype"]
             },
             "path_configuration": {
                 "dataset_root": str(dataset_path),
+                "timeseries_root": str(timeseries_root),
                 "preprocessing_root": str(self.output_dir.parent.parent),
-                "relative_paths": True,
+                "relative_paths": use_relative_paths,
                 "platform_info": "Use config.paths for cross-platform resolution"
             },
             "subjects": {},
             "analysis_groups": {},
             "file_patterns": {
-                "timeseries": "fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_id}/*_parcellated.h5",
+                "timeseries": timeseries_pattern,
                 "motion": "motion_FD/TCP_FD_*.csv",
                 "phenotype": "phenotype/*.tsv"
             }
         }
-        
+
         # Build analysis groups mapping
         for group_name, dataset in analysis_datasets.items():
             manifest["analysis_groups"][group_name] = dataset['subject_id'].tolist()
-        
+
         # Build subject-level manifest
         for _, subject_row in self.combined_subjects.iterrows():
             subject_id = subject_row['subject_id']
-            
+
             # Convert subject ID to directory format using utility function
             subject_dir_id = manifest_to_directory_id(subject_id)
-            
+
             subject_manifest = {
                 "demographics": {
                     "age": subject_row.get('age', None),
@@ -370,9 +396,9 @@ class CrossAnalysisIntegrator:
                 },
                 "files": {
                     "timeseries": {
-                        "base_path": f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}",
+                        "base_path": "",  # Will be set based on data source
                         "available": [],  # Will be populated by file scanning
-                        "patterns": ["*_parcellated.h5"]
+                        "patterns": []    # Will be set based on data source
                     },
                     "motion": {
                         "base_path": "motion_FD",
@@ -388,30 +414,51 @@ class CrossAnalysisIntegrator:
                 },
                 "validation_status": "validated"  # All subjects in this pipeline are validated
             }
-            
+
             # Determine analysis group memberships
             for group_name, dataset in analysis_datasets.items():
                 if subject_id in dataset['subject_id'].values:
                     subject_manifest["analysis_group_memberships"].append(group_name)
-            
-            # Check for actual file availability (basic check)
-            timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
-            if timeseries_dir.exists():
-                # List available timeseries files
-                timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+
+            # Check for actual file availability based on data source
+            if is_fmriprep_mode:
+                # fMRIPrep mode: look for files directly in parcellated_output_dir with subject_dir_id prefix
+                # Example: NDAR_INVXXXXX_hammer.h5
+                timeseries_files = list(timeseries_root.glob(f"{subject_dir_id}_*.h5"))
+
                 if timeseries_files:
                     subject_manifest["data_availability"]["has_timeseries"] = True
+                    # Store absolute paths for fMRIPrep mode
                     subject_manifest["files"]["timeseries"]["available"] = [
-                        f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}" 
-                        for f in timeseries_files
+                        str(f.resolve()) for f in timeseries_files
                     ]
+                    subject_manifest["files"]["timeseries"]["base_path"] = str(timeseries_root)
+                    subject_manifest["files"]["timeseries"]["patterns"] = [f"{subject_dir_id}_*.h5"]
                 else:
-                    # Directory exists but no files found - log for debugging
-                    print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
+                    # No files found
+                    subject_manifest["files"]["timeseries"]["base_path"] = str(timeseries_root)
+                    subject_manifest["files"]["timeseries"]["patterns"] = [f"{subject_dir_id}_*.h5"]
             else:
-                # Directory doesn't exist - this might be expected for some subjects
-                pass  # Keep has_timeseries as False
-            
+                # Datalad mode: look for files in subdirectory structure
+                timeseries_dir = timeseries_root / subject_dir_id
+
+                if timeseries_dir.exists():
+                    # List available timeseries files
+                    timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+                    if timeseries_files:
+                        subject_manifest["data_availability"]["has_timeseries"] = True
+                        # Store relative paths for datalad mode
+                        subject_manifest["files"]["timeseries"]["available"] = [
+                            f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}"
+                            for f in timeseries_files
+                        ]
+                    else:
+                        # Directory exists but no files found - log for debugging
+                        print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
+
+                subject_manifest["files"]["timeseries"]["base_path"] = f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}"
+                subject_manifest["files"]["timeseries"]["patterns"] = ["*_parcellated.h5"]
+
             # Check motion data availability
             motion_dir = dataset_path / "motion_FD"
             if motion_dir.exists():
@@ -427,9 +474,9 @@ class CrossAnalysisIntegrator:
             else:
                 # Motion directory doesn't exist
                 pass  # Keep has_motion as False
-            
+
             manifest["subjects"][subject_id] = subject_manifest
-        
+
         return manifest
 
     def _export_human_readable_report(self, cross_tabs: Dict, stats: Dict) -> None:
@@ -513,16 +560,45 @@ def main():
     parser.add_argument('--output-dir', type=Path,
                         help='Override output directory')
 
+    # Data source configuration
+    parser.add_argument('--data-source', type=str, choices=['datalad', 'fmriprep'],
+                        default='datalad',
+                        help='Data source type (default: datalad)')
+    parser.add_argument('--fmriprep-root', type=Path,
+                        help='fMRIPrep output directory (required for fmriprep mode)')
+    parser.add_argument('--parcellated-output-dir', type=Path,
+                        help='Directory containing parcellated .h5 files (required for fmriprep mode)')
+
     args = parser.parse_args()
 
     print("TCP Cross-Analysis Integration")
     print("=" * 50)
 
     try:
+        # Create data source configuration
+        if args.data_source == 'fmriprep':
+            if not args.fmriprep_root or not args.parcellated_output_dir:
+                print(f"{ERROR} fMRIPrep mode requires --fmriprep-root and --parcellated-output-dir")
+                return 1
+
+            data_source_config = create_fmriprep_config(
+                fmriprep_root=args.fmriprep_root,
+                parcellated_output_dir=args.parcellated_output_dir
+            )
+        else:
+            data_source_config = create_datalad_config()
+
+        # Validate data source configuration
+        is_valid, message = data_source_config.validate()
+        if not is_valid:
+            print(f"{ERROR} Data source configuration invalid: {message}")
+            return 1
+
         # Initialize integrator
         integrator = CrossAnalysisIntegrator(
             analysis_groups_dir=args.analysis_groups_dir,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            data_source_config=data_source_config
         )
 
         # Load combined subjects data

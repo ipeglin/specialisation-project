@@ -1313,6 +1313,10 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
         subject_file = loader.resolve_file_path(hammer_files[0])
 
+        # Log the actual file path being loaded
+        if verbose:
+            print(f"\nLoading data from: {subject_file}")
+
         # Read data from .h5 file
         data = None
         with h5py.File(subject_file, 'r') as file:
