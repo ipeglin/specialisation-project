@@ -354,6 +354,11 @@ class TCPPipeline:
                 sample_mode = kwargs.get('sample_mode', 'development')
                 cmd.extend(['--sample-mode', sample_mode])
 
+                # Add subjects-per-group for custom mode
+                if sample_mode == 'custom':
+                    subjects_per_group = kwargs.get('subjects_per_group', 5)
+                    cmd.extend(['--subjects-per-group', str(subjects_per_group)])
+
                 analysis_groups = kwargs.get('analysis_groups', ['primary'])
                 if analysis_groups:
                     cmd.extend(['--analysis-groups'] + analysis_groups)
@@ -680,6 +685,8 @@ def main():
                        choices=['development', 'production', 'custom'],
                        default='development',
                        help='Sampling strategy: development (~15GB), production (~300GB), or custom (default: development)')
+    parser.add_argument('--subjects-per-group', type=int, default=5,
+                       help='Number of subjects per subgroup (custom mode only, default: 5)')
     parser.add_argument('--analysis-groups', nargs='+',
                        choices=['primary', 'secondary', 'tertiary', 'quaternary', 'all'],
                        default=['primary'],
@@ -751,6 +758,7 @@ def main():
         'min_age': args.min_age,
         'max_age': args.max_age,
         'sample_mode': args.sample_mode,
+        'subjects_per_group': args.subjects_per_group,
         'analysis_groups': args.analysis_groups,
         'data_types': args.data_types,
         'tasks': args.tasks,
