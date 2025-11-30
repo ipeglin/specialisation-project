@@ -306,6 +306,11 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
         for j in range(i+1, n_rois):
             roi1, roi2 = roi_labels[i], roi_labels[j]
             corr_val = corr_matrix[i, j]
+
+            # Skip if correlation is NaN (unavailable channels)
+            if np.isnan(corr_val):
+                continue
+
             p_val = p_values[i, j] if p_values is not None else None
             is_significant = p_val < alpha if p_val is not None else None
 
@@ -467,6 +472,53 @@ def combine_slow_band_components(time_modes, center_freqs, verbose=True):
             print(f'Band Slow-{key}: no components in this band')
 
     return band_signals
+
+
+def get_frequency_range(band_key):
+    """
+    Return frequency range string for slow-band visualization.
+
+    Args:
+        band_key: str, band identifier ('2', '3', '4', '5', or '6')
+
+    Returns:
+        str: Frequency range in Hz (e.g., '0.027-0.073 Hz')
+    """
+    ranges = {
+        '6': '0.000-0.010 Hz',
+        '5': '0.010-0.027 Hz',
+        '4': '0.027-0.073 Hz',
+        '3': '0.073-0.198 Hz',
+        '2': '0.198-0.250 Hz',
+    }
+    return ranges.get(band_key, 'Unknown')
+
+
+def detect_available_channels(band_signal, threshold=1e-10):
+    """
+    Detect which channels have valid timeseries for a given slow-band.
+
+    Uses RMS (root mean square) energy to identify channels with meaningful
+    signal content. Channels with RMS below threshold are marked unavailable.
+
+    Args:
+        band_signal: ndarray, shape (n_channels, n_samples)
+            Reconstructed slow-band signal for all channels
+        threshold: float, default=1e-10
+            RMS threshold for channel availability
+
+    Returns:
+        available_mask: ndarray, shape (n_channels,)
+            Boolean mask where True indicates channel is available
+    """
+    n_channels = band_signal.shape[0]
+    available_mask = np.zeros(n_channels, dtype=bool)
+
+    for ch_idx in range(n_channels):
+        rms = np.sqrt(np.mean(band_signal[ch_idx, :]**2))
+        available_mask[ch_idx] = (rms >= threshold)
+
+    return available_mask
 
 
 def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_type=''):
@@ -703,7 +755,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None, subject_id=None, output_dir=None, verbose=False):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None, subject_id=None, output_dir=None, verbose=False, band_name=None, frequency_range=None, n_available_channels=None):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -719,6 +771,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         subject_id: Optional subject identifier for CSV export
         output_dir: Optional directory to save raw data CSV files
         verbose: If True, print detailed information about reordering
+        band_name: Optional slow-band name (e.g., "Slow-4") for plot title
+        frequency_range: Optional frequency range string (e.g., "0.027-0.073 Hz") for subtitle
+        n_available_channels: Optional number of available channels for slow-band FC
     """
     fig = plt.figure(figsize=(16, 8))
 
@@ -956,6 +1011,10 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     print(f"  Total interhemispheric pairs: {len(inter_data)}")
 
     # Create mask
+    # Check for unavailable channels (NaN values in correlation matrix)
+    mask_unavailable = np.isnan(corr_matrix)
+    has_unavailable = np.any(mask_unavailable)
+
     # Start with no masking
     mask_combined = None
 
@@ -965,8 +1024,8 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
 
     # Optionally mask non-significant correlations
     if mask_nonsignificant and p_values is not None:
-        # Create non-significant mask, but exclude the diagonal from this check
-        nonsig_mask = p_values >= alpha
+        # Create non-significant mask, but exclude the diagonal and unavailable from this check
+        nonsig_mask = (p_values >= alpha) & ~mask_unavailable
         # Ensure diagonal is NOT masked by the nonsignificant filter (only by mask_diagonal flag)
         np.fill_diagonal(nonsig_mask, False)
 
@@ -976,6 +1035,12 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         else:
             # Only mask non-significant correlations
             mask_combined = nonsig_mask
+
+    # Add unavailable mask
+    if mask_combined is not None:
+        mask_combined = mask_combined | mask_unavailable
+    else:
+        mask_combined = mask_unavailable
 
     # Display correlations with appropriate masking
     # Remove annotations (annot=False) for cleaner visualization with large matrices
@@ -1003,10 +1068,25 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                             ha='center', va='center',
                             color='black', fontsize=7, fontweight='bold')
 
-    # Add note about asterisk marker in the title (only if not masking)
-    title_text = 'Static Functional Connectivity Matrix'
+    # Add note about asterisk marker and availability in the title
+    # Main title
+    if band_name and frequency_range:
+        title_text = f'Static Functional Connectivity - {band_name}'
+    else:
+        title_text = 'Static Functional Connectivity Matrix'
+
+    # Subtitle with availability and significance info
+    subtitle_parts = []
     if not mask_nonsignificant and p_values is not None:
-        title_text += f'\n($*$ non-significant, p ≥ {alpha})'
+        subtitle_parts.append(f'$*$ non-significant, p ≥ {alpha}')
+    if n_available_channels is not None and has_unavailable:
+        n_total = corr_matrix.shape[0]
+        subtitle_parts.append(f'{n_available_channels}/{n_total} channels available')
+    if frequency_range:
+        subtitle_parts.append(frequency_range)
+
+    if subtitle_parts:
+        title_text += '\n' + ' | '.join(subtitle_parts)
 
     ax1.set_title(title_text, fontsize=14, fontweight='bold', pad=20)
     ax1.tick_params(axis='x', rotation=90, labelsize=7)
@@ -2155,6 +2235,193 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             print(f"Modes shape: {time_modes.shape}")
             print(f"Signal reconstruction error: {reconstruction_error:.4f}")
 
+        # Compute slow-band FC after MVMD decomposition
+        slow_band_fc_results = {}
+        if mvmd_result['success']:
+            # Combine modes into slow-bands
+            band_signals = combine_slow_band_components(time_modes, center_freqs, verbose=verbose)
+
+            for band_key in ['6', '5', '4', '3', '2']:
+                band_data = band_signals.get(band_key)
+
+                # Skip if no modes in this band
+                if band_data is None or band_data.get('band_signal') is None:
+                    if verbose:
+                        print(f"\nSlow-{band_key}: No modes assigned to this band, skipping FC")
+                    continue
+
+                band_signal = band_data['band_signal']  # Shape: (n_channels, n_samples)
+                n_channels, n_samples = band_signal.shape
+
+                # Detect available channels
+                available_mask = detect_available_channels(band_signal, threshold=1e-10)
+                n_available = np.sum(available_mask)
+
+                if verbose:
+                    print(f"\nSlow-{band_key} FC computation:")
+                    print(f"  Band signal shape: {band_signal.shape}")
+                    print(f"  Available channels: {n_available}/{n_channels}")
+                    print(f"  Components used: {band_data['indeces']}")
+                    print(f"  Center frequencies: {band_data['center_freqs']}")
+
+                # Need at least 2 channels for correlation
+                if n_available < 2:
+                    if verbose:
+                        print(f"  Insufficient available channels, skipping FC computation")
+                    continue
+
+                # Create FC timeseries dict (include all channels)
+                band_fc_timeseries = {
+                    all_channel_labels[ch]: band_signal[ch, :]
+                    for ch in range(n_channels)
+                }
+
+                # Compute FC matrix for all channels
+                band_fc_matrix, band_fc_labels, band_fc_pvalues = compute_fc_matrix(
+                    band_fc_timeseries,
+                    roi_names=all_channel_labels
+                )
+
+                # Set unavailable channel correlations to NaN
+                unavailable_indices = np.where(~available_mask)[0]
+                for idx in unavailable_indices:
+                    band_fc_matrix[idx, :] = np.nan
+                    band_fc_matrix[:, idx] = np.nan
+                    band_fc_pvalues[idx, :] = np.nan
+                    band_fc_pvalues[:, idx] = np.nan
+
+                # Analyze connectivity patterns (will skip NaN pairs automatically)
+                band_connectivity_patterns = analyze_connectivity_patterns(
+                    band_fc_matrix,
+                    band_fc_labels,
+                    band_fc_pvalues,
+                    alpha=0.05
+                )
+
+                # Store results
+                slow_band_fc_results[f'slow-{band_key}'] = {
+                    'fc_matrix': band_fc_matrix,
+                    'fc_labels': band_fc_labels,
+                    'fc_pvalues': band_fc_pvalues,
+                    'connectivity_patterns': band_connectivity_patterns,
+                    'available_channels': available_mask,
+                    'n_available_channels': n_available,
+                    'n_unavailable_channels': n_channels - n_available,
+                    'unavailable_indices': unavailable_indices.tolist(),
+                    'components_used': band_data['indeces'].tolist(),
+                    'center_freqs': band_data['center_freqs'].tolist(),
+                    'band_signal': band_signal,
+                    'frequency_range': get_frequency_range(band_key),
+                }
+
+                # Export slow-band FC data to CSV if output directory is provided
+                if output_dir:
+                    import csv
+
+                    import pandas as pd
+
+                    # Export full correlation matrix
+                    matrix_file = output_dir / f"{subject_id}_slow-{band_key}_fc_matrix.csv"
+                    matrix_df = pd.DataFrame(
+                        band_fc_matrix,
+                        index=band_fc_labels,
+                        columns=band_fc_labels
+                    )
+                    matrix_df.to_csv(matrix_file)
+
+                    # Export interhemispheric pairs with availability metadata
+                    if 'interhemispheric' in band_connectivity_patterns:
+                        inter_data = band_connectivity_patterns['interhemispheric']['pairs']
+
+                        interhemispheric_file = output_dir / f"{subject_id}_slow-{band_key}_interhemispheric.csv"
+
+                        with open(interhemispheric_file, 'w', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([
+                                'pair_index',
+                                'pair_label',
+                                'correlation',
+                                'p_value',
+                                'significant',
+                                'available',
+                                'included_in_plot'
+                            ])
+
+                            for idx, (pair_key, pair_data) in enumerate(inter_data.items()):
+                                # Check if pair involves unavailable channels
+                                # Parse pair_key to extract individual channel labels
+                                parts = pair_key.split('_')
+
+                                # Find where LH starts (look for 'LH' marker)
+                                lh_idx = None
+                                for i in range(3, len(parts)):
+                                    if parts[i] == 'LH':
+                                        lh_idx = i - 1
+                                        break
+
+                                if lh_idx is not None:
+                                    ch1_label = '_'.join(parts[:lh_idx+1])  # RH channel
+                                    ch2_label = '_'.join(parts[lh_idx+1:])  # LH channel
+
+                                    try:
+                                        ch1_idx = band_fc_labels.index(ch1_label)
+                                        ch2_idx = band_fc_labels.index(ch2_label)
+
+                                        is_available = available_mask[ch1_idx] and available_mask[ch2_idx]
+                                        is_nan = np.isnan(pair_data['correlation'])
+                                        included_in_plot = is_available and not is_nan
+                                    except (ValueError, IndexError):
+                                        is_available = False
+                                        is_nan = True
+                                        included_in_plot = False
+                                else:
+                                    is_available = False
+                                    is_nan = True
+                                    included_in_plot = False
+
+                                writer.writerow([
+                                    idx,
+                                    pair_key,
+                                    pair_data.get('correlation', 'NaN'),
+                                    pair_data.get('p_value', 'NaN'),
+                                    pair_data.get('significant', False),
+                                    is_available,
+                                    included_in_plot
+                                ])
+
+                        if verbose:
+                            print(f"  Exported slow-{band_key} interhemispheric data: {interhemispheric_file}")
+
+                # Plot slow-band FC
+                if output_dir:
+                    if verbose:
+                        print(f"  Plotting slow-{band_key} FC...")
+
+                    fig = plot_fc_results(
+                        band_fc_matrix,
+                        band_fc_labels,
+                        band_fc_pvalues,
+                        band_connectivity_patterns,
+                        channel_label_map=mvmd_channel_label_map,
+                        mask_diagonal=True,
+                        mask_nonsignificant=False,
+                        alpha=0.05,
+                        subject_id=subject_id,
+                        subject_group=None,
+                        output_dir=output_dir,
+                        verbose=verbose,
+                        band_name=f'Slow-{band_key}',
+                        frequency_range=get_frequency_range(band_key),
+                        n_available_channels=n_available
+                    )
+
+                    # Save figure
+                    output_file = output_dir / f"{subject_id}_slow-{band_key}_fc.png"
+                    fig.savefig(output_file, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+
+                    if verbose:
+                        print(f"  Saved slow-{band_key} FC plot: {output_file}")
 
         return {
             'subject_id': subject_id,
@@ -2196,6 +2463,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'channel_label_map': channel_label_map
             },
             'mvmd': mvmd_result,
+            'slow_band_fc': slow_band_fc_results,
         }
 
     except Exception as e:
