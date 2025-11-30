@@ -277,6 +277,157 @@ def export_static_fc_results_to_csv(static_fc_results, subject_id, output_dir):
     return created_files
 
 
+def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_type='static', band_key=None, verbose=False):
+    """
+    Compute group-averaged functional connectivity matrices.
+
+    Args:
+        subject_results: Dictionary of all subject results
+        group_subjects: List of subject IDs belonging to this group
+        group_name: Name of the group (e.g., 'Non-anhedonic', 'Low Anhedonic', 'High Anhedonic')
+        fc_type: Type of FC to average ('static' or 'slow_band')
+        band_key: If fc_type='slow_band', specify which band (e.g., 'slow-5')
+        verbose: Print progress messages
+
+    Returns:
+        dict: Group-averaged FC data containing:
+            - avg_fc_matrix: Averaged correlation matrix (NaN values excluded from averaging)
+            - avg_fc_labels: ROI labels
+            - n_subjects: Number of subjects included
+            - group_name: Group identifier
+            - fc_type: Type of FC
+            - band_key: Band identifier (if slow-band)
+            - subject_ids: List of included subject IDs
+    """
+    if verbose:
+        fc_desc = f"{band_key} " if band_key else "whole-signal "
+        print(f"\nComputing group-averaged {fc_desc}FC for {group_name}...")
+
+    # Collect FC matrices from all subjects in this group
+    fc_matrices = []
+    fc_labels = None
+    included_subjects = []
+
+    for subject_id in group_subjects:
+        if subject_id not in subject_results:
+            continue
+
+        result = subject_results[subject_id]
+        if not result.get('success'):
+            continue
+
+        # Extract FC data based on type
+        if fc_type == 'static':
+            fc_data = result.get('static_functional_connectivity')
+            if fc_data and fc_data.get('static_fc_matrix') is not None:
+                fc_matrix = fc_data['static_fc_matrix']
+                if fc_labels is None:
+                    fc_labels = fc_data['static_fc_labels']
+                fc_matrices.append(fc_matrix)
+                included_subjects.append(subject_id)
+
+        elif fc_type == 'slow_band' and band_key:
+            slow_band_data = result.get('slow_band_fc', {}).get(band_key)
+            if slow_band_data and slow_band_data.get('fc_matrix') is not None:
+                fc_matrix = slow_band_data['fc_matrix']
+                if fc_labels is None:
+                    fc_labels = slow_band_data['fc_labels']
+                fc_matrices.append(fc_matrix)
+                included_subjects.append(subject_id)
+
+    if len(fc_matrices) == 0:
+        if verbose:
+            print(f"  No valid FC matrices found for {group_name}")
+        return None
+
+    # Stack matrices and compute mean (ignoring NaN values)
+    # Shape: (n_subjects, n_rois, n_rois)
+    stacked_matrices = np.stack(fc_matrices, axis=0)
+
+    # Compute mean across subjects, ignoring NaN
+    avg_fc_matrix = np.nanmean(stacked_matrices, axis=0)
+
+    if verbose:
+        print(f"  Averaged {len(fc_matrices)} subjects")
+        print(f"  Matrix shape: {avg_fc_matrix.shape}")
+        nan_count = np.sum(np.isnan(avg_fc_matrix))
+        total_elements = avg_fc_matrix.size
+        print(f"  NaN values: {nan_count}/{total_elements} ({nan_count/total_elements*100:.1f}%)")
+
+    return {
+        'avg_fc_matrix': avg_fc_matrix,
+        'avg_fc_labels': fc_labels,
+        'n_subjects': len(fc_matrices),
+        'group_name': group_name,
+        'fc_type': fc_type,
+        'band_key': band_key,
+        'subject_ids': included_subjects
+    }
+
+
+def export_group_averaged_fc_to_csv(group_avg_data, output_dir, verbose=False):
+    """
+    Export group-averaged FC matrices and interhemispheric correlations to CSV.
+
+    Args:
+        group_avg_data: Group-averaged FC data from compute_group_averaged_fc()
+        output_dir: Directory to save CSV files
+        verbose: Print progress messages
+
+    Returns:
+        dict: Paths to created CSV files
+    """
+    from pathlib import Path
+
+    import pandas as pd
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    group_name = group_avg_data['group_name']
+    fc_type = group_avg_data['fc_type']
+    band_key = group_avg_data.get('band_key', '')
+
+    # Create filename prefix
+    group_name_clean = group_name.replace(' ', '_').replace('-', '_').lower()
+    if band_key:
+        filename_prefix = f"group_avg_{group_name_clean}_{band_key}"
+    else:
+        filename_prefix = f"group_avg_{group_name_clean}_static"
+
+    created_files = {}
+
+    # 1. Export averaged correlation matrix
+    matrix_file = output_dir / f"{filename_prefix}_fc_matrix.csv"
+    matrix_df = pd.DataFrame(
+        group_avg_data['avg_fc_matrix'],
+        index=group_avg_data['avg_fc_labels'],
+        columns=group_avg_data['avg_fc_labels']
+    )
+    matrix_df.to_csv(matrix_file)
+    created_files['matrix'] = matrix_file
+
+    if verbose:
+        print(f"    Exported: {matrix_file.name}")
+
+    # 2. Export metadata
+    metadata_file = output_dir / f"{filename_prefix}_metadata.csv"
+    metadata_df = pd.DataFrame({
+        'group_name': [group_name],
+        'n_subjects': [group_avg_data['n_subjects']],
+        'fc_type': [fc_type],
+        'band_key': [band_key if band_key else 'N/A'],
+        'subject_ids': [','.join(group_avg_data['subject_ids'])]
+    })
+    metadata_df.to_csv(metadata_file, index=False)
+    created_files['metadata'] = metadata_file
+
+    if verbose:
+        print(f"    Exported: {metadata_file.name}")
+
+    return created_files
+
+
 def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=0.05):
     """
     Extract and analyze specific connectivity patterns from correlation matrix.
@@ -2665,6 +2816,94 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
     print(f"  Files saved to: {fc_output_dir}")
+
+    # ===== GROUP-AVERAGED FC ANALYSIS =====
+    print(f"\n{'='*80}")
+    print(f"COMPUTING GROUP-AVERAGED FUNCTIONAL CONNECTIVITY")
+    print(f"{'='*80}")
+
+    # Define groups
+    groups_config = [
+        ('Non-anhedonic', non_anhedonic_subjects),
+        ('Low Anhedonic', low_anhedonic_subjects),
+        ('High Anhedonic', high_anhedonic_subjects)
+    ]
+
+    # Combine all results for easier access
+    all_results = {**anhedonic_results, **non_anhedonic_results}
+
+    # Storage for group-averaged results
+    group_averaged_fc = {
+        'static': {},
+        'slow_bands': {}
+    }
+
+    # 1. Compute group-averaged whole-signal FC
+    print(f"\n--- Whole-Signal Static FC ---")
+    for group_name, group_subjects in groups_config:
+        avg_fc = compute_group_averaged_fc(
+            all_results,
+            group_subjects,
+            group_name,
+            fc_type='static',
+            verbose=True
+        )
+        if avg_fc:
+            group_averaged_fc['static'][group_name] = avg_fc
+
+    # 2. Compute group-averaged slow-band FC
+    print(f"\n--- Slow-Band FC ---")
+    slow_bands = ['slow-6', 'slow-5', 'slow-4', 'slow-3', 'slow-2']
+
+    for band_key in slow_bands:
+        print(f"\n  {band_key.upper()}:")
+        group_averaged_fc['slow_bands'][band_key] = {}
+
+        for group_name, group_subjects in groups_config:
+            avg_fc = compute_group_averaged_fc(
+                all_results,
+                group_subjects,
+                group_name,
+                fc_type='slow_band',
+                band_key=band_key,
+                verbose=True
+            )
+            if avg_fc:
+                group_averaged_fc['slow_bands'][band_key][group_name] = avg_fc
+
+    print(f"\n✓ Group averaging complete")
+    print(f"  Static FC: {len([g for g in group_averaged_fc['static'].values() if g])} groups")
+    total_slow_band_groups = sum(len([g for g in band_groups.values() if g])
+                                  for band_groups in group_averaged_fc['slow_bands'].values())
+    print(f"  Slow-band FC: {total_slow_band_groups} group×band combinations")
+
+    # Export group-averaged FC to CSV
+    print(f"\n--- Exporting Group-Averaged FC ---")
+    group_avg_output_dir = get_analysis_path('fc_analysis/group_averages')
+    group_avg_output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {group_avg_output_dir}")
+
+    exported_count = 0
+
+    # Export static FC
+    print(f"\n  Static FC:")
+    for group_name, avg_data in group_averaged_fc['static'].items():
+        if avg_data:
+            export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
+            exported_count += 1
+
+    # Export slow-band FC
+    print(f"\n  Slow-Band FC:")
+    for band_key, band_groups in group_averaged_fc['slow_bands'].items():
+        if band_groups:
+            print(f"    {band_key}:")
+            for group_name, avg_data in band_groups.items():
+                if avg_data:
+                    export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
+                    exported_count += 1
+
+    print(f"\n✓ Exported {exported_count} group-averaged FC results")
+    print(f"  Files saved to: {group_avg_output_dir}")
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
