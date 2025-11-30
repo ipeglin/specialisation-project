@@ -703,7 +703,7 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
     return fig
 
 
-def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None):
+def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None, subject_id=None, output_dir=None, verbose=False):
     """
     Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
 
@@ -716,6 +716,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         alpha: Significance threshold for marking significant correlations
         mask_nonsignificant: If True, hide non-significant correlations. If False, mark them with asterisks.
         subject_group: Optional group name for the subject (e.g., "Anhedonic", "Non-anhedonic")
+        subject_id: Optional subject identifier for CSV export
+        output_dir: Optional directory to save raw data CSV files
+        verbose: If True, print detailed information about reordering
     """
     fig = plt.figure(figsize=(16, 8))
 
@@ -726,6 +729,231 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     display_labels = roi_labels
     if channel_label_map:
         display_labels = [channel_label_map.get(label, label) for label in roi_labels]
+
+    # === HIERARCHICAL REORDERING OF CORRELATION MATRIX ===
+    # Parse labels and create hierarchical sorting index
+    # Expected label formats:
+    #   Cortical: {region}_{hemisphere}_{network}_p{subarea} (e.g., PFCm_RH_DefaultA_p1)
+    #   Subcortical: {region}_{hemisphere}_{subdivision} (e.g., AMY_RH_lAMY)
+
+    def parse_channel_label(label):
+        """
+        Parse channel label to extract network, region, hemisphere, and parcel info.
+
+        Returns:
+            tuple: (region_network_key, region, hemisphere, parcel_id)
+                - region_network_key: matches the bar plot grouping (e.g., "PFCm_DefaultA", "AMY_lAMY")
+                - region: anatomical region (e.g., "PFCm", "AMY")
+                - hemisphere: "RH" or "LH"
+                - parcel_id: parcel identifier for stable sorting
+        """
+        parts = label.split('_')
+
+        if len(parts) >= 4 and parts[3].startswith('p'):
+            # Cortical format: region_hemi_network_pSubarea (e.g., PFCm_RH_DefaultA_p1)
+            region = parts[0]
+            hemisphere = parts[1]
+            network = parts[2]
+            parcel_id = parts[3] if len(parts) > 3 else ''
+            # Create region_network_key matching bar plot format
+            region_network_key = f"{region}_{network}"
+        elif len(parts) >= 3:
+            # Subcortical format: region_hemi_subdivision (e.g., AMY_RH_lAMY)
+            region = parts[0]
+            hemisphere = parts[1]
+            subdivision = parts[2]
+            parcel_id = subdivision
+            # Create region_network_key matching bar plot format
+            region_network_key = f"{region}_{subdivision}"
+        else:
+            # Fallback for unexpected formats
+            region = parts[0] if len(parts) > 0 else 'Unknown'
+            hemisphere = parts[1] if len(parts) > 1 else 'Unknown'
+            region_network_key = 'Unknown'
+            parcel_id = ''
+
+        return (region_network_key, region, hemisphere, parcel_id)
+
+    # Extract network/region ordering from interhemispheric connectivity patterns (if available)
+    # The bar plot shows interhemispheric pairs in the order they appear in the dictionary,
+    # which corresponds to the order they're discovered when iterating through the upper triangle
+    # of the original correlation matrix
+    network_region_order = []
+    if connectivity_patterns and 'interhemispheric' in connectivity_patterns:
+        inter_data = connectivity_patterns['interhemispheric']['pairs']
+        seen_network_regions = set()
+
+        # Iterate through pairs in insertion order (dict preserves order in Python 3.7+)
+        for pair_key in inter_data.keys():
+            parts = pair_key.split('_')
+
+            # Parse pair_key to extract region_network_key (same logic as bar plot)
+            if len(parts) >= 8:  # Cortical with network
+                region = parts[0]
+                network = parts[2]
+                region_network_key = f"{region}_{network}"
+            elif len(parts) >= 6:  # Subcortical without network
+                region = parts[0]
+                subdivision = parts[2]
+                region_network_key = f"{region}_{subdivision}"
+            else:
+                region_network_key = parts[0] if parts else 'Unknown'
+
+            # Preserve insertion order (first occurrence)
+            if region_network_key not in seen_network_regions:
+                network_region_order.append(region_network_key)
+                seen_network_regions.add(region_network_key)
+
+    # If no connectivity patterns available, fall back to preserving original order
+    if not network_region_order:
+        # Extract all unique region_network_keys in the order they appear
+        seen = set()
+        for label in display_labels:
+            region_network_key, _, _, _ = parse_channel_label(label)
+            if region_network_key not in seen:
+                network_region_order.append(region_network_key)
+                seen.add(region_network_key)
+
+    # Create list of (label, sort_key, original_index) tuples
+    label_sort_data = []
+    for idx, label in enumerate(display_labels):
+        region_network_key, region, hemisphere, parcel_id = parse_channel_label(label)
+
+        # Create hierarchical sort key:
+        # 1. Primary: Network/region group order (matches bar plot discovery order)
+        # 2. Secondary: Hemisphere (RH=0 comes before LH=1)
+        # 3. Tertiary: Parcel ID for stable sorting within hemisphere
+        try:
+            network_order_idx = network_region_order.index(region_network_key)
+        except ValueError:
+            # If region_network_key not in ordering list, place at end
+            network_order_idx = len(network_region_order)
+
+        hemi_order = 0 if hemisphere == 'RH' else 1
+        sort_key = (network_order_idx, hemi_order, parcel_id)
+
+        label_sort_data.append((label, sort_key, idx))
+
+    # Sort by hierarchical key
+    label_sort_data.sort(key=lambda x: x[1])
+
+    # Extract new order indices
+    new_order = [item[2] for item in label_sort_data]
+    reordered_labels = [item[0] for item in label_sort_data]
+
+    # Reorder correlation matrix (both rows and columns)
+    corr_matrix_reordered = corr_matrix[np.ix_(new_order, new_order)]
+
+    # Reorder p-values matrix if provided
+    p_values_reordered = None
+    if p_values is not None:
+        p_values_reordered = p_values[np.ix_(new_order, new_order)]
+
+    # Use reordered data for plotting
+    corr_matrix = corr_matrix_reordered
+    p_values = p_values_reordered
+    display_labels = reordered_labels
+
+    # Verbose output: Print reordered axis labels
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"CORRELATION MATRIX REORDERING (Subject: {subject_id if subject_id else 'Unknown'})")
+        print(f"{'='*80}")
+        print(f"Reordered axis labels (matrix rows/columns):")
+        for idx, label in enumerate(display_labels):
+            print(f"  [{idx:2d}] {label}")
+        print(f"\nNetwork/Region unique groups (for matrix ordering):")
+        for idx, network_region in enumerate(network_region_order):
+            print(f"  [{idx:2d}] {network_region}")
+        print(f"\n(Interhemispheric pairs will be printed in sorted order below)")
+        print(f"{'='*80}\n")
+
+    # Export raw reordered data to CSV files (if output_dir and subject_id provided)
+    if output_dir and subject_id:
+        from pathlib import Path
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Export reordered correlation matrix
+        reordered_matrix_file = output_dir / f'{subject_id}_fc_matrix_reordered.csv'
+        with open(reordered_matrix_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # Header row with reordered labels
+            writer.writerow([''] + display_labels)
+            # Data rows
+            for i, row_label in enumerate(display_labels):
+                writer.writerow([row_label] + list(corr_matrix[i, :]))
+
+        if verbose:
+            print(f"Exported reordered correlation matrix to: {reordered_matrix_file}")
+
+        # 2. Export reordered p-values matrix (if available)
+        if p_values is not None:
+            reordered_pvalues_file = output_dir / f'{subject_id}_fc_pvalues_reordered.csv'
+            with open(reordered_pvalues_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                # Header row
+                writer.writerow([''] + display_labels)
+                # Data rows
+                for i, row_label in enumerate(display_labels):
+                    writer.writerow([row_label] + list(p_values[i, :]))
+
+            if verbose:
+                print(f"Exported reordered p-values to: {reordered_pvalues_file}")
+
+        # 3. Export interhemispheric correlations (matching bar plot order)
+        if connectivity_patterns and 'interhemispheric' in connectivity_patterns:
+            inter_data = connectivity_patterns['interhemispheric']['pairs']
+            if inter_data:
+                interhemispheric_file = output_dir / f'{subject_id}_interhemispheric_correlations.csv'
+                with open(interhemispheric_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    # Header
+                    writer.writerow([
+                        'Pair_Index', 'ROI_1', 'ROI_2',
+                        'Region_Network_Key', 'Correlation', 'P_value', 'Significant'
+                    ])
+
+                    # Write pairs in the exact order they appear (bar plot order)
+                    for pair_idx, (pair_key, pair_data) in enumerate(inter_data.items()):
+                        # Parse pair to extract region_network_key
+                        parts = pair_key.split('_')
+                        if len(parts) >= 8:  # Cortical
+                            region = parts[0]
+                            network = parts[2]
+                            region_network_key = f"{region}_{network}"
+                        elif len(parts) >= 6:  # Subcortical
+                            region = parts[0]
+                            subdivision = parts[2]
+                            region_network_key = f"{region}_{subdivision}"
+                        else:
+                            region_network_key = 'Unknown'
+
+                        # Split pair_key into ROI_1 and ROI_2
+                        roi_parts = pair_key.split('_')
+                        if len(roi_parts) >= 8:  # Cortical
+                            roi1 = '_'.join(roi_parts[:4])
+                            roi2 = '_'.join(roi_parts[4:])
+                        elif len(roi_parts) >= 6:  # Subcortical
+                            roi1 = '_'.join(roi_parts[:3])
+                            roi2 = '_'.join(roi_parts[3:])
+                        else:
+                            roi1 = roi_parts[0] if len(roi_parts) > 0 else 'Unknown'
+                            roi2 = roi_parts[1] if len(roi_parts) > 1 else 'Unknown'
+
+                        writer.writerow([
+                            pair_idx,
+                            roi1,
+                            roi2,
+                            region_network_key,
+                            pair_data['correlation'],
+                            pair_data.get('p_value', ''),
+                            pair_data.get('significant', '')
+                        ])
+
+                if verbose:
+                    print(f"Exported interhemispheric correlations to: {interhemispheric_file}")
+                    print(f"  Total interhemispheric pairs: {len(inter_data)}")
 
     # Create mask
     # Start with no masking
@@ -791,15 +1019,64 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         inter_data = connectivity_patterns['interhemispheric']['pairs']
 
         if inter_data:
-            # Extract interhemispheric correlations and labels
-            inter_pairs = list(inter_data.keys())
-            inter_corrs = [v['correlation'] for v in inter_data.values()]
+            # Sort pairs: Group by region+RH_network (using matrix order), then same-network pairs, then cross-network
+            # Order: Matrix_Region_Network_Order -> (same-network block, then cross-network block)
+            def get_lh_sort_key(pair_key):
+                parts = pair_key.split('_')
+                # Find LH start (look for 'LH' marker)
+                lh_idx = None
+                for i in range(3, len(parts)):
+                    if parts[i] == 'LH':
+                        lh_idx = i - 1
+                        break
+
+                if lh_idx is not None and lh_idx + 2 < len(parts):
+                    region = parts[0]  # Same for both RH and LH
+                    network_rh = parts[2]
+                    network_lh = parts[lh_idx + 2]
+                    rh_parcel = parts[3] if len(parts) > 3 else ''
+                    lh_parcel = parts[lh_idx + 3] if lh_idx + 3 < len(parts) else ''
+
+                    is_same_network = (network_rh == network_lh)
+
+                    # Use the matrix region/network order instead of alphabetical sorting
+                    # This ensures AMY appears at the end to match the FC matrix axes
+                    region_network_key_rh = f"{region}_{network_rh}"
+                    try:
+                        matrix_order = network_region_order.index(region_network_key_rh)
+                    except (ValueError, NameError):
+                        # Fallback to alphabetical if not in network_region_order
+                        matrix_order = 999
+
+                    # Sort by: (matrix_order, is_cross_network, LH_network, RH_parcel, LH_parcel)
+                    # Groups all same-region+network pairs together, then cross-network, following matrix axis order
+                    return (matrix_order, not is_same_network, network_lh, rh_parcel, lh_parcel)
+                else:
+                    return (999, True, '', '', '')
+
+            # Sort pairs
+            sorted_pairs = sorted(inter_data.items(), key=lambda x: get_lh_sort_key(x[0]))
+
+            # Extract sorted data
+            inter_pairs = [pair[0] for pair in sorted_pairs]
+            inter_corrs = [pair[1]['correlation'] for pair in sorted_pairs]
+            # Rebuild inter_data as OrderedDict to maintain sorted order
+            from collections import OrderedDict
+            inter_data = OrderedDict(sorted_pairs)
+
+            # Verbose: Print sorted interhemispheric pairs (actual bar plot order)
+            if verbose:
+                print(f"\nInterhemispheric pairs (sorted bar plot order):")
+                for idx, pair_key in enumerate(inter_pairs):
+                    print(f"  [{idx:3d}] {pair_key}")
+                print(f"\n  Total interhemispheric pairs: {len(inter_pairs)}")
+                print(f"{'='*80}\n")
 
             # Helper function to extract region/network information from pair labels
             def parse_region_network(pair_key):
                 """
-                Parse pair key to extract region and network information.
-                Returns (region_network_key, display_label, is_cortical)
+                Parse pair key to extract region and network information for BOTH hemispheres.
+                Returns (region_network_key, display_label, is_cortical, is_same_network)
 
                 Cortical format: {region}_{hemi}_{network}_p{subarea}_{region}_{hemi}_{network}_p{subarea}
                 Subcortical format: {region}_{hemi}_{subdivision}_{region}_{hemi}_{subdivision}
@@ -810,24 +1087,57 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                 # Cortical labels have format: PFCm_RH_DefaultA_p1_PFCm_LH_DefaultA_p2
                 # Subcortical labels have format: AMY_RH_lAMY_AMY_LH_lAMY
 
-                if len(parts) >= 8:  # Cortical with network
-                    # Extract first ROI components
-                    region = parts[0]
-                    network = parts[2] if len(parts) > 2 else 'Unknown'
+                if len(parts) >= 7:  # Cortical with network (may or may not have subarea)
+                    # Extract RH (first) ROI components
+                    region_rh = parts[0]
+                    network_rh = parts[2]
 
-                    # Create unique key: region+network (e.g., "PFCm_DefaultA")
-                    region_network_key = f"{region}_{network}"
-                    display_label = f"{region} ({network})"
+                    # Find where LH ROI starts (look for 'LH' in parts)
+                    lh_start_idx = None
+                    for i in range(3, len(parts)):
+                        if parts[i] == 'LH':
+                            lh_start_idx = i - 1  # Region is before 'LH'
+                            break
+
+                    if lh_start_idx and lh_start_idx + 2 < len(parts):
+                        region_lh = parts[lh_start_idx]
+                        network_lh = parts[lh_start_idx + 2]
+                    else:
+                        # Fallback parsing
+                        region_lh = parts[4] if len(parts) > 4 else 'Unknown'
+                        network_lh = parts[6] if len(parts) > 6 else 'Unknown'
+
+                    is_same_network = (network_rh == network_lh)
+
+                    if is_same_network:
+                        # Same network: "PFCm (DefaultA)"
+                        region_network_key = f"{region_rh}_{network_rh}"
+                        display_label = f"{region_rh} ({network_rh})"
+                    else:
+                        # Cross-network: "PFCm DefaultA (RH) - LimbicB (LH)"
+                        region_network_key = f"{region_rh}_{network_rh}_x_{network_lh}"
+                        display_label = f"{region_rh} {network_rh} (RH) - {network_lh} (LH)"
+
                     is_cortical = True
 
                 elif len(parts) >= 6:  # Subcortical without network
-                    # Extract region and subdivision
-                    region = parts[0]
-                    subdivision = parts[2] if len(parts) > 2 else 'Unknown'
+                    # Extract region and subdivision for both hemispheres
+                    region_rh = parts[0]
+                    subdivision_rh = parts[2]
+                    region_lh = parts[3]
+                    subdivision_lh = parts[5]
 
-                    # Create unique key: region+subdivision (e.g., "AMY_lAMY")
-                    region_network_key = f"{region}_{subdivision}"
-                    display_label = f"{region} ({subdivision})"
+                    is_same_network = (subdivision_rh == subdivision_lh)
+
+                    if is_same_network:
+                        # Same subdivision: "AMY (lAMY)"
+                        region_network_key = f"{region_rh}_{subdivision_rh}"
+                        display_label = f"{region_rh} ({subdivision_rh})"
+                    else:
+                        # Cross-subdivision: "AMY lAMY (RH) - mAMY (LH)"
+                        region_network_key = f"{region_rh}_{subdivision_rh}_x_{subdivision_lh}"
+                        display_label = f"{region_rh} {subdivision_rh} (RH) - {subdivision_lh} (LH)"
+
                     is_cortical = False
 
                 else:
@@ -835,27 +1145,29 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     region_network_key = parts[0] if parts else 'Unknown'
                     display_label = region_network_key
                     is_cortical = False
+                    is_same_network = True
 
-                return region_network_key, display_label, is_cortical
+                return region_network_key, display_label, is_cortical, is_same_network
 
             # Assign colors to unique region/network combinations
             unique_region_networks = {}
             pair_region_networks = []
 
             for pair_key in inter_pairs:
-                region_network_key, display_label, is_cortical = parse_region_network(pair_key)
-                pair_region_networks.append((region_network_key, display_label, is_cortical))
+                region_network_key, display_label, is_cortical, is_same_network = parse_region_network(pair_key)
+                pair_region_networks.append((region_network_key, display_label, is_cortical, is_same_network))
 
                 if region_network_key not in unique_region_networks:
                     unique_region_networks[region_network_key] = {
                         'display_label': display_label,
                         'is_cortical': is_cortical,
+                        'is_same_network': is_same_network,
                         'indices': []
                     }
                 unique_region_networks[region_network_key]['indices'].append(len(pair_region_networks) - 1)
 
             # Define distinct color palette (using colorblind-friendly colors)
-            # Using a qualitative palette with good distinction
+            # Extended palette to handle many unique network/region combinations including cross-network pairs
             base_colors = [
                 '#1f77b4',  # Blue
                 '#ff7f0e',  # Orange
@@ -872,6 +1184,21 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                 '#98df8a',  # Light green
                 '#ff9896',  # Light red
                 '#c5b0d5',  # Light purple
+                '#c49c94',  # Light brown
+                '#f7b6d2',  # Light pink
+                '#c7c7c7',  # Light gray
+                '#dbdb8d',  # Light olive
+                '#9edae5',  # Light cyan
+                '#393b79',  # Dark blue
+                '#637939',  # Dark olive
+                '#8c6d31',  # Dark gold
+                '#843c39',  # Dark red
+                '#7b4173',  # Dark purple
+                '#5254a3',  # Indigo
+                '#6b6ecf',  # Light indigo
+                '#b5cf6b',  # Yellow-green
+                '#e7ba52',  # Gold
+                '#d6616b',  # Rose
             ]
 
             # Assign colors to each unique region/network
@@ -883,11 +1210,10 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             bar_colors = []
             bar_hatches = []
             for i, (corr_val, pair_data) in enumerate(zip(inter_corrs, inter_data.values())):
-                region_network_key, _, _ = pair_region_networks[i]
+                region_network_key, _, _, is_same_network = pair_region_networks[i]
                 bar_colors.append(color_map[region_network_key])
 
-                # Set hatch pattern for non-significant correlations
-                # Use dense hatching pattern for better visibility
+                # Only use hatching for non-significant correlations
                 if p_values is not None and not pair_data.get('significant', False):
                     bar_hatches.append('//////')  # Dense diagonal lines
                 else:
@@ -933,14 +1259,12 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                 if not indices:
                     continue
 
-                x_start = min(indices) - 0.4
-                x_width = max(indices) - min(indices) + 0.8
+                # Match bar positions exactly (bars have width=0.8, centered at integer positions)
+                bar_width = 0.8
+                x_start = min(indices) - bar_width / 2
+                x_end = max(indices) + bar_width / 2
+                x_width = x_end - x_start
                 color = color_map[region_network_key]
-                group_size = len(indices)
-
-                # Estimate if label text is wider than the bar
-                label_text_width = len(info['display_label']) * char_width
-                is_label_too_wide = label_text_width > x_width
 
                 # Draw compact colored rectangle spanning the group
                 rect = plt.Rectangle(
@@ -1827,7 +2151,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
     LIMIT_SUBJECTS = True  # Set False for full analysis
-    MAX_SUBJECTS_PER_GROUP = 2  # Limit when testing (only used if LIMIT_SUBJECTS=True)
+    MAX_SUBJECTS_PER_GROUP = 1  # Limit when testing (only used if LIMIT_SUBJECTS=True)
 
     print(f"Configuration:")
     print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
@@ -2411,6 +2735,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['fc_static']:
             print(f"\n[Batch 3/5] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
+                # Determine output directory for CSV exports (same as figure directory)
+                csv_output_dir = fc_figures_dir if save_figures and fc_figures_dir else None
+
                 fc_fig = plot_fc_results(
                     plot_info['data']['static_fc_matrix'],
                     plot_info['data']['static_fc_labels'],
@@ -2419,7 +2746,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plot_info['data'].get('channel_label_map'),
                     mask_diagonal=plot_info['mask_diagonal'],
                     mask_nonsignificant=plot_info['mask_nonsignificant'],
-                    subject_group=plot_info['subject_group']
+                    subject_group=plot_info['subject_group'],
+                    subject_id=plot_info['subject_id'],
+                    output_dir=csv_output_dir,
+                    verbose=verbose
                 )
                 fc_fig.suptitle(f'Functional Connectivity Analysis - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
                 if plot_info['save_path']:
@@ -2555,7 +2885,7 @@ if __name__ == '__main__':
     # Display configuration
     VERBOSE_OUTPUT = True
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
-    SHOW_PLOTS = False  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SHOW_PLOTS = True  # Whether to display plots interactively (requires CREATE_PLOTS=True)
     SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
