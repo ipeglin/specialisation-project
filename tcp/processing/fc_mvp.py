@@ -1170,8 +1170,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     }
                 unique_region_networks[region_network_key]['indices'].append(len(pair_region_networks) - 1)
 
-            # Define distinct color palette (using colorblind-friendly colors)
-            # Extended palette to handle many unique network/region combinations including cross-network pairs
+            # Define distinct color palette with saturated, medium-to-dark colors
+            # Optimized for visibility against RdBu_r colormap (red-blue diverging)
+            # Avoiding very light colors (poor contrast) and very dark colors (hide black hatches)
             base_colors = [
                 '#1f77b4',  # Blue
                 '#ff7f0e',  # Orange
@@ -1179,30 +1180,26 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                 '#d62728',  # Red
                 '#9467bd',  # Purple
                 '#8c564b',  # Brown
-                '#e377c2',  # Pink
-                '#7f7f7f',  # Gray
-                '#bcbd22',  # Olive
-                '#17becf',  # Cyan
-                '#aec7e8',  # Light blue
-                '#ffbb78',  # Light orange
-                '#98df8a',  # Light green
-                '#ff9896',  # Light red
-                '#c5b0d5',  # Light purple
-                '#c49c94',  # Light brown
-                '#f7b6d2',  # Light pink
-                '#c7c7c7',  # Light gray
-                '#dbdb8d',  # Light olive
-                '#9edae5',  # Light cyan
-                '#393b79',  # Dark blue
-                '#637939',  # Dark olive
-                '#8c6d31',  # Dark gold
-                '#843c39',  # Dark red
-                '#7b4173',  # Dark purple
-                '#5254a3',  # Indigo
-                '#6b6ecf',  # Light indigo
-                '#b5cf6b',  # Yellow-green
-                '#e7ba52',  # Gold
-                '#d6616b',  # Rose
+                '#e6d800',  # Bright yellow
+                '#00CED1',  # Dark turquoise
+                '#FF1493',  # Deep pink
+                '#32CD32',  # Lime green
+                '#FF4500',  # Orange-red
+                '#9932CC',  # Dark orchid
+                '#DAA520',  # Goldenrod
+                '#DC143C',  # Crimson
+                '#4169E1',  # Royal blue
+                '#FF6347',  # Tomato
+                '#20B2AA',  # Light sea green
+                '#8B4789',  # Medium purple
+                '#CD853F',  # Peru
+                '#FF8C00',  # Dark orange
+                '#BA55D3',  # Medium orchid
+                '#3CB371',  # Medium sea green
+                '#FF69B4',  # Hot pink
+                '#4682B4',  # Steel blue
+                '#DB7093',  # Pale violet red
+                '#CD5C5C',  # Indian red
             ]
 
             # Assign colors to each unique region/network
@@ -1291,9 +1288,10 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
 
-            # Add significance percentage text in lower left
-            ax2.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
-                    transform=ax2.transAxes, fontsize=9, verticalalignment='bottom',
+            # Add significance percentage text in upper left (below group label if present)
+            sig_text_y = 0.90 if subject_group else 0.98
+            ax2.text(0.02, sig_text_y, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
+                    transform=ax2.transAxes, fontsize=9, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
             # Create legend with color-coded region/network pairs
@@ -1314,8 +1312,11 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                      alpha=0.5, label='Non-significant (p ≥ 0.05)')
             )
 
-            ax2.legend(handles=legend_elements, loc='lower right', fontsize=8,
-                      framealpha=0.95, edgecolor='black')
+            # Place legend outside plot area to the right to avoid long labels overflowing
+            # This keeps the legend from covering data and handles long network names
+            ax2.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5),
+                      fontsize=7, framealpha=0.95, edgecolor='black',
+                      handlelength=1.5, handleheight=1.0)
 
             # Add colored rectangles to correlation matrix (ax1) highlighting interhemispheric blocks
             # For each region/network group, find RH and LH parcel indices and draw rectangle
@@ -1367,7 +1368,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         (col_start, row_start),  # (x, y) - bottom-left corner
                         col_end - col_start,     # width
                         row_end - row_start,     # height
-                        linewidth=2.5,
+                        linewidth=1.5,
                         edgecolor=color,
                         facecolor='none',
                         clip_on=False,
