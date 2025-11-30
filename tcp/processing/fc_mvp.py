@@ -1012,6 +1012,10 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     ax1.tick_params(axis='x', rotation=90, labelsize=7)
     ax1.tick_params(axis='y', rotation=0, labelsize=7)
 
+    # Add colored rectangles highlighting interhemispheric connectivity blocks
+    # This requires the interhemispheric pairs to be processed first
+    # We'll add rectangles after both plots are created to access the color map
+
     # 2. Interhemispheric Connectivity Analysis (right side)
     ax2 = plt.subplot(1, 2, 2)
 
@@ -1312,6 +1316,64 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
 
             ax2.legend(handles=legend_elements, loc='lower right', fontsize=8,
                       framealpha=0.95, edgecolor='black')
+
+            # Add colored rectangles to correlation matrix (ax1) highlighting interhemispheric blocks
+            # For each region/network group, find RH and LH parcel indices and draw rectangle
+            from matplotlib.patches import Rectangle
+
+            for region_network_key, info in unique_region_networks.items():
+                # Only process same-network pairs (not cross-network)
+                if not info['is_same_network']:
+                    continue
+
+                # Extract RH and LH parcel labels for this region/network
+                rh_parcels = []
+                lh_parcels = []
+
+                # Parse region/network key to get base pattern
+                # Format: "PFCm_DefaultA" or "AMY_lAMY"
+                key_parts = region_network_key.split('_')
+                if len(key_parts) >= 2:
+                    region = key_parts[0]
+                    network_or_subdivision = key_parts[1]
+
+                    # Search through reordered labels to find matching RH and LH parcels
+                    for idx, label in enumerate(reordered_labels):
+                        label_parts = label.split('_')
+                        if len(label_parts) >= 3:
+                            label_region = label_parts[0]
+                            label_hemi = label_parts[1]
+                            label_network = label_parts[2]
+
+                            # Check if this label matches the region and network/subdivision
+                            if label_region == region and label_network == network_or_subdivision:
+                                if label_hemi == 'RH':
+                                    rh_parcels.append(idx)
+                                elif label_hemi == 'LH':
+                                    lh_parcels.append(idx)
+
+                # Draw rectangle if we have both RH and LH parcels
+                if rh_parcels and lh_parcels:
+                    # Rectangle spans: rows = LH parcels, cols = RH parcels
+                    row_start = min(lh_parcels)
+                    row_end = max(lh_parcels) + 1
+                    col_start = min(rh_parcels)
+                    col_end = max(rh_parcels) + 1
+
+                    color = color_map[region_network_key]
+
+                    # Draw rectangle outline (no fill, just border)
+                    rect = Rectangle(
+                        (col_start, row_start),  # (x, y) - bottom-left corner
+                        col_end - col_start,     # width
+                        row_end - row_start,     # height
+                        linewidth=2.5,
+                        edgecolor=color,
+                        facecolor='none',
+                        clip_on=False,
+                        zorder=10
+                    )
+                    ax1.add_patch(rect)
 
         else:
             ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found',
