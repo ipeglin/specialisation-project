@@ -2922,8 +2922,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['fc_static']:
             print(f"\n[Batch 3/5] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
-                # Determine output directory for CSV exports (same as figure directory)
-                csv_output_dir = fc_figures_dir if save_figures and fc_figures_dir else None
+                # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
+                csv_output_dir = fc_output_dir if save_figures else None
 
                 fc_fig = plot_fc_results(
                     plot_info['data']['static_fc_matrix'],
