@@ -2883,7 +2883,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 1: ROI Cortical Timeseries
         if plot_batches['roi_cortical']:
-            print(f"\n[Batch 1/5] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            print(f"\n[Batch 1/6] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
@@ -2911,7 +2911,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 2: ROI Subcortical Timeseries
         if plot_batches['roi_subcortical']:
-            print(f"\n[Batch 2/5] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            print(f"\n[Batch 2/6] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
@@ -2937,7 +2937,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 3: Static FC Analysis
         if plot_batches['fc_static']:
-            print(f"\n[Batch 3/5] Creating {len(plot_batches['fc_static'])} static FC plots...")
+            print(f"\n[Batch 3/6] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -2965,9 +2965,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 3b: Slow-Band FC Analysis
+        # Batch 4: Slow-Band FC Analysis
         if plot_batches['fc_slow_bands']:
-            print(f"\n[Batch 3b/6] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
+            print(f"\n[Batch 4/6] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -3002,10 +3002,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 4: MVMD Mode Decomposition
+        # Batch 5: MVMD Mode Decomposition
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-            print(f"\n[Batch 4/6] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+            print(f"\n[Batch 5/6] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
             for plot_info in plot_batches['mvmd_modes']:
                 mvmd_figures = plot_signal_decomposition(
                     plot_info['mvmd_data']['original'],
@@ -3039,10 +3039,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {total_mode_figs} MVMD mode plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 5: MVMD Slow-Band Decomposition
+        # Batch 6: MVMD Slow-Band Decomposition
         if plot_batches['mvmd_slow_bands']:
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
-            print(f"\n[Batch 5/6] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            print(f"\n[Batch 6/6] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
             for plot_info in plot_batches['mvmd_slow_bands']:
                 slow_band_figures = plot_slow_band_decomposition(
                     plot_info['mvmd_data']['original'],
