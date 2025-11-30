@@ -2706,6 +2706,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'roi_cortical': [],
             'roi_subcortical': [],
             'fc_static': [],
+            'fc_slow_bands': [],
             'mvmd_modes': [],
             'mvmd_slow_bands': []
         }
@@ -2812,6 +2813,22 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         'save_path': fc_figures_dir / f'{subject_id}_static_fc_pearson_correlation.svg' if save_figures and fc_figures_dir else None
                     })
                     plots_for_subject += 1
+
+            # 5b. Prepare slow-band FC plots
+            if result.get('slow_band_fc'):
+                slow_band_fc_data = result['slow_band_fc']
+                for band_key, band_fc_data in slow_band_fc_data.items():
+                    if band_fc_data.get('fc_matrix') is not None:
+                        plot_batches['fc_slow_bands'].append({
+                            'subject_id': subject_id,
+                            'subject_group': subject_group,
+                            'band_key': band_key,
+                            'data': band_fc_data,
+                            'mask_diagonal': mask_diagonal,
+                            'mask_nonsignificant': mask_nonsignificant,
+                            'save_path': fc_figures_dir / f'{subject_id}_{band_key}_fc.svg' if save_figures and fc_figures_dir else None
+                        })
+                        plots_for_subject += 1
 
             # 6. Prepare MVMD decomposition plots
             if result.get('mvmd'):
@@ -2948,10 +2965,47 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
                 plt.show()
 
+        # Batch 3b: Slow-Band FC Analysis
+        if plot_batches['fc_slow_bands']:
+            print(f"\n[Batch 3b/6] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
+            for plot_info in plot_batches['fc_slow_bands']:
+                # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
+                csv_output_dir = fc_output_dir if save_figures else None
+
+                # Extract band number from band_key (e.g., "slow-5" -> "5")
+                band_key = plot_info['band_key']
+                band_number = band_key.split('-')[1] if '-' in band_key else band_key
+
+                fc_fig = plot_fc_results(
+                    plot_info['data']['fc_matrix'],
+                    plot_info['data']['fc_labels'],
+                    plot_info['data']['fc_pvalues'],
+                    plot_info['data']['connectivity_patterns'],
+                    plot_info['data'].get('channel_label_map'),
+                    mask_diagonal=plot_info['mask_diagonal'],
+                    mask_nonsignificant=plot_info['mask_nonsignificant'],
+                    subject_group=plot_info['subject_group'],
+                    subject_id=plot_info['subject_id'],
+                    output_dir=csv_output_dir,
+                    verbose=verbose,
+                    band_name=f'Slow-{band_number}',
+                    frequency_range=plot_info['data'].get('frequency_range'),
+                    n_available_channels=plot_info['data'].get('n_available_channels')
+                )
+                fc_fig.suptitle(f'Slow-{band_number} FC Analysis - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                if plot_info['save_path']:
+                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+                if not show_plots:
+                    plt.close(fc_fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
+                plt.show()
+
         # Batch 4: MVMD Mode Decomposition
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-            print(f"\n[Batch 4/5] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+            print(f"\n[Batch 4/6] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
             for plot_info in plot_batches['mvmd_modes']:
                 mvmd_figures = plot_signal_decomposition(
                     plot_info['mvmd_data']['original'],
@@ -2988,7 +3042,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 5: MVMD Slow-Band Decomposition
         if plot_batches['mvmd_slow_bands']:
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
-            print(f"\n[Batch 5/5] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            print(f"\n[Batch 5/6] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
             for plot_info in plot_batches['mvmd_slow_bands']:
                 slow_band_figures = plot_slow_band_decomposition(
                     plot_info['mvmd_data']['original'],
