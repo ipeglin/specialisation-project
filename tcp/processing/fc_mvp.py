@@ -1480,7 +1480,7 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
 
             # Include center frequency in title if available
             if center_freqs is not None:
-                title = f'$u_{{{mode_idx+1}}}$ (f = {center_freqs[mode_idx]:.2f} Hz)'
+                title = f'$u_{{{mode_idx+1}}}$ (f = {center_freqs[mode_idx]:.3f} Hz)'
             else:
                 title = f'$u_{{{mode_idx+1}}}$'
 
