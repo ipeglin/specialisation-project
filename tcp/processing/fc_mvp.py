@@ -1320,41 +1320,6 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2.grid(True, alpha=0.3, axis='y')
 
-            # Find the maximum correlation value to position indicators above it
-            max_corr = max(inter_corrs)
-            indicator_offset = 0.08  # Offset above the max correlation
-            bar_indicator_height = 0.03  # Height of the indicator bar
-            bar_indicator_y = max_corr + indicator_offset
-
-            # Threshold for determining if a region group is "narrow" (needs diagonal text)
-            narrow_threshold = 12  # Groups with ≤12 bars are considered narrow
-            # Character width estimate for determining if label is too wide (roughly 0.04 units per char at fontsize 7)
-            char_width = 0.04
-
-            # Determine the rightmost group index to apply reverse slant
-            max_index = max(max(info['indices']) for info in unique_region_networks.values() if info['indices'])
-            rightmost_threshold = max_index * 0.75  # Last 25% of bars
-
-            for region_network_key, info in unique_region_networks.items():
-                indices = info['indices']
-                if not indices:
-                    continue
-
-                # Match bar positions exactly (bars have width=0.8, centered at integer positions)
-                bar_width = 0.8
-                x_start = min(indices) - bar_width / 2
-                x_end = max(indices) + bar_width / 2
-                x_width = x_end - x_start
-                color = color_map[region_network_key]
-
-                # Draw compact colored rectangle spanning the group
-                rect = plt.Rectangle(
-                    (x_start, bar_indicator_y), x_width, bar_indicator_height,
-                    facecolor=color, edgecolor='black', linewidth=0.5,
-                    clip_on=False, alpha=0.9
-                )
-                ax2.add_patch(rect)
-
             # Calculate significance statistics
             total_pairs = len(inter_data)
             significant_pairs = sum(1 for pair_data in inter_data.values()
@@ -1368,10 +1333,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
 
-            # Add significance percentage text in upper left (below group label if present)
-            sig_text_y = 0.90 if subject_group else 0.98
-            ax2.text(0.02, sig_text_y, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
-                    transform=ax2.transAxes, fontsize=9, verticalalignment='top',
+            # Add significance percentage text in bottom left
+            ax2.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
+                    transform=ax2.transAxes, fontsize=9, verticalalignment='bottom',
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
             # Create legend with color-coded region/network pairs
