@@ -528,15 +528,17 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
         pair_count = len(pairs)
 
         if pair_count > 0:
-            significant_count = sum(pair.get('significant', False) for pair in pairs.values())
+            # Handle case where 'significant' might be None (when p_values is None)
+            significant_count = sum(1 for pair in pairs.values() if pair.get('significant') is True)
             significance_pct = significant_count / pair_count
         else:
+            significant_count = 0
             significance_pct = 0.0
 
         # Store statistics separately from pair data
         results[connection_type]['stats'] = {
             'total_pairs': pair_count,
-            'significant_pairs': significant_count if pair_count > 0 else 0,
+            'significant_pairs': significant_count,
             'significance_percentage': significance_pct
         }
 
