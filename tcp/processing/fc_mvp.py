@@ -347,6 +347,33 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
     # Compute mean across subjects, ignoring NaN
     avg_fc_matrix = np.nanmean(stacked_matrices, axis=0)
 
+    # Compute p-values using one-sample t-test on Fisher z-transformed correlations
+    # This tests if the group-average correlation is significantly different from 0
+    from scipy import stats
+    n_rois = avg_fc_matrix.shape[0]
+    p_values = np.ones((n_rois, n_rois))  # Initialize with 1.0 (non-significant)
+
+    for i in range(n_rois):
+        for j in range(n_rois):
+            # Get correlation values across subjects for this pair
+            corr_values = stacked_matrices[:, i, j]
+
+            # Only test if we have valid (non-NaN) values
+            valid_values = corr_values[~np.isnan(corr_values)]
+
+            if len(valid_values) >= 3:  # Need at least 3 subjects for reliable t-test
+                # Fisher z-transform the correlations
+                # Clip to avoid infinity at r = ±1
+                valid_values_clipped = np.clip(valid_values, -0.9999, 0.9999)
+                z_values = np.arctanh(valid_values_clipped)
+
+                # One-sample t-test: test if mean z-transformed correlation != 0
+                t_stat, p_val = stats.ttest_1samp(z_values, 0.0)
+                p_values[i, j] = p_val
+            else:
+                # Not enough data, mark as non-significant
+                p_values[i, j] = 1.0
+
     if verbose:
         print(f"  Averaged {len(fc_matrices)} subjects")
         print(f"  Matrix shape: {avg_fc_matrix.shape}")
@@ -354,9 +381,16 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
         total_elements = avg_fc_matrix.size
         print(f"  NaN values: {nan_count}/{total_elements} ({nan_count/total_elements*100:.1f}%)")
 
+        # Count significant correlations (upper triangle only, excluding diagonal)
+        significant_mask = np.triu(p_values < 0.05, k=1)
+        n_significant = np.sum(significant_mask)
+        n_total = (n_rois * (n_rois - 1)) // 2
+        print(f"  Significant correlations: {n_significant}/{n_total} ({n_significant/n_total*100:.1f}%)")
+
     return {
         'avg_fc_matrix': avg_fc_matrix,
         'avg_fc_labels': fc_labels,
+        'avg_fc_pvalues': p_values,
         'n_subjects': len(fc_matrices),
         'group_name': group_name,
         'fc_type': fc_type,
@@ -3282,10 +3316,11 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             print(f"\n[Batch 5/7] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
             for plot_info in plot_batches['fc_group_avg']:
                 # Compute connectivity patterns for group-averaged matrix
+                # Use computed p-values from statistical testing
                 connectivity_patterns = analyze_connectivity_patterns(
                     plot_info['data']['avg_fc_matrix'],
                     plot_info['data']['avg_fc_labels'],
-                    p_values=None,
+                    p_values=plot_info['data'].get('avg_fc_pvalues'),
                     alpha=0.05
                 )
 
@@ -3298,7 +3333,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     fc_fig = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
-                        p_values=None,  # No p-values for group averages
+                        p_values=plot_info['data'].get('avg_fc_pvalues'),
                         connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
@@ -3319,7 +3354,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     fc_fig = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
-                        p_values=None,
+                        p_values=plot_info['data'].get('avg_fc_pvalues'),
                         connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
