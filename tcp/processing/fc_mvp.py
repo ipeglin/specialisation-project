@@ -2946,6 +2946,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'roi_subcortical': [],
             'fc_static': [],
             'fc_slow_bands': [],
+            'fc_group_avg': [],
             'mvmd_modes': [],
             'mvmd_slow_bands': []
         }
@@ -3115,6 +3116,39 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         print(f"\nPrepared plots for {individual_plots_created} subjects")
 
+        # Prepare group-averaged FC plots
+        print(f"\nPreparing group-averaged FC plots...")
+
+        # Add static FC group averages
+        for group_name, avg_data in group_averaged_fc['static'].items():
+            if avg_data:
+                group_name_clean = group_name.replace(' ', '_').replace('-', '_').lower()
+                plot_batches['fc_group_avg'].append({
+                    'group_name': group_name,
+                    'data': avg_data,
+                    'mask_diagonal': mask_diagonal,
+                    'mask_nonsignificant': False,  # No p-values for group averages
+                    'save_path': fc_figures_dir / f'group_avg_{group_name_clean}_static_fc.svg' if save_figures and fc_figures_dir else None,
+                    'is_slow_band': False
+                })
+
+        # Add slow-band FC group averages
+        for band_key, band_groups in group_averaged_fc['slow_bands'].items():
+            for group_name, avg_data in band_groups.items():
+                if avg_data:
+                    group_name_clean = group_name.replace(' ', '_').replace('-', '_').lower()
+                    plot_batches['fc_group_avg'].append({
+                        'group_name': group_name,
+                        'data': avg_data,
+                        'mask_diagonal': mask_diagonal,
+                        'mask_nonsignificant': False,
+                        'save_path': fc_figures_dir / f'group_avg_{group_name_clean}_{band_key}_fc.svg' if save_figures and fc_figures_dir else None,
+                        'is_slow_band': True,
+                        'band_key': band_key
+                    })
+
+        print(f"  ✓ Prepared {len(plot_batches['fc_group_avg'])} group-averaged FC plots")
+
         # Now create and display plots in batches by type
         print(f"\n{'='*80}")
         print(f"CREATING AND DISPLAYING PLOTS BY TYPE")
@@ -3122,7 +3156,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 1: ROI Cortical Timeseries
         if plot_batches['roi_cortical']:
-            print(f"\n[Batch 1/6] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            print(f"\n[Batch 1/7] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
@@ -3150,7 +3184,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 2: ROI Subcortical Timeseries
         if plot_batches['roi_subcortical']:
-            print(f"\n[Batch 2/6] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            print(f"\n[Batch 2/7] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
@@ -3176,7 +3210,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 3: Static FC Analysis
         if plot_batches['fc_static']:
-            print(f"\n[Batch 3/6] Creating {len(plot_batches['fc_static'])} static FC plots...")
+            print(f"\n[Batch 3/7] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -3206,7 +3240,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 4: Slow-Band FC Analysis
         if plot_batches['fc_slow_bands']:
-            print(f"\n[Batch 4/6] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
+            print(f"\n[Batch 4/7] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -3241,10 +3275,65 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 5: MVMD Mode Decomposition
+        # Batch 5: Group-Averaged FC Analysis
+        if plot_batches['fc_group_avg']:
+            print(f"\n[Batch 5/7] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
+            for plot_info in plot_batches['fc_group_avg']:
+                # Group averages don't need CSV export during plotting (already exported)
+
+                if plot_info['is_slow_band']:
+                    # Slow-band group average
+                    band_key = plot_info['band_key']
+                    band_number = band_key.split('-')[1] if '-' in band_key else band_key
+
+                    fc_fig = plot_fc_results(
+                        plot_info['data']['avg_fc_matrix'],
+                        plot_info['data']['avg_fc_labels'],
+                        p_values=None,  # No p-values for group averages
+                        connectivity_patterns=None,  # Not needed for group averages
+                        channel_label_map=None,
+                        mask_diagonal=plot_info['mask_diagonal'],
+                        mask_nonsignificant=plot_info['mask_nonsignificant'],
+                        subject_group=None,
+                        subject_id=None,
+                        output_dir=None,
+                        verbose=verbose,
+                        band_name=f'Slow-{band_number}',
+                        frequency_range=get_frequency_range(band_number),
+                        n_available_channels=None
+                    )
+                    title = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (n={plot_info['data']['n_subjects']})"
+                else:
+                    # Static FC group average
+                    fc_fig = plot_fc_results(
+                        plot_info['data']['avg_fc_matrix'],
+                        plot_info['data']['avg_fc_labels'],
+                        p_values=None,
+                        connectivity_patterns=None,
+                        channel_label_map=None,
+                        mask_diagonal=plot_info['mask_diagonal'],
+                        mask_nonsignificant=plot_info['mask_nonsignificant'],
+                        subject_group=None,
+                        subject_id=None,
+                        output_dir=None,
+                        verbose=verbose
+                    )
+                    title = f"Group Average: {plot_info['group_name']} - Static FC (n={plot_info['data']['n_subjects']})"
+
+                fc_fig.suptitle(title, fontsize=16, fontweight='bold')
+                if plot_info['save_path']:
+                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+                if not show_plots:
+                    plt.close(fc_fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 6: MVMD Mode Decomposition
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-            print(f"\n[Batch 5/6] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+            print(f"\n[Batch 6/7] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
             for plot_info in plot_batches['mvmd_modes']:
                 mvmd_figures = plot_signal_decomposition(
                     plot_info['mvmd_data']['original'],
@@ -3278,10 +3367,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {total_mode_figs} MVMD mode plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 6: MVMD Slow-Band Decomposition
+        # Batch 7: MVMD Slow-Band Decomposition
         if plot_batches['mvmd_slow_bands']:
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
-            print(f"\n[Batch 6/6] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            print(f"\n[Batch 7/7] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
             for plot_info in plot_batches['mvmd_slow_bands']:
                 slow_band_figures = plot_slow_band_decomposition(
                     plot_info['mvmd_data']['original'],
