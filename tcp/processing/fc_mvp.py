@@ -3285,6 +3285,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     # Slow-band group average
                     band_key = plot_info['band_key']
                     band_number = band_key.split('-')[1] if '-' in band_key else band_key
+                    subject_label = f"Group_{plot_info['group_name'].replace(' ', '_')}_{band_key}"
 
                     fc_fig = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
@@ -3295,7 +3296,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         mask_diagonal=plot_info['mask_diagonal'],
                         mask_nonsignificant=plot_info['mask_nonsignificant'],
                         subject_group=None,
-                        subject_id=None,
+                        subject_id=subject_label,
                         output_dir=None,
                         verbose=verbose,
                         band_name=f'Slow-{band_number}',
@@ -3305,6 +3306,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     title = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (n={plot_info['data']['n_subjects']})"
                 else:
                     # Static FC group average
+                    subject_label = f"Group_{plot_info['group_name'].replace(' ', '_')}_static"
+
                     fc_fig = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
@@ -3314,7 +3317,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         mask_diagonal=plot_info['mask_diagonal'],
                         mask_nonsignificant=plot_info['mask_nonsignificant'],
                         subject_group=None,
-                        subject_id=None,
+                        subject_id=subject_label,
                         output_dir=None,
                         verbose=verbose
                     )
