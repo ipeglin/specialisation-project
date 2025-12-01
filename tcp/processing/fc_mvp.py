@@ -3279,7 +3279,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['fc_group_avg']:
             print(f"\n[Batch 5/7] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
             for plot_info in plot_batches['fc_group_avg']:
-                # Group averages don't need CSV export during plotting (already exported)
+                # Compute connectivity patterns for group-averaged matrix
+                connectivity_patterns = analyze_connectivity_patterns(
+                    plot_info['data']['avg_fc_matrix'],
+                    plot_info['data']['avg_fc_labels'],
+                    p_values=None,
+                    alpha=0.05
+                )
 
                 if plot_info['is_slow_band']:
                     # Slow-band group average
@@ -3291,7 +3297,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
                         p_values=None,  # No p-values for group averages
-                        connectivity_patterns=None,  # Not needed for group averages
+                        connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
                         mask_nonsignificant=plot_info['mask_nonsignificant'],
@@ -3312,7 +3318,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
                         p_values=None,
-                        connectivity_patterns=None,
+                        connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
                         mask_nonsignificant=plot_info['mask_nonsignificant'],
