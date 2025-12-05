@@ -140,6 +140,49 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     return corr_matrix, roi_labels, p_values
 
 
+def fisher_r_to_z(r_matrix):
+    """
+    Apply Fisher r-to-z transformation to correlation matrix.
+
+    The Fisher transformation normalizes the sampling distribution of correlation
+    coefficients, making them suitable for averaging and statistical testing.
+
+    Formula: z = 0.5 * ln((1 + r) / (1 - r)) = arctanh(r)
+
+    Args:
+        r_matrix: Correlation matrix (Pearson r values)
+
+    Returns:
+        z_matrix: Fisher z-transformed matrix
+    """
+    # Clip values to avoid infinity at r = ±1
+    # Use conservative bounds to maintain numerical stability
+    r_clipped = np.clip(r_matrix, -0.9999, 0.9999)
+
+    # Apply Fisher transformation (arctanh is more numerically stable than the log form)
+    z_matrix = np.arctanh(r_clipped)
+
+    return z_matrix
+
+
+def fisher_z_to_r(z_matrix):
+    """
+    Apply inverse Fisher transformation to convert z-scores back to correlations.
+
+    Formula: r = (exp(2z) - 1) / (exp(2z) + 1) = tanh(z)
+
+    Args:
+        z_matrix: Fisher z-transformed matrix
+
+    Returns:
+        r_matrix: Correlation matrix (Pearson r values)
+    """
+    # Apply inverse Fisher transformation (tanh is more numerically stable)
+    r_matrix = np.tanh(z_matrix)
+
+    return r_matrix
+
+
 def export_static_fc_results_to_csv(static_fc_results, subject_id, output_dir):
     """
     Export STATIC functional connectivity results to CSV files for later analysis.
@@ -342,12 +385,22 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
 
     # Stack matrices and compute mean (ignoring NaN values)
     # Shape: (n_subjects, n_rois, n_rois)
-    stacked_matrices = np.stack(fc_matrices, axis=0)
+    # Stack matrices (n_subjects, n_rois, n_rois)
+    stacked_r_matrices = np.stack(fc_matrices, axis=0)
 
-    # Compute mean across subjects, ignoring NaN
-    avg_fc_matrix = np.nanmean(stacked_matrices, axis=0)
+    # STEP 1: Apply Fisher r-to-z transformation to each subject's matrix
+    # This is REQUIRED for statistically valid averaging of correlations
+    stacked_z_matrices = np.zeros_like(stacked_r_matrices)
+    for subj_idx in range(len(fc_matrices)):
+        stacked_z_matrices[subj_idx] = fisher_r_to_z(stacked_r_matrices[subj_idx])
 
-    # Compute p-values using one-sample t-test on Fisher z-transformed correlations
+    # STEP 2: Compute mean across subjects on Z-transformed values (ignoring NaN)
+    avg_z_matrix = np.nanmean(stacked_z_matrices, axis=0)
+
+    # STEP 3: Apply inverse Fisher transformation to get back to correlation scale
+    avg_fc_matrix = fisher_z_to_r(avg_z_matrix)
+
+    # STEP 4: Compute p-values using one-sample t-test on Fisher z-transformed values
     # This tests if the group-average correlation is significantly different from 0
     from scipy import stats
     n_rois = avg_fc_matrix.shape[0]
@@ -355,20 +408,15 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
 
     for i in range(n_rois):
         for j in range(n_rois):
-            # Get correlation values across subjects for this pair
-            corr_values = stacked_matrices[:, i, j]
+            # Get z-transformed values across subjects for this pair
+            z_values = stacked_z_matrices[:, i, j]
 
             # Only test if we have valid (non-NaN) values
-            valid_values = corr_values[~np.isnan(corr_values)]
+            valid_z = z_values[~np.isnan(z_values)]
 
-            if len(valid_values) >= 3:  # Need at least 3 subjects for reliable t-test
-                # Fisher z-transform the correlations
-                # Clip to avoid infinity at r = ±1
-                valid_values_clipped = np.clip(valid_values, -0.9999, 0.9999)
-                z_values = np.arctanh(valid_values_clipped)
-
-                # One-sample t-test: test if mean z-transformed correlation != 0
-                t_stat, p_val = stats.ttest_1samp(z_values, 0.0)
+            if len(valid_z) >= 3:  # Need at least 3 subjects for reliable t-test
+                # One-sample t-test on z-values: test if mean z != 0
+                t_stat, p_val = stats.ttest_1samp(valid_z, 0.0)
                 p_values[i, j] = p_val
             else:
                 # Not enough data, mark as non-significant
