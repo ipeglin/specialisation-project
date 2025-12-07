@@ -1449,11 +1449,11 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     subtitle_parts = []
     if not mask_nonsignificant and p_values is not None:
         subtitle_parts.append(f'$*$ non-significant, p ≥ {alpha}')
-    if n_available_channels is not None and has_unavailable:
-        n_total = corr_matrix.shape[0]
-        subtitle_parts.append(f'{n_available_channels}/{n_total} channels available')
-    if frequency_range:
-        subtitle_parts.append(frequency_range)
+    # if n_available_channels is not None and has_unavailable:
+    #     n_total = corr_matrix.shape[0]
+    #     subtitle_parts.append(f'{n_available_channels}/{n_total} channels available')
+    # if frequency_range:
+    #     subtitle_parts.append(frequency_range)
 
     if subtitle_parts:
         title_text += '\n' + ' | '.join(subtitle_parts)
@@ -2004,11 +2004,11 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     subtitle_parts_ipsi = []
     if not mask_nonsignificant and p_values_ipsi_reordered is not None:
         subtitle_parts_ipsi.append(f'$*$ non-significant, p ≥ {alpha}')
-    if n_available_channels is not None and has_ipsi_unavailable:
-        n_total_ipsi = corr_matrix_ipsi_reordered.shape[0]
-        subtitle_parts_ipsi.append(f'{n_available_channels}/{n_total_ipsi} channels available')
-    if frequency_range:
-        subtitle_parts_ipsi.append(frequency_range)
+    # if n_available_channels is not None and has_ipsi_unavailable:
+    #     n_total_ipsi = corr_matrix_ipsi_reordered.shape[0]
+    #     subtitle_parts_ipsi.append(f'{n_available_channels}/{n_total_ipsi} channels available')
+    # if frequency_range:
+    #     subtitle_parts_ipsi.append(frequency_range)
 
     if subtitle_parts_ipsi:
         title_text_ipsi += '\n' + ' | '.join(subtitle_parts_ipsi)
