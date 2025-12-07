@@ -95,6 +95,9 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     """
     Compute functional connectivity (Pearson correlation) matrix between ROI timeseries.
 
+    Uses Fisher r-to-z transformation for statistically valid p-value computation,
+    which is necessary for non-stationary nonlinear fMRI BOLD signals.
+
     Args:
         timeseries_dict: Dictionary mapping ROI names to timeseries arrays
         roi_names: Optional list to specify order of ROIs in matrix
@@ -112,7 +115,7 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     for roi_name in roi_names:
         if roi_name in timeseries_dict:
             ts = timeseries_dict[roi_name]
-            if ts.size > 0:  # Check if timeseries is not empty
+            if ts.size > 0:
                 timeseries_list.append(ts)
                 roi_labels.append(roi_name)
 
@@ -123,19 +126,35 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     # Stack timeseries for correlation computation
     stacked_timeseries = np.vstack(timeseries_list)
 
-    # Compute correlation matrix
+    # Compute Pearson correlation matrix
     corr_matrix = np.corrcoef(stacked_timeseries)
 
-    # Compute p-values for correlations
+    # Compute p-values using Fisher r-to-z transformation
     n_rois = len(roi_labels)
+    n_samples = timeseries_list[0].shape[0]
     p_values = np.ones((n_rois, n_rois))
 
     for i in range(n_rois):
         for j in range(i+1, n_rois):
-            # Compute p-value for correlation
-            _, p_val = stats.pearsonr(timeseries_list[i], timeseries_list[j])
+            r = corr_matrix[i, j]
+
+            if np.isnan(r):
+                p_values[i, j] = 1.0
+                p_values[j, i] = 1.0
+                continue
+
+            # Apply Fisher r-to-z transformation
+            z = fisher_r_to_z(r)
+
+            # Under H0, z ~ N(0, 1/sqrt(n-3))
+            se_z = 1.0 / np.sqrt(n_samples - 3)
+            z_stat = z / se_z
+
+            # Two-tailed p-value from standard normal
+            p_val = 2 * (1 - stats.norm.cdf(np.abs(z_stat)))
+
             p_values[i, j] = p_val
-            p_values[j, i] = p_val  # Symmetric matrix
+            p_values[j, i] = p_val
 
     return corr_matrix, roi_labels, p_values
 
@@ -508,6 +527,115 @@ def export_group_averaged_fc_to_csv(group_avg_data, output_dir, verbose=False):
         print(f"    Exported: {metadata_file.name}")
 
     return created_files
+
+
+def write_analysis_log(output_dir, groups_config, all_results, low_anhedonic_subjects, high_anhedonic_subjects, timestamp=None):
+    """
+    Write comprehensive analysis log file tracking all analyzed subjects organized by groups.
+
+    Args:
+        output_dir: Directory to save log file
+        groups_config: List of tuples (group_name, subject_ids)
+        all_results: Dictionary mapping subject_id to processing results
+        low_anhedonic_subjects: List of low anhedonic subject IDs
+        high_anhedonic_subjects: List of high anhedonic subject IDs
+        timestamp: Optional timestamp string for log filename
+
+    Returns:
+        Path to created log file
+    """
+    from datetime import datetime
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if timestamp is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    log_file = output_dir / f'analysis_log_{timestamp}.txt'
+
+    with open(log_file, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("FUNCTIONAL CONNECTIVITY ANALYSIS LOG\n")
+        f.write("="*80 + "\n\n")
+        f.write(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Log File: {log_file.name}\n\n")
+
+        total_attempted = len(all_results)
+        total_success = sum(1 for r in all_results.values() if r.get('success'))
+        total_failed = total_attempted - total_success
+
+        f.write("="*80 + "\n")
+        f.write("OVERALL SUMMARY\n")
+        f.write("="*80 + "\n\n")
+        f.write(f"Total subjects attempted: {total_attempted}\n")
+        f.write(f"Successfully processed: {total_success}\n")
+        f.write(f"Failed: {total_failed}\n")
+        f.write(f"Success rate: {total_success/total_attempted*100:.1f}%\n\n")
+
+        f.write("="*80 + "\n")
+        f.write("SUBJECTS BY GROUP\n")
+        f.write("="*80 + "\n\n")
+
+        for group_name, group_subjects in groups_config:
+            successful_in_group = [sid for sid in group_subjects if all_results.get(sid, {}).get('success')]
+            failed_in_group = [sid for sid in group_subjects if sid in all_results and not all_results[sid].get('success')]
+
+            f.write(f"{group_name.upper()}\n")
+            f.write(f"{'-'*80}\n")
+            f.write(f"Total in group: {len(group_subjects)}\n")
+            f.write(f"Successfully processed: {len(successful_in_group)}\n")
+            f.write(f"Failed: {len(failed_in_group)}\n\n")
+
+            if successful_in_group:
+                f.write(f"Successfully processed subjects ({len(successful_in_group)}):\n")
+                for sid in sorted(successful_in_group):
+                    subgroup = ""
+                    if sid in low_anhedonic_subjects:
+                        subgroup = " [LOW-ANHEDONIC]"
+                    elif sid in high_anhedonic_subjects:
+                        subgroup = " [HIGH-ANHEDONIC]"
+                    f.write(f"  - {sid}{subgroup}\n")
+                f.write("\n")
+
+            if failed_in_group:
+                f.write(f"Failed subjects ({len(failed_in_group)}):\n")
+                for sid in sorted(failed_in_group):
+                    error_msg = all_results[sid].get('error', 'Unknown error')
+                    f.write(f"  - {sid}: {error_msg}\n")
+                f.write("\n")
+
+            f.write("\n")
+
+        f.write("="*80 + "\n")
+        f.write("GROUP AVERAGES - INCLUDED SUBJECTS\n")
+        f.write("="*80 + "\n\n")
+
+        for group_name, group_subjects in groups_config:
+            successful_in_group = [sid for sid in group_subjects if all_results.get(sid, {}).get('success')]
+
+            f.write(f"{group_name.upper()} (N={len(successful_in_group)})\n")
+            f.write(f"{'-'*80}\n")
+
+            if successful_in_group:
+                for sid in sorted(successful_in_group):
+                    subgroup = ""
+                    if sid in low_anhedonic_subjects:
+                        subgroup = " [LOW-ANHEDONIC]"
+                    elif sid in high_anhedonic_subjects:
+                        subgroup = " [HIGH-ANHEDONIC]"
+                    f.write(f"  {sid}{subgroup}\n")
+            else:
+                f.write("  None\n")
+
+            f.write("\n")
+
+        f.write("="*80 + "\n")
+        f.write("END OF LOG\n")
+        f.write("="*80 + "\n")
+
+    return log_file
 
 
 def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=0.05):
@@ -1672,7 +1800,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     plt.tight_layout(pad=2.8)
     return fig
 
-def plot_signal_decomposition(original, components, subject_id=None, channel_label_map=None, center_freqs=None):
+def plot_signal_decomposition(original, components, subject_id=None, channel_label_map=None, center_freqs=None, max_figures_per_batch=20):
     """
     Plot signal decomposition for each channel separately.
 
@@ -1682,17 +1810,18 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
         subject_id: Optional subject identifier to add to figure title
         channel_label_map: Optional dictionary mapping channel indices to labels
         center_freqs: Optional array of center frequencies for each mode
+        max_figures_per_batch: Maximum number of figures to create per batch to avoid memory issues
 
     Returns:
-        list: List of matplotlib.figure.Figure objects (one per channel)
+        generator: Generator yielding batches of matplotlib.figure.Figure objects
     """
     mode_count = components.shape[0]
     channel_count = original.shape[0]
     subplot_count = mode_count + 1  # Original signal + all components
 
-    figures = []
+    current_batch = []
 
-    # Create a separate figure for each channel
+    # Create a separate figure for each channel, yielding in batches
     for channel_idx in range(channel_count):
         fig, axes = plt.subplots(subplot_count, 1, figsize=(14, 2 * subplot_count), sharex=True)
 
@@ -1746,11 +1875,18 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
         # Use tight_layout
         plt.tight_layout(pad=1.5, h_pad=1.5, rect=[0, 0, 1, 0.99])
 
-        figures.append(fig)
+        current_batch.append(fig)
 
-    return figures
+        # Yield batch when it reaches max size
+        if len(current_batch) >= max_figures_per_batch:
+            yield current_batch
+            current_batch = []
 
-def plot_slow_band_decomposition(original, band_signals, subject_id=None, channel_label_map=None):
+    # Yield any remaining figures
+    if current_batch:
+        yield current_batch
+
+def plot_slow_band_decomposition(original, band_signals, subject_id=None, channel_label_map=None, max_figures_per_batch=20):
     """
     Plot signal decomposition organized by slow frequency bands for each channel separately.
     Only plots the banded signals (Slow-2 through Slow-6), excluding frequencies outside all bands.
@@ -1760,12 +1896,13 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
         band_signals: Dictionary from combine_slow_band_components() containing band-separated signals
         subject_id: Optional subject identifier to add to figure title
         channel_label_map: Optional dictionary mapping channel indices to labels
+        max_figures_per_batch: Maximum number of figures to create per batch to avoid memory issues
 
     Returns:
-        list: List of matplotlib.figure.Figure objects (one per channel)
+        generator: Generator yielding batches of matplotlib.figure.Figure objects
     """
     channel_count = original.shape[0]
-    figures = []
+    current_batch = []
 
     # Define band order for plotting: Slow-6 through Slow-2 (exclude 'excluded')
     band_order = ['6', '5', '4', '3', '2']
@@ -1847,9 +1984,16 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
         # Use tight_layout
         plt.tight_layout(pad=1.5, h_pad=1.5, rect=[0, 0, 1, 0.99])
 
-        figures.append(fig)
+        current_batch.append(fig)
 
-    return figures
+        # Yield batch when it reaches max size
+        if len(current_batch) >= max_figures_per_batch:
+            yield current_batch
+            current_batch = []
+
+    # Yield any remaining figures
+    if current_batch:
+        yield current_batch
 
 def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name="Group1", group2_name="Group2"):
     """
@@ -2567,13 +2711,24 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         }
 
 
-def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
     """Main function for FC MVP analysis"""
+    from datetime import datetime
+
     print("=== Functional Connectivity MVP ===")
 
+    # Create timestamped parent folder for this analysis run
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_parent_dir = get_analysis_path(f'analysis_runs/run_{run_timestamp}')
+    run_parent_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nAnalysis Run Directory: {run_parent_dir}")
+    print(f"Timestamp: {run_timestamp}")
+    print(f"All outputs for this run will be saved in this directory\n")
+
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
-    LIMIT_SUBJECTS = True  # Set False for full analysis
-    MAX_SUBJECTS_PER_GROUP = 1  # Limit when testing (only used if LIMIT_SUBJECTS=True)
+    LIMIT_SUBJECTS = subjects_per_group is not None  # Enable limiting if subjects_per_group is specified
+    MAX_SUBJECTS_PER_GROUP = subjects_per_group if subjects_per_group is not None else 8  # Use specified limit or default
 
     print(f"Configuration:")
     print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
@@ -2877,12 +3032,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"EXPORTING STATIC FC RESULTS TO CSV")
     print(f"{'='*80}")
 
-    # Create output directory for FC CSV files using cross-platform path system
-    # This will automatically use the correct base path for macOS, Windows 11, or CentOS
-    fc_output_dir = get_analysis_path('fc_analysis/static_fc')
+    # Create output directory for FC CSV files within run folder
+    fc_output_dir = run_parent_dir / 'static_fc'
     fc_output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {fc_output_dir}")
-    print(f"  (Platform-specific path automatically configured)")
 
     csv_export_count = 0
     all_results = {**anhedonic_results, **non_anhedonic_results}
@@ -2961,9 +3114,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                                   for band_groups in group_averaged_fc['slow_bands'].values())
     print(f"  Slow-band FC: {total_slow_band_groups} group×band combinations")
 
-    # Export group-averaged FC to CSV
+    # Export group-averaged FC to CSV within run folder
     print(f"\n--- Exporting Group-Averaged FC ---")
-    group_avg_output_dir = get_analysis_path('fc_analysis/group_averages')
+    group_avg_output_dir = run_parent_dir / 'group_averages'
     group_avg_output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {group_avg_output_dir}")
 
@@ -2999,9 +3152,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     roi_figures_dir = None
 
     if save_figures and create_plots:
-        fc_figures_dir = get_analysis_path('fc_analysis/figures')
-        mvmd_figures_dir = get_analysis_path('mvmd_analysis/figures')
-        roi_figures_dir = get_analysis_path('roi_extraction/figures')
+        fc_figures_dir = run_parent_dir / 'figures' / 'fc_analysis'
+        mvmd_figures_dir = run_parent_dir / 'figures' / 'mvmd_analysis'
+        roi_figures_dir = run_parent_dir / 'figures' / 'roi_extraction'
 
         fc_figures_dir.mkdir(parents=True, exist_ok=True)
         mvmd_figures_dir.mkdir(parents=True, exist_ok=True)
@@ -3428,73 +3581,111 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
             print(f"\n[Batch 6/7] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+
+            # Process in sub-batches of 20 figures to avoid memory issues
+            MAX_FIGS_PER_BATCH = 20
+            current_batch_figs = []
+
             for plot_info in plot_batches['mvmd_modes']:
-                mvmd_figures = plot_signal_decomposition(
+                mvmd_figure_generator = plot_signal_decomposition(
                     plot_info['mvmd_data']['original'],
                     plot_info['mvmd_data']['time_modes'],
                     subject_id=plot_info['subject_id'],
                     channel_label_map=plot_info['channel_label_map'],
-                    center_freqs=plot_info['center_freqs']
+                    center_freqs=plot_info['center_freqs'],
+                    max_figures_per_batch=MAX_FIGS_PER_BATCH
                 )
+                
+                # Process each batch of figures from the generator
+                channel_idx_base = 0
+                for mvmd_figures in mvmd_figure_generator:
+                    if plot_info['save_dir']:
+                        subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
 
-                if plot_info['save_dir']:
-                    # Create subject-specific subdirectory for organization
-                    subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
-                    subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+                        for fig_idx, fig in enumerate(mvmd_figures):
+                            channel_idx = channel_idx_base + fig_idx
+                            if plot_info['channel_label_map'] is not None:
+                                channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                            else:
+                                channel_label_clean = f'ch{channel_idx}'
 
-                    for channel_idx, fig in enumerate(mvmd_figures):
-                        if plot_info['channel_label_map'] is not None:
-                            channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
-                            channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-                        else:
-                            channel_label_clean = f'ch{channel_idx}'
+                            fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
+                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                            figures_saved_count += 1
 
-                        fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
-                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+                    if show_plots:
+                        current_batch_figs.extend(mvmd_figures)
 
-                if not show_plots:
-                    for fig in mvmd_figures:
-                        plt.close(fig)
+                        # Display and clear batch when reaching limit
+                        if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
+                            print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
+                            plt.show()
+                            current_batch_figs = []
+                    else:
+                        for fig in mvmd_figures:
+                            plt.close(fig)
+                    
+                    channel_idx_base += len(mvmd_figures)
 
-            if show_plots:
-                print(f"  Displaying {total_mode_figs} MVMD mode plots. Close all figures to continue...")
+            # Display remaining figures if any
+            if show_plots and current_batch_figs:
+                print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
                 plt.show()
 
         # Batch 7: MVMD Slow-Band Decomposition
         if plot_batches['mvmd_slow_bands']:
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
             print(f"\n[Batch 7/7] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            current_batch_figs = []
+            
             for plot_info in plot_batches['mvmd_slow_bands']:
-                slow_band_figures = plot_slow_band_decomposition(
+                slow_band_generator = plot_slow_band_decomposition(
                     plot_info['mvmd_data']['original'],
                     plot_info['band_signals'],
                     subject_id=plot_info['subject_id'],
-                    channel_label_map=plot_info['channel_label_map']
+                    channel_label_map=plot_info['channel_label_map'],
+                    max_figures_per_batch=MAX_FIGS_PER_BATCH
                 )
 
-                if plot_info['save_dir']:
-                    # Create subject-specific subdirectory for organization
-                    subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
-                    subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+                # Process each batch of figures from the generator
+                channel_idx_base = 0
+                for slow_band_figures in slow_band_generator:
+                    if plot_info['save_dir']:
+                        # Create subject-specific subdirectory for organization
+                        subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
 
-                    for channel_idx, fig in enumerate(slow_band_figures):
-                        if plot_info['channel_label_map'] is not None:
-                            channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
-                            channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-                        else:
-                            channel_label_clean = f'ch{channel_idx}'
+                        for fig_idx, fig in enumerate(slow_band_figures):
+                            channel_idx = channel_idx_base + fig_idx
+                            if plot_info['channel_label_map'] is not None:
+                                channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                            else:
+                                channel_label_clean = f'ch{channel_idx}'
 
-                        fig_path = subject_mvmd_dir / f'mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
-                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+                            fig_path = subject_mvmd_dir / f'mvmd_slow_bands_decomposition_{channel_label_clean}.svg'
+                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                            figures_saved_count += 1
 
-                if not show_plots:
-                    for fig in slow_band_figures:
-                        plt.close(fig)
+                    if show_plots:
+                        current_batch_figs.extend(slow_band_figures)
 
-            if show_plots:
-                print(f"  Displaying {total_band_figs} MVMD slow-band plots. Close all figures to continue...")
+                        # Display and clear batch when reaching limit
+                        if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
+                            print(f"  Displaying {len(current_batch_figs)} MVMD slow-band plots. Close all figures to continue...")
+                            plt.show()
+                            current_batch_figs = []
+                    else:
+                        for fig in slow_band_figures:
+                            plt.close(fig)
+                    
+                    channel_idx_base += len(slow_band_figures)
+
+            # Display remaining figures if any
+            if show_plots and current_batch_figs:
+                print(f"  Displaying {len(current_batch_figs)} MVMD slow-band plots. Close all figures to continue...")
                 plt.show()
 
         print(f"\n{'='*80}")
@@ -3511,6 +3702,37 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"\n[INFO] Plot creation disabled (CREATE_PLOTS=False)")
     else:
         print(f"\n[INFO] No plots created (no successful subjects)")
+
+    # ===== WRITE ANALYSIS LOG =====
+    print(f"\n{'='*80}")
+    print(f"WRITING ANALYSIS LOG")
+    print(f"{'='*80}")
+
+    log_file = write_analysis_log(
+        output_dir=run_parent_dir,
+        groups_config=groups_config,
+        all_results=all_results,
+        low_anhedonic_subjects=low_anhedonic_subjects,
+        high_anhedonic_subjects=high_anhedonic_subjects,
+        timestamp=run_timestamp
+    )
+
+    print(f"Analysis log saved to: {log_file}")
+
+    # ===== FINAL SUMMARY =====
+    print(f"\n{'='*80}")
+    print(f"ANALYSIS COMPLETE")
+    print(f"{'='*80}")
+    print(f"All outputs saved to: {run_parent_dir}")
+    print(f"  - Static FC CSVs: {fc_output_dir}")
+    print(f"  - Group averages: {group_avg_output_dir}")
+    if save_figures and figures_saved_count > 0:
+        print(f"  - Figures ({figures_saved_count} total):")
+        print(f"    - FC analysis: {fc_figures_dir}")
+        print(f"    - MVMD analysis: {mvmd_figures_dir}")
+        print(f"    - ROI extraction: {roi_figures_dir}")
+    print(f"  - Analysis log: {log_file}")
+    print(f"\nRun ID: {run_timestamp}")
 
     # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {
@@ -3545,11 +3767,47 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
 
 if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Functional Connectivity MVP Analysis - Processes fMRI data to compute '
+                   'static and dynamic functional connectivity matrices with MVMD decomposition',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python fc_mvp.py                           # Process all subjects with default settings
+  python fc_mvp.py --subjects-per-group 5   # Limit to 5 subjects per group
+  python fc_mvp.py --verbose --show-plots   # Enable verbose output and show plots
+  python fc_mvp.py --subjects-per-group 3 --no-save  # Limit subjects and don't save figures
+
+Output:
+  - Static FC matrices and pairwise connectivity CSV files
+  - Group-averaged FC analysis with statistical testing
+  - MVMD decomposition plots (mode and slow-band)
+  - Comprehensive analysis logs
+        '''
+    )
+    parser.add_argument('--subjects-per-group', type=int, default=None, metavar='N',
+                       help='Limit the number of subjects processed per group. '
+                           'When specified, enables subject limiting. When not specified, '
+                           'processes all available subjects (default: no limit)')
+    parser.add_argument('--verbose', action='store_true', default=False,
+                       help='Enable verbose output including detailed subject-level information '
+                           'and processing status updates')
+    parser.add_argument('--show-plots', action='store_true', default=False,
+                       help='Display plots interactively in batches of 20. User must close '
+                           'each batch to continue processing')
+    parser.add_argument('--no-save', action='store_true', default=False,
+                       help='Skip saving figures to disk. Figures are still created for '
+                           'display if --show-plots is enabled')
+    
+    args = parser.parse_args()
+    
     # Display configuration
-    VERBOSE_OUTPUT = True
+    VERBOSE_OUTPUT = args.verbose
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
-    SHOW_PLOTS = True  # Whether to display plots interactively (requires CREATE_PLOTS=True)
-    SAVE_FIGURES = False  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
+    SHOW_PLOTS = args.show_plots  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SAVE_FIGURES = not args.no_save  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
@@ -3557,6 +3815,14 @@ if __name__ == '__main__':
     MASK_NONSIGNIFICANT = False
     MASK_DIAGONAL = False
 
-    main(mask_diagonal=MASK_DIAGONAL, mask_nonsignificant=MASK_NONSIGNIFICANT, create_plots=CREATE_PLOTS, show_plots=SHOW_PLOTS, save_figures=SAVE_FIGURES, verbose=VERBOSE_OUTPUT)
+    main(
+        mask_diagonal=MASK_DIAGONAL, 
+        mask_nonsignificant=MASK_NONSIGNIFICANT, 
+        create_plots=CREATE_PLOTS, 
+        show_plots=SHOW_PLOTS, 
+        save_figures=SAVE_FIGURES, 
+        verbose=VERBOSE_OUTPUT,
+        subjects_per_group=args.subjects_per_group
+    )
 
     # Note: plt.show() is now called within each batch in main(), not here
