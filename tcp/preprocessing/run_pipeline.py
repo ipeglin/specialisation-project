@@ -553,7 +553,36 @@ class TCPPipeline:
 
 def main():
     """Main execution function"""
-    parser = argparse.ArgumentParser(description='Run TCP preprocessing pipeline')
+    parser = argparse.ArgumentParser(
+        description='TCP Preprocessing Pipeline Orchestrator - Runs the complete TCP anhedonia-focused '
+                   'preprocessing pipeline including dataset validation, subject filtering, anhedonia '
+                   'classification, and data download',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Pipeline Steps:
+  1. initialize_dataset     - Initialize and validate dataset structure
+  2. validate_subjects      - Filter subjects (task fMRI + SHAPS completion)
+  3. fetch_global_data      - Download phenotypic data and metadata
+  4. classify_anhedonia     - Classify subjects by SHAPS anhedonia scores
+  5. classify_diagnosis     - Classify subjects by MDD diagnosis status
+  6. generate_groups        - Generate analysis groups (Primary/Secondary/etc.)
+  7. sample_subjects        - Sample subjects and create file mappings
+  8. cross_integrate        - Cross-analysis integration and final data download
+
+Examples:
+  python run_pipeline.py                          # Run full pipeline in development mode
+  python run_pipeline.py --sample-mode production # Run full pipeline for production (~300GB)
+  python run_pipeline.py --dry-run                # Show what would be executed
+  python run_pipeline.py --start-from classify_anhedonia --stop-at generate_groups
+  python run_pipeline.py --subjects-per-group 10 --analysis-groups primary secondary
+  python run_pipeline.py --skip-optional --fetch-dry-run
+
+Sample Modes:
+  development: ~15GB download, 5 subjects per group, hammer task only
+  production:  ~300GB download, full dataset, all tasks
+  custom:      User-specified subjects per group and analysis groups
+        '''
+    )
     parser.add_argument('--start-from', choices=[s.value for s in PipelineStep],
                        help='Start pipeline from specific step')
     parser.add_argument('--stop-at', choices=[s.value for s in PipelineStep],
