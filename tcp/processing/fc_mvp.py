@@ -1120,7 +1120,9 @@ def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_
 
 def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_patterns=None, channel_label_map=None, alpha=0.05, mask_diagonal=False, mask_nonsignificant=False, subject_group=None, subject_id=None, output_dir=None, verbose=False, band_name=None, frequency_range=None, n_available_channels=None):
     """
-    Create a clean visualization focusing on static FC matrix and interhemispheric connectivity.
+    Create two separate visualizations:
+    1. FC matrix with interhemispheric connectivity
+    2. FC matrix with ipsilateral connectivity
 
     Args:
         corr_matrix: Correlation matrix
@@ -1137,8 +1139,13 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
         band_name: Optional slow-band name (e.g., "Slow-4") for plot title
         frequency_range: Optional frequency range string (e.g., "0.027-0.073 Hz") for subtitle
         n_available_channels: Optional number of available channels for slow-band FC
+
+    Returns:
+        tuple: (fig_interhemispheric, fig_ipsilateral) - Two separate figures
     """
-    fig = plt.figure(figsize=(16, 8))
+
+    # ===== FIGURE 1: FC Matrix + Interhemispheric Connectivity =====
+    fig_inter = plt.figure(figsize=(16, 8))
 
     # 1. Static FC Matrix (left side)
     ax1 = plt.subplot(1, 2, 1)
@@ -1460,7 +1467,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     # We'll add rectangles after both plots are created to access the color map
 
     # 2. Interhemispheric Connectivity Analysis (right side)
-    ax2 = plt.subplot(1, 2, 2)
+    ax2_inter = plt.subplot(1, 2, 2)
 
     if connectivity_patterns and 'interhemispheric' in connectivity_patterns:
         inter_data = connectivity_patterns['interhemispheric']['pairs']
@@ -1664,7 +1671,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     bar_hatches.append(None)
 
             # Create all bars at once
-            bars = ax2.bar(range(len(inter_corrs)), inter_corrs, color=bar_colors,
+            bars = ax2_inter.bar(range(len(inter_corrs)), inter_corrs, color=bar_colors,
                           edgecolor='black', alpha=0.8, width=0.8, linewidth=0.8)
 
             # Apply hatching to non-significant bars
@@ -1674,14 +1681,14 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     bar.set_alpha(0.5)
 
             # Remove x-axis tick labels (too cluttered with many connections)
-            ax2.set_xticks([])
-            ax2.set_xlabel(f'{len(inter_corrs)} interhemispheric connections', fontsize=11)
-            ax2.set_ylabel('Pearson Correlation', fontsize=12)
-            ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+            ax2_inter.set_xticks([])
+            ax2_inter.set_xlabel(f'{len(inter_corrs)} interhemispheric connections', fontsize=11)
+            ax2_inter.set_ylabel('Pearson Correlation', fontsize=12)
+            ax2_inter.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
                          fontsize=12, fontweight='bold', pad=20)
-            ax2.set_ylim(-1, 1)
-            ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-            ax2.grid(True, alpha=0.3, axis='y')
+            ax2_inter.set_ylim(-1, 1)
+            ax2_inter.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            ax2_inter.grid(True, alpha=0.3, axis='y')
 
             # Calculate significance statistics
             total_pairs = len(inter_data)
@@ -1691,14 +1698,14 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
 
             # Add group label in upper left if provided
             if subject_group:
-                ax2.text(0.02, 0.98, f'Group: {subject_group}',
-                        transform=ax2.transAxes, fontsize=10, verticalalignment='top',
+                ax2_inter.text(0.02, 0.98, f'Group: {subject_group}',
+                        transform=ax2_inter.transAxes, fontsize=10, verticalalignment='top',
                         fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
 
             # Add significance percentage text in bottom left
-            ax2.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
-                    transform=ax2.transAxes, fontsize=9, verticalalignment='bottom',
+            ax2_inter.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
+                    transform=ax2_inter.transAxes, fontsize=9, verticalalignment='bottom',
                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
             # Create legend with color-coded region/network pairs
@@ -1721,7 +1728,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
 
             # Place legend outside plot area to the right to avoid long labels overflowing
             # This keeps the legend from covering data and handles long network names
-            ax2.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5),
+            ax2_inter.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5),
                       fontsize=7, framealpha=0.95, edgecolor='black',
                       handlelength=1.5, handleheight=1.0)
 
@@ -1784,21 +1791,625 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     ax1.add_patch(rect)
 
         else:
-            ax2.text(0.5, 0.5, 'No interhemispheric\nconnections found',
-                    ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
-            ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+            ax2_inter.text(0.5, 0.5, 'No interhemispheric\nconnections found',
+                    ha='center', va='center', transform=ax2_inter.transAxes, fontsize=14, color='gray')
+            ax2_inter.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
                          fontsize=13, fontweight='bold', pad=20)
-            ax2.set_xlim(0, 1)
-            ax2.set_ylim(0, 1)
+            ax2_inter.set_xlim(0, 1)
+            ax2_inter.set_ylim(0, 1)
     else:
-        ax2.text(0.5, 0.5, 'No connectivity patterns\navailable',
-                ha='center', va='center', transform=ax2.transAxes, fontsize=14, color='gray')
-        ax2.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
+        ax2_inter.text(0.5, 0.5, 'No connectivity patterns\navailable',
+                ha='center', va='center', transform=ax2_inter.transAxes, fontsize=14, color='gray')
+        ax2_inter.set_title('Interhemispheric Connectivity\n(Same Region, Different Hemispheres)',
                      fontsize=13, fontweight='bold', pad=20)
 
-    # Use sufficient padding for FC plots
-    plt.tight_layout(pad=2.8)
-    return fig
+    # Finalize first figure
+    fig_inter.tight_layout(pad=2.8)
+
+    # ===== FIGURE 2: FC Matrix + Ipsilateral Connectivity =====
+    fig_ipsi = plt.figure(figsize=(16, 8))
+
+    # 1. Static FC Matrix (left side) - reordered based on ipsilateral pairs
+    ax1_ipsi = plt.subplot(1, 2, 1)
+
+    # === REORDER FC MATRIX BASED ON IPSILATERAL CONNECTIVITY ===
+    # Extract ipsilateral ordering from connectivity patterns
+    ipsi_network_region_order = []
+    if connectivity_patterns and 'ipsilateral' in connectivity_patterns:
+        ipsi_data = connectivity_patterns['ipsilateral']['pairs']
+        seen_ipsi_network_regions = set()
+
+        # Iterate through ipsilateral pairs in insertion order
+        for pair_key in ipsi_data.keys():
+            parts = pair_key.split('_')
+
+            # Parse pair_key to extract region_network_key (same logic as bar plot)
+            if len(parts) >= 7:  # Cortical with network
+                region1 = parts[0]
+                network1 = parts[2]
+                # Find second region
+                second_region_idx = None
+                hemi = parts[1]
+                for i in range(3, len(parts)):
+                    if parts[i] == hemi:
+                        second_region_idx = i - 1
+                        break
+
+                if second_region_idx and second_region_idx + 2 < len(parts):
+                    region2 = parts[second_region_idx]
+                    network2 = parts[second_region_idx + 2]
+
+                    # Add both region_network keys
+                    region_network_key1 = f"{region1}_{network1}"
+                    region_network_key2 = f"{region2}_{network2}"
+
+                    if region_network_key1 not in seen_ipsi_network_regions:
+                        ipsi_network_region_order.append(region_network_key1)
+                        seen_ipsi_network_regions.add(region_network_key1)
+                    if region_network_key2 not in seen_ipsi_network_regions:
+                        ipsi_network_region_order.append(region_network_key2)
+                        seen_ipsi_network_regions.add(region_network_key2)
+
+            elif len(parts) >= 6:  # Subcortical without network
+                region1 = parts[0]
+                subdivision1 = parts[2]
+                region2 = parts[3]
+                subdivision2 = parts[5]
+
+                region_network_key1 = f"{region1}_{subdivision1}"
+                region_network_key2 = f"{region2}_{subdivision2}"
+
+                if region_network_key1 not in seen_ipsi_network_regions:
+                    ipsi_network_region_order.append(region_network_key1)
+                    seen_ipsi_network_regions.add(region_network_key1)
+                if region_network_key2 not in seen_ipsi_network_regions:
+                    ipsi_network_region_order.append(region_network_key2)
+                    seen_ipsi_network_regions.add(region_network_key2)
+
+    # If no ipsilateral patterns available, fall back to original order
+    if not ipsi_network_region_order:
+        # Extract all unique region_network_keys in the order they appear
+        seen = set()
+        for label in roi_labels:
+            region_network_key, _, _, _ = parse_channel_label(label)
+            if region_network_key not in seen:
+                ipsi_network_region_order.append(region_network_key)
+                seen.add(region_network_key)
+
+    # Create list of (label, sort_key, original_index) tuples for ipsilateral ordering
+    ipsi_label_sort_data = []
+    for idx, label in enumerate(roi_labels):
+        region_network_key, region, hemisphere, parcel_id = parse_channel_label(label)
+
+        # Create hierarchical sort key for ipsilateral:
+        # 1. Primary: Hemisphere (RH=0 comes before LH=1) - HEMISPHERE FIRST
+        # 2. Secondary: Network/region group order (matches ipsilateral bar plot order)
+        # 3. Tertiary: Parcel ID for stable sorting within region/network
+        try:
+            ipsi_network_order_idx = ipsi_network_region_order.index(region_network_key)
+        except ValueError:
+            # If region_network_key not in ordering list, place at end
+            ipsi_network_order_idx = len(ipsi_network_region_order)
+
+        hemi_order = 0 if hemisphere == 'RH' else 1
+        ipsi_sort_key = (hemi_order, ipsi_network_order_idx, parcel_id)  # HEMISPHERE FIRST
+
+        ipsi_label_sort_data.append((label, ipsi_sort_key, idx))
+
+    # Sort by hierarchical key
+    ipsi_label_sort_data.sort(key=lambda x: x[1])
+
+    # Extract new order indices
+    ipsi_new_order = [item[2] for item in ipsi_label_sort_data]
+    ipsi_reordered_labels = [item[0] for item in ipsi_label_sort_data]
+
+    # Get the original unreordered matrices (before interhemispheric reordering)
+    # We need to work from the original roi_labels order, not the interhemispheric-reordered one
+    # So we'll reorder from the original corr_matrix passed to the function
+    # But wait - we already modified corr_matrix and p_values above for interhemispheric
+    # We need to use the ORIGINAL matrices before any reordering
+    # Let's save them at the beginning of the function or reconstruct from roi_labels
+
+    # Actually, we need to back out the interhemispheric reordering first
+    # Create inverse mapping from interhemispheric reordering
+    inverse_inter_order = [0] * len(new_order)
+    for new_idx, orig_idx in enumerate(new_order):
+        inverse_inter_order[orig_idx] = new_idx
+
+    # Get back to original matrix order
+    corr_matrix_original = corr_matrix[np.ix_(inverse_inter_order, inverse_inter_order)]
+    p_values_original = None
+    if p_values is not None:
+        p_values_original = p_values[np.ix_(inverse_inter_order, inverse_inter_order)]
+
+    # Now apply ipsilateral reordering to original matrices
+    corr_matrix_ipsi_reordered = corr_matrix_original[np.ix_(ipsi_new_order, ipsi_new_order)]
+    p_values_ipsi_reordered = None
+    if p_values_original is not None:
+        p_values_ipsi_reordered = p_values_original[np.ix_(ipsi_new_order, ipsi_new_order)]
+
+    # Apply same mask logic to ipsilateral-reordered matrix
+    mask_ipsi_unavailable = np.isnan(corr_matrix_ipsi_reordered)
+    has_ipsi_unavailable = np.any(mask_ipsi_unavailable)
+    mask_ipsi_combined = None
+
+    if mask_diagonal:
+        mask_ipsi_combined = np.eye(corr_matrix_ipsi_reordered.shape[0], dtype=bool)
+
+    if mask_nonsignificant and p_values_ipsi_reordered is not None:
+        nonsig_ipsi_mask = (p_values_ipsi_reordered >= alpha) & ~mask_ipsi_unavailable
+        np.fill_diagonal(nonsig_ipsi_mask, False)
+
+        if mask_ipsi_combined is not None:
+            mask_ipsi_combined = mask_ipsi_combined | nonsig_ipsi_mask
+        else:
+            mask_ipsi_combined = nonsig_ipsi_mask
+
+    if mask_ipsi_combined is not None:
+        mask_ipsi_combined = mask_ipsi_combined | mask_ipsi_unavailable
+    else:
+        mask_ipsi_combined = mask_ipsi_unavailable
+
+    # Use descriptive labels for ipsilateral figure
+    ipsi_display_labels = ipsi_reordered_labels
+    if channel_label_map:
+        ipsi_display_labels = [channel_label_map.get(label, label) for label in ipsi_reordered_labels]
+
+    # Verbose output for ipsilateral reordering
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"IPSILATERAL MATRIX REORDERING (Subject: {subject_id if subject_id else 'Unknown'})")
+        print(f"{'='*80}")
+        print(f"Reordered axis labels (matrix rows/columns):")
+        for idx, label in enumerate(ipsi_display_labels):
+            print(f"  [{idx:2d}] {label}")
+        print(f"\nNetwork/Region unique groups (for ipsilateral matrix ordering):")
+        for idx, network_region in enumerate(ipsi_network_region_order):
+            print(f"  [{idx:2d}] {network_region}")
+        print(f"\n(Ipsilateral pairs will be printed in sorted order below)")
+        print(f"{'='*80}\n")
+
+    # Plot ipsilateral-reordered FC matrix
+    sns.heatmap(corr_matrix_ipsi_reordered,
+                annot=False,
+                xticklabels=ipsi_display_labels,
+                yticklabels=ipsi_display_labels,
+                center=0,
+                cmap='RdBu_r',
+                vmin=-1, vmax=1,
+                mask=mask_ipsi_combined,
+                ax=ax1_ipsi,
+                cbar_kws={'label': 'Pearson Correlation'},
+                square=True)
+
+    # Add asterisk to non-significant correlations (only if not masking them)
+    if not mask_nonsignificant and p_values_ipsi_reordered is not None:
+        n_rois = corr_matrix_ipsi_reordered.shape[0]
+        for i in range(n_rois):
+            for j in range(n_rois):
+                # Check if correlation is non-significant (and not on diagonal)
+                if i != j and p_values_ipsi_reordered[i, j] >= alpha:
+                    # Add small black asterisk in center of non-significant cells
+                    ax1_ipsi.text(j + 0.5, i + 0.5, '*',
+                            ha='center', va='center',
+                            color='black', fontsize=7, fontweight='bold')
+
+    # Add title for ipsilateral figure
+    if band_name and frequency_range:
+        title_text_ipsi = f'Static Functional Connectivity - {band_name}'
+    else:
+        title_text_ipsi = 'Static Functional Connectivity Matrix'
+
+    # Subtitle with availability and significance info
+    subtitle_parts_ipsi = []
+    if not mask_nonsignificant and p_values_ipsi_reordered is not None:
+        subtitle_parts_ipsi.append(f'$*$ non-significant, p ≥ {alpha}')
+    if n_available_channels is not None and has_ipsi_unavailable:
+        n_total_ipsi = corr_matrix_ipsi_reordered.shape[0]
+        subtitle_parts_ipsi.append(f'{n_available_channels}/{n_total_ipsi} channels available')
+    if frequency_range:
+        subtitle_parts_ipsi.append(frequency_range)
+
+    if subtitle_parts_ipsi:
+        title_text_ipsi += '\n' + ' | '.join(subtitle_parts_ipsi)
+
+    ax1_ipsi.set_title(title_text_ipsi, fontsize=14, fontweight='bold', pad=20)
+    ax1_ipsi.tick_params(axis='x', rotation=90, labelsize=7)
+    ax1_ipsi.tick_params(axis='y', rotation=0, labelsize=7)
+
+    # 2. Ipsilateral Connectivity Analysis (right side)
+    ax2_ipsi = plt.subplot(1, 2, 2)
+
+    if connectivity_patterns and 'ipsilateral' in connectivity_patterns:
+        ipsi_data = connectivity_patterns['ipsilateral']['pairs']
+
+        if ipsi_data:
+            # Sort ipsilateral pairs: HEMISPHERE FIRST, then by region/network
+            def get_ipsi_sort_key(pair_key):
+                parts = pair_key.split('_')
+                # Find second region start (after first hemisphere marker)
+                second_region_idx = None
+                for i in range(3, len(parts)):
+                    if parts[i] in ['RH', 'LH']:
+                        second_region_idx = i - 1
+                        break
+
+                if second_region_idx is not None and second_region_idx + 2 < len(parts):
+                    region1 = parts[0]
+                    hemi = parts[1]
+                    network1 = parts[2]
+                    region2 = parts[second_region_idx]
+                    network2 = parts[second_region_idx + 2] if second_region_idx + 2 < len(parts) else ''
+
+                    # Use matrix order for sorting within hemisphere
+                    region_network_key_1 = f"{region1}_{network1}"
+                    try:
+                        matrix_order = ipsi_network_region_order.index(region_network_key_1)
+                    except (ValueError, NameError):
+                        matrix_order = 999
+
+                    # Hemisphere order: RH=0, LH=1
+                    hemi_order = 0 if hemi == 'RH' else 1
+
+                    # Sort by: (HEMISPHERE FIRST, then matrix_order, region2, network2)
+                    return (hemi_order, matrix_order, region2, network2)
+                else:
+                    return (999, 999, '', '')
+
+            # Sort pairs
+            sorted_ipsi_pairs = sorted(ipsi_data.items(), key=lambda x: get_ipsi_sort_key(x[0]))
+
+            # Extract sorted data
+            ipsi_pairs = [pair[0] for pair in sorted_ipsi_pairs]
+            ipsi_corrs = [pair[1]['correlation'] for pair in sorted_ipsi_pairs]
+
+            # Rebuild ipsi_data as OrderedDict to maintain sorted order
+            from collections import OrderedDict
+            ipsi_data = OrderedDict(sorted_ipsi_pairs)
+
+            # Helper function to parse ipsilateral pair information
+            def parse_ipsi_region_network(pair_key):
+                """
+                Parse ipsilateral pair key to extract region and network information.
+                Returns (region_network_key, display_label, is_cortical, hemisphere)
+
+                Ipsilateral format (same hemisphere, different regions):
+                Cortical: {region1}_{hemi}_{network1}_p{subarea1}_{region2}_{hemi}_{network2}_p{subarea2}
+                Subcortical: {region1}_{hemi}_{subdivision1}_{region2}_{hemi}_{subdivision2}
+                """
+                parts = pair_key.split('_')
+
+                if len(parts) >= 7:  # Cortical with network
+                    region1 = parts[0]
+                    hemi = parts[1]
+                    network1 = parts[2]
+
+                    # Find where second region starts
+                    second_region_idx = None
+                    for i in range(3, len(parts)):
+                        if parts[i] == hemi:  # Same hemisphere marker
+                            second_region_idx = i - 1
+                            break
+
+                    if second_region_idx and second_region_idx + 2 < len(parts):
+                        region2 = parts[second_region_idx]
+                        network2 = parts[second_region_idx + 2]
+                    else:
+                        region2 = parts[4] if len(parts) > 4 else 'Unknown'
+                        network2 = parts[6] if len(parts) > 6 else 'Unknown'
+
+                    # Create unique key for this ipsilateral connection
+                    region_network_key = f"{region1}_{network1}_to_{region2}_{network2}"
+                    display_label = f"{region1} ({network1}) - {region2} ({network2}) [{hemi}]"
+                    is_cortical = True
+
+                elif len(parts) >= 6:  # Subcortical without network
+                    region1 = parts[0]
+                    hemi = parts[1]
+                    subdivision1 = parts[2]
+                    region2 = parts[3]
+                    subdivision2 = parts[5]
+
+                    region_network_key = f"{region1}_{subdivision1}_to_{region2}_{subdivision2}"
+                    display_label = f"{region1} ({subdivision1}) - {region2} ({subdivision2}) [{hemi}]"
+                    is_cortical = False
+
+                else:
+                    region_network_key = parts[0] if parts else 'Unknown'
+                    display_label = region_network_key
+                    is_cortical = False
+                    hemi = 'Unknown'
+
+                return region_network_key, display_label, is_cortical, hemi
+
+            # Assign colors to unique ipsilateral connections
+            unique_ipsi_connections = {}
+            pair_ipsi_connections = []
+
+            for pair_key in ipsi_pairs:
+                region_network_key, display_label, is_cortical, hemi = parse_ipsi_region_network(pair_key)
+                pair_ipsi_connections.append((region_network_key, display_label, is_cortical, hemi))
+
+                if region_network_key not in unique_ipsi_connections:
+                    unique_ipsi_connections[region_network_key] = {
+                        'display_label': display_label,
+                        'is_cortical': is_cortical,
+                        'hemisphere': hemi,
+                        'indices': []
+                    }
+                unique_ipsi_connections[region_network_key]['indices'].append(len(pair_ipsi_connections) - 1)
+
+            # Distinct, vibrant color palette for ipsilateral connections
+            # Carefully selected for high contrast and visual distinction
+            # Avoiding very light colors (poor visibility) and very dark colors (black/gray)
+            ipsi_colors = [
+                '#E74C3C',  # Vivid red
+                '#3498DB',  # Bright blue
+                '#2ECC71',  # Emerald green
+                '#F39C12',  # Vibrant orange
+                '#9B59B6',  # Amethyst purple
+                '#1ABC9C',  # Turquoise
+                '#E91E63',  # Pink/magenta
+                '#00BCD4',  # Cyan
+                '#FF5722',  # Deep orange
+                '#673AB7',  # Deep purple
+                '#009688',  # Teal
+                '#FF9800',  # Orange
+                '#8E44AD',  # Purple
+                '#27AE60',  # Green
+                '#F44336',  # Red
+                '#2196F3',  # Blue
+                '#CDDC39',  # Lime
+                '#FF6F00',  # Amber
+                '#7B1FA2',  # Purple
+                '#00897B',  # Teal
+                '#D32F2F',  # Dark red
+                '#1976D2',  # Dark blue
+                '#AFB42B',  # Olive
+                '#E64A19',  # Burnt orange
+                '#5E35B1',  # Indigo
+                '#00796B',  # Dark teal
+                '#FFA726',  # Light orange
+                '#AB47BC',  # Light purple
+                '#26A69A',  # Medium teal
+                '#EF5350',  # Light red
+            ]
+
+            # Assign colors to each unique ipsilateral connection
+            ipsi_color_map = {}
+            for idx, (connection_key, info) in enumerate(unique_ipsi_connections.items()):
+                ipsi_color_map[connection_key] = ipsi_colors[idx % len(ipsi_colors)]
+
+            # Prepare bar colors and hatching for ipsilateral plot
+            ipsi_bar_colors = []
+            ipsi_bar_hatches = []
+            for i, (corr_val, pair_data) in enumerate(zip(ipsi_corrs, ipsi_data.values())):
+                region_network_key, _, _, _ = pair_ipsi_connections[i]
+                ipsi_bar_colors.append(ipsi_color_map[region_network_key])
+
+                # Only use hatching for non-significant correlations
+                if p_values is not None and not pair_data.get('significant', False):
+                    ipsi_bar_hatches.append('//////')
+                else:
+                    ipsi_bar_hatches.append(None)
+
+            # Create all bars at once
+            ipsi_bars = ax2_ipsi.bar(range(len(ipsi_corrs)), ipsi_corrs, color=ipsi_bar_colors,
+                          edgecolor='black', alpha=0.8, width=0.8, linewidth=0.8)
+
+            # Apply hatching to non-significant bars
+            for bar, hatch in zip(ipsi_bars, ipsi_bar_hatches):
+                if hatch:
+                    bar.set_hatch(hatch)
+                    bar.set_alpha(0.5)
+
+            # Remove x-axis tick labels
+            ax2_ipsi.set_xticks([])
+            ax2_ipsi.set_xlabel(f'{len(ipsi_corrs)} ipsilateral connections', fontsize=11)
+            ax2_ipsi.set_ylabel('Pearson Correlation', fontsize=12)
+            ax2_ipsi.set_title('Ipsilateral Connectivity\n(Same Hemisphere, Different Regions)',
+                         fontsize=12, fontweight='bold', pad=20)
+            ax2_ipsi.set_ylim(-1, 1)
+            ax2_ipsi.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+            ax2_ipsi.grid(True, alpha=0.3, axis='y')
+
+            # Calculate significance statistics
+            total_ipsi_pairs = len(ipsi_data)
+            significant_ipsi_pairs = sum(1 for pair_data in ipsi_data.values()
+                                   if pair_data.get('significant', False))
+            ipsi_significance_pct = (significant_ipsi_pairs / total_ipsi_pairs * 100) if total_ipsi_pairs > 0 else 0
+
+            # Add group label in upper left if provided
+            if subject_group:
+                ax2_ipsi.text(0.02, 0.98, f'Group: {subject_group}',
+                        transform=ax2_ipsi.transAxes, fontsize=10, verticalalignment='top',
+                        fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
+
+            # Add significance percentage text in bottom left
+            ax2_ipsi.text(0.02, 0.02, f'{ipsi_significance_pct:.1f}% significant pairs\n({significant_ipsi_pairs}/{total_ipsi_pairs})',
+                    transform=ax2_ipsi.transAxes, fontsize=9, verticalalignment='bottom',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
+
+            # Create legend with color-coded ipsilateral connections
+            from matplotlib.patches import Patch
+            ipsi_legend_elements = []
+
+            # Add color patches for each ipsilateral connection type
+            for connection_key, info in unique_ipsi_connections.items():
+                color = ipsi_color_map[connection_key]
+                ipsi_legend_elements.append(
+                    Patch(facecolor=color, edgecolor='black', linewidth=0.5,
+                         alpha=0.9, label=info['display_label'])
+                )
+
+            # Add hatching pattern explanation
+            ipsi_legend_elements.append(
+                Patch(facecolor='gray', edgecolor='black', hatch='//////',
+                     alpha=0.5, label='Non-significant (p ≥ 0.05)')
+            )
+
+            # Place legend outside plot area to the right
+            ax2_ipsi.legend(handles=ipsi_legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5),
+                      fontsize=7, framealpha=0.95, edgecolor='black',
+                      handlelength=1.5, handleheight=1.0)
+
+            # Add colored rectangles to ipsilateral FC matrix highlighting connection pairs
+            # For each ipsilateral connection, find the region indices and draw rectangles
+            from matplotlib.patches import Rectangle
+
+            if verbose:
+                print(f"\n{'='*80}")
+                print(f"DRAWING IPSILATERAL RECTANGLES")
+                print(f"{'='*80}")
+                print(f"Total unique ipsilateral connections: {len(unique_ipsi_connections)}")
+
+            rectangles_drawn = 0
+            for connection_key, info in unique_ipsi_connections.items():
+                # Parse connection_key to extract region/network info for both ends
+                # Format: "region1_network1_to_region2_network2" or "region1_subdivision1_to_region2_subdivision2"
+
+                if '_to_' not in connection_key:
+                    if verbose:
+                        print(f"  [SKIP] {connection_key}: No '_to_' separator")
+                    continue
+
+                parts = connection_key.split('_to_')
+                if len(parts) != 2:
+                    if verbose:
+                        print(f"  [SKIP] {connection_key}: Invalid split (got {len(parts)} parts)")
+                    continue
+
+                region_network_1 = parts[0]  # e.g., "PFCm_DefaultA" or "AMY_lAMY"
+                region_network_2 = parts[1]  # e.g., "PFCv_DefaultB" or "AMY_mAMY"
+
+                # Extract region and network/subdivision from each part
+                rn1_parts = region_network_1.split('_')
+                rn2_parts = region_network_2.split('_')
+
+                if len(rn1_parts) < 2 or len(rn2_parts) < 2:
+                    if verbose:
+                        print(f"  [SKIP] {connection_key}: Invalid region/network parts")
+                    continue
+
+                region1 = rn1_parts[0]
+                network1 = rn1_parts[1]
+                region2 = rn2_parts[0]
+                network2 = rn2_parts[1]
+
+                # Get hemisphere from connection info
+                hemisphere = info['hemisphere']
+
+                # Find all parcels for region1_network1 in this hemisphere
+                region1_parcels = []
+                region2_parcels = []
+
+                for idx, label in enumerate(ipsi_display_labels):
+                    label_parts = label.split('_')
+                    if len(label_parts) >= 3:
+                        label_region = label_parts[0]
+                        label_hemi = label_parts[1]
+                        label_network = label_parts[2]
+
+                        # Check if this label matches region1/network1 in the correct hemisphere
+                        if label_region == region1 and label_network == network1 and label_hemi == hemisphere:
+                            region1_parcels.append(idx)
+                        # Check if this label matches region2/network2 in the correct hemisphere
+                        # Changed from 'elif' to 'if' to allow checking both conditions
+                        if label_region == region2 and label_network == network2 and label_hemi == hemisphere:
+                            region2_parcels.append(idx)
+
+                if verbose:
+                    print(f"  Connection: {connection_key}")
+                    print(f"    Hemisphere: {hemisphere}")
+                    print(f"    Region1 ({region1}_{network1}): {len(region1_parcels)} parcels")
+                    print(f"    Region2 ({region2}_{network2}): {len(region2_parcels)} parcels")
+
+                # Draw rectangles if we have parcels for both regions
+                if region1_parcels and region2_parcels:
+                    color = ipsi_color_map[connection_key]
+
+                    # Only draw rectangle in UPPER TRIANGLE (above diagonal)
+                    # Determine which region appears first in the sorted order
+                    row_start_1 = min(region1_parcels)
+                    col_start_2 = min(region2_parcels)
+
+                    # Only draw if the rectangle would be in the upper triangle
+                    # Upper triangle: column index > row index
+                    if col_start_2 < row_start_1:
+                        # region2 comes before region1 -> draw at (rows=region1, cols=region2)
+                        row_start = min(region1_parcels)
+                        row_end = max(region1_parcels) + 1
+                        col_start = min(region2_parcels)
+                        col_end = max(region2_parcels) + 1
+
+                        rect = Rectangle(
+                            (col_start, row_start),
+                            col_end - col_start,
+                            row_end - row_start,
+                            linewidth=1.5,
+                            edgecolor=color,
+                            facecolor='none',
+                            clip_on=False,
+                            zorder=10
+                        )
+                        ax1_ipsi.add_patch(rect)
+                        rectangles_drawn += 1
+                        if verbose:
+                            print(f"    [DRAWN] Rectangle at rows[{row_start}:{row_end}], cols[{col_start}:{col_end}]")
+                    elif row_start_1 < col_start_2:
+                        # region1 comes before region2 -> draw at (rows=region2, cols=region1)
+                        row_start = min(region2_parcels)
+                        row_end = max(region2_parcels) + 1
+                        col_start = min(region1_parcels)
+                        col_end = max(region1_parcels) + 1
+
+                        rect = Rectangle(
+                            (col_start, row_start),
+                            col_end - col_start,
+                            row_end - row_start,
+                            linewidth=1.5,
+                            edgecolor=color,
+                            facecolor='none',
+                            clip_on=False,
+                            zorder=10
+                        )
+                        ax1_ipsi.add_patch(rect)
+                        rectangles_drawn += 1
+                        if verbose:
+                            print(f"    [DRAWN] Rectangle at rows[{row_start}:{row_end}], cols[{col_start}:{col_end}]")
+                    else:
+                        if verbose:
+                            print(f"    [SKIP] Rectangle on diagonal (row_start={row_start_1}, col_start={col_start_2})")
+                else:
+                    if verbose:
+                        if not region1_parcels:
+                            print(f"    [SKIP] No parcels found for region1")
+                        if not region2_parcels:
+                            print(f"    [SKIP] No parcels found for region2")
+
+            if verbose:
+                print(f"\nRectangles drawn: {rectangles_drawn}/{len(unique_ipsi_connections)}")
+                print(f"{'='*80}\n")
+
+        else:
+            ax2_ipsi.text(0.5, 0.5, 'No ipsilateral\nconnections found',
+                    ha='center', va='center', transform=ax2_ipsi.transAxes, fontsize=14, color='gray')
+            ax2_ipsi.set_title('Ipsilateral Connectivity\n(Same Hemisphere, Different Regions)',
+                         fontsize=13, fontweight='bold', pad=20)
+            ax2_ipsi.set_xlim(0, 1)
+            ax2_ipsi.set_ylim(0, 1)
+    else:
+        ax2_ipsi.text(0.5, 0.5, 'No connectivity patterns\navailable',
+                ha='center', va='center', transform=ax2_ipsi.transAxes, fontsize=14, color='gray')
+        ax2_ipsi.set_title('Ipsilateral Connectivity\n(Same Hemisphere, Different Regions)',
+                     fontsize=13, fontweight='bold', pad=20)
+
+    # Finalize second figure
+    fig_ipsi.tight_layout(pad=2.8)
+
+    # Return both figures
+    return fig_inter, fig_ipsi
 
 def plot_signal_decomposition(original, components, subject_id=None, channel_label_map=None, center_freqs=None, max_figures_per_batch=20):
     """
@@ -3452,7 +4063,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
 
-                fc_fig = plot_fc_results(
+                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['static_fc_matrix'],
                     plot_info['data']['static_fc_labels'],
                     plot_info['data']['static_fc_pvalues'],
@@ -3465,12 +4076,23 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     output_dir=csv_output_dir,
                     verbose=verbose
                 )
-                fc_fig.suptitle(f'Functional Connectivity Analysis - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                fc_fig_inter.suptitle(f'FC Analysis (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'FC Analysis (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+
                 if plot_info['save_path']:
-                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    # Save interhemispheric figure
+                    save_path_inter = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_interhemispheric{plot_info['save_path'].suffix}"
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
+
+                    # Save ipsilateral figure
+                    save_path_ipsi = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_ipsilateral{plot_info['save_path'].suffix}"
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+
                 if not show_plots:
-                    plt.close(fc_fig)
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
             if show_plots:
                 print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
                 plt.show()
@@ -3486,7 +4108,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 band_key = plot_info['band_key']
                 band_number = band_key.split('-')[1] if '-' in band_key else band_key
 
-                fc_fig = plot_fc_results(
+                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['fc_matrix'],
                     plot_info['data']['fc_labels'],
                     plot_info['data']['fc_pvalues'],
@@ -3502,12 +4124,23 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     frequency_range=plot_info['data'].get('frequency_range'),
                     n_available_channels=plot_info['data'].get('n_available_channels')
                 )
-                fc_fig.suptitle(f'Slow-{band_number} FC Analysis - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                fc_fig_inter.suptitle(f'Slow-{band_number} FC (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'Slow-{band_number} FC (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+
                 if plot_info['save_path']:
-                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    # Save interhemispheric figure
+                    save_path_inter = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_interhemispheric{plot_info['save_path'].suffix}"
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
+
+                    # Save ipsilateral figure
+                    save_path_ipsi = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_ipsilateral{plot_info['save_path'].suffix}"
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+
                 if not show_plots:
-                    plt.close(fc_fig)
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
             if show_plots:
                 print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
                 plt.show()
@@ -3531,7 +4164,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     band_number = band_key.split('-')[1] if '-' in band_key else band_key
                     subject_label = f"Group_{plot_info['group_name'].replace(' ', '_')}_{band_key}"
 
-                    fc_fig = plot_fc_results(
+                    fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
                         p_values=plot_info['data'].get('avg_fc_pvalues'),
@@ -3547,12 +4180,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         frequency_range=get_frequency_range(band_number),
                         n_available_channels=None
                     )
-                    title = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (n={plot_info['data']['n_subjects']})"
+                    title_inter = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (Interhemispheric, n={plot_info['data']['n_subjects']})"
+                    title_ipsi = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (Ipsilateral, n={plot_info['data']['n_subjects']})"
                 else:
                     # Static FC group average
                     subject_label = f"Group_{plot_info['group_name'].replace(' ', '_')}_static"
 
-                    fc_fig = plot_fc_results(
+                    fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
                         p_values=plot_info['data'].get('avg_fc_pvalues'),
@@ -3565,14 +4199,26 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         output_dir=None,
                         verbose=verbose
                     )
-                    title = f"Group Average: {plot_info['group_name']} - Static FC (n={plot_info['data']['n_subjects']})"
+                    title_inter = f"Group Average: {plot_info['group_name']} - Static FC (Interhemispheric, n={plot_info['data']['n_subjects']})"
+                    title_ipsi = f"Group Average: {plot_info['group_name']} - Static FC (Ipsilateral, n={plot_info['data']['n_subjects']})"
 
-                fc_fig.suptitle(title, fontsize=16, fontweight='bold')
+                fc_fig_inter.suptitle(title_inter, fontsize=16, fontweight='bold')
+                fc_fig_ipsi.suptitle(title_ipsi, fontsize=16, fontweight='bold')
+
                 if plot_info['save_path']:
-                    fc_fig.savefig(plot_info['save_path'], format='svg', bbox_inches='tight', dpi=300)
+                    # Save interhemispheric figure
+                    save_path_inter = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_interhemispheric{plot_info['save_path'].suffix}"
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
+
+                    # Save ipsilateral figure
+                    save_path_ipsi = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_ipsilateral{plot_info['save_path'].suffix}"
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 1
+
                 if not show_plots:
-                    plt.close(fc_fig)
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
             if show_plots:
                 print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
                 plt.show()
@@ -3595,7 +4241,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     center_freqs=plot_info['center_freqs'],
                     max_figures_per_batch=MAX_FIGS_PER_BATCH
                 )
-                
+
                 # Process each batch of figures from the generator
                 channel_idx_base = 0
                 for mvmd_figures in mvmd_figure_generator:
@@ -3626,7 +4272,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     else:
                         for fig in mvmd_figures:
                             plt.close(fig)
-                    
+
                     channel_idx_base += len(mvmd_figures)
 
             # Display remaining figures if any
@@ -3639,7 +4285,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
             print(f"\n[Batch 7/7] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
             current_batch_figs = []
-            
+
             for plot_info in plot_batches['mvmd_slow_bands']:
                 slow_band_generator = plot_slow_band_decomposition(
                     plot_info['mvmd_data']['original'],
@@ -3680,7 +4326,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     else:
                         for fig in slow_band_figures:
                             plt.close(fig)
-                    
+
                     channel_idx_base += len(slow_band_figures)
 
             # Display remaining figures if any
@@ -3768,7 +4414,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
 if __name__ == '__main__':
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description='Functional Connectivity MVP Analysis - Processes fMRI data to compute '
                    'static and dynamic functional connectivity matrices with MVMD decomposition',
@@ -3800,9 +4446,9 @@ Output:
     parser.add_argument('--no-save', action='store_true', default=False,
                        help='Skip saving figures to disk. Figures are still created for '
                            'display if --show-plots is enabled')
-    
+
     args = parser.parse_args()
-    
+
     # Display configuration
     VERBOSE_OUTPUT = args.verbose
     CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
@@ -3816,11 +4462,11 @@ Output:
     MASK_DIAGONAL = False
 
     main(
-        mask_diagonal=MASK_DIAGONAL, 
-        mask_nonsignificant=MASK_NONSIGNIFICANT, 
-        create_plots=CREATE_PLOTS, 
-        show_plots=SHOW_PLOTS, 
-        save_figures=SAVE_FIGURES, 
+        mask_diagonal=MASK_DIAGONAL,
+        mask_nonsignificant=MASK_NONSIGNIFICANT,
+        create_plots=CREATE_PLOTS,
+        show_plots=SHOW_PLOTS,
+        save_figures=SAVE_FIGURES,
         verbose=VERBOSE_OUTPUT,
         subjects_per_group=args.subjects_per_group
     )
