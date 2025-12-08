@@ -430,8 +430,18 @@ class TCPPipeline:
                     stop_at: Optional[PipelineStep] = None,
                     skip_optional: bool = False,
                     dry_run: bool = False,
+                    ignore_completed: bool = False,
                     **kwargs) -> bool:
-        """Run the complete pipeline"""
+        """Run the complete pipeline
+
+        Args:
+            start_from: Start pipeline from this step
+            stop_at: Stop pipeline at this step
+            skip_optional: Skip optional pipeline steps
+            dry_run: Show what would be executed without running
+            ignore_completed: Ignore completion status and re-run all steps
+            **kwargs: Additional arguments passed to step scripts
+        """
 
         print(f"\n{'='*60}")
         print(f"TCP PREPROCESSING PIPELINE")
@@ -477,8 +487,8 @@ class TCPPipeline:
         success = True
 
         for step in steps_to_run:
-            # Skip completed steps
-            if self.step_status[step] == StepStatus.COMPLETED:
+            # Skip completed steps (unless ignore_completed is set)
+            if self.step_status[step] == StepStatus.COMPLETED and not ignore_completed:
                 print(f"\n{SKIP} Skipping {step.value} (already completed)")
                 continue
 
@@ -591,6 +601,9 @@ Sample Modes:
                        help='Skip optional steps (e.g., phenotype filtering)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be executed without running')
+    parser.add_argument('--ignore-completed', action='store_true',
+                       help='Ignore completion status and re-run all steps. Use this to regenerate '
+                            'outputs without manually deleting previous results')
     parser.add_argument('--output-dir', type=Path,
                        help='Override pipeline output directory')
 
@@ -655,6 +668,7 @@ Sample Modes:
         stop_at=stop_at,
         skip_optional=args.skip_optional,
         dry_run=args.dry_run,
+        ignore_completed=args.ignore_completed,
         **kwargs
     )
 
