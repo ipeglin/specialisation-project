@@ -3,27 +3,28 @@
 TCP Diagnosis Classification Script
 
 Classifies subjects by MDD status using the Group column and diagnosis fields:
-- Controls: Group = "GenPop" 
+- Controls: Group = "GenPop"
 - MDD_Primary: Group = "Patient" AND Primary_Dx contains "MDD"
-- MDD_Comorbid: Group = "Patient" AND Non-Primary_Dx contains "MDD" 
+- MDD_Comorbid: Group = "Patient" AND Non-Primary_Dx contains "MDD"
 - MDD_Past: Group = "Patient" AND (Primary_Dx OR Non-Primary_Dx) contains "past MDD"/"PMDD"
 
-This classification provides the foundation for the SECONDARY, TERTIARY, and 
+This classification provides the foundation for the SECONDARY, TERTIARY, and
 QUATERNARY analysis groups with different MDD inclusion criteria.
 
 Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
+import json
+import re
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import pandas as pd
+
 import numpy as np
-import json
-from datetime import datetime
-import re
+import pandas as pd
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
@@ -54,7 +55,7 @@ class DiagnosisClassificationPipeline:
         print(f"Output directory: {self.output_dir}")
 
     def load_base_subjects(self) -> None:
-        """Load base filtered subjects"""
+        """Load base filtered subjects and merge with patient/control information"""
         print("Loading base filtered subjects...")
 
         base_subjects_file = self.base_subjects_dir / "base_filtered_subjects.csv"
@@ -70,6 +71,36 @@ class DiagnosisClassificationPipeline:
 
         if 'subject_id' not in self.subjects_df.columns:
             raise ValueError("subject_id column not found in base subjects data")
+
+        # Load patient/control status from participants.tsv
+        participants_file = self.dataset_path / "participants.tsv"
+        if participants_file.exists():
+            print(f"  Loading patient/control status from participants.tsv...")
+            participants_df = pd.read_csv(participants_file, sep='\t')
+
+            # Map Group column to patient_control (GenPop -> Control, Patient -> Patient)
+            if 'Group' in participants_df.columns and 'participant_id' in participants_df.columns:
+                participants_df['patient_control'] = participants_df['Group'].apply(
+                    lambda x: 'Control' if x == 'GenPop' else 'Patient'
+                )
+
+                # Merge with subjects_df
+                self.subjects_df = self.subjects_df.merge(
+                    participants_df[['participant_id', 'patient_control']],
+                    left_on='subject_id',
+                    right_on='participant_id',
+                    how='left'
+                ).drop('participant_id', axis=1)  # Drop redundant participant_id from merge
+
+                # Count how many have patient_control info
+                has_status = self.subjects_df['patient_control'].notna().sum()
+                print(f"    Patient/control status available for {has_status}/{len(self.subjects_df)} subjects")
+            else:
+                print(f"    WARNING: Could not find Group or participant_id columns in participants.tsv")
+                self.subjects_df['patient_control'] = None
+        else:
+            print(f"  WARNING: participants.tsv not found at {participants_file}")
+            self.subjects_df['patient_control'] = None
 
     def load_phenotype_data(self) -> None:
         """Load phenotype data files from dataset"""
@@ -128,40 +159,40 @@ class DiagnosisClassificationPipeline:
     def classify_mdd_status(self, subject_row: pd.Series, demos_data: pd.DataFrame) -> str:
         """
         Classify a single subject's MDD status
-        
+
         Args:
             subject_row: Row from subjects dataframe
             demos_data: Demographics/diagnosis dataframe
-            
+
         Returns:
             MDD status: 'Control', 'MDD_Primary', 'MDD_Comorbid', 'MDD_Past', or 'Unknown'
         """
         subject_id = subject_row['subject_id']
-        
+
         # Convert BIDS subject ID to match demographics format
         # sub-NDARINVXXXXX -> NDAR_INVXXXXX
         if subject_id.startswith('sub-NDAR'):
             demo_subject_id = subject_id.replace('sub-NDAR', 'NDAR_')
         else:
             demo_subject_id = subject_id
-            
+
         # Find subject in demographics data
         subject_demo = demos_data[demos_data['subjectkey'] == demo_subject_id]
-        
+
         if len(subject_demo) == 0:
             return 'Unknown'
-            
+
         subject_demo = subject_demo.iloc[0]
-        
+
         # Get relevant fields
         group = str(subject_demo.get('Group', '')).strip()
         primary_dx = str(subject_demo.get('Primary_Dx', '')).strip()
         non_primary_dx = str(subject_demo.get('Non-Primary_Dx', '')).strip()
-        
+
         # Controls: Group = "GenPop"
         if group == 'GenPop':
             return 'Control'
-            
+
         # Patients: Group = "Patient"
         if group == 'Patient':
             # Check for MDD in primary diagnosis
@@ -171,7 +202,7 @@ class DiagnosisClassificationPipeline:
                     return 'MDD_Past'
                 else:
                     return 'MDD_Primary'
-                    
+
             # Check for MDD in non-primary (comorbid) diagnosis
             if 'MDD' in non_primary_dx.upper():
                 # Check if it's past MDD
@@ -179,10 +210,10 @@ class DiagnosisClassificationPipeline:
                     return 'MDD_Past'
                 else:
                     return 'MDD_Comorbid'
-                    
+
             # Patient without MDD diagnosis
             return 'Patient_Other'
-            
+
         return 'Unknown'
 
     def classify_all_subjects(self) -> Tuple[pd.DataFrame, Dict]:
@@ -191,66 +222,66 @@ class DiagnosisClassificationPipeline:
 
         if 'demos' not in self.phenotype_data:
             raise ValueError("Demographics data not loaded")
-            
+
         demos_data = self.phenotype_data['demos']
-        
+
         # Apply classification to all subjects
         classified_subjects = self.subjects_df.copy()
-        
+
         mdd_status_list = []
         for _, subject_row in classified_subjects.iterrows():
             mdd_status = self.classify_mdd_status(subject_row, demos_data)
             mdd_status_list.append(mdd_status)
-            
+
         classified_subjects['mdd_status'] = mdd_status_list
-        
+
         # Add binary patient/control status
         classified_subjects['patient_control'] = classified_subjects['mdd_status'].apply(
             lambda x: 'Control' if x == 'Control' else 'Patient'
         )
-        
+
         # Count subjects in each category
         mdd_counts = classified_subjects['mdd_status'].value_counts()
         print(f"  MDD status distribution:")
         for status, count in mdd_counts.items():
             print(f"    {status}: {count}")
-            
+
         # Create statistics
         statistics = {
             'total_subjects': len(classified_subjects),
             'mdd_status_distribution': mdd_counts.to_dict(),
             'patient_control_distribution': classified_subjects['patient_control'].value_counts().to_dict()
         }
-        
+
         return classified_subjects, statistics
 
     def create_analysis_ready_groups(self, classified_subjects: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         """Create subject groups for different analysis types"""
         print("Creating analysis-ready diagnosis groups...")
-        
+
         groups = {}
-        
+
         # Secondary analysis: MDD Primary + Controls
         secondary_subjects = classified_subjects[
             classified_subjects['mdd_status'].isin(['Control', 'MDD_Primary'])
         ].copy()
         groups['secondary'] = secondary_subjects
         print(f"  Secondary (MDD Primary + Controls): {len(secondary_subjects)}")
-        
+
         # Tertiary analysis: MDD Primary/Comorbid + Controls
         tertiary_subjects = classified_subjects[
             classified_subjects['mdd_status'].isin(['Control', 'MDD_Primary', 'MDD_Comorbid'])
         ].copy()
         groups['tertiary'] = tertiary_subjects
         print(f"  Tertiary (MDD Primary/Comorbid + Controls): {len(tertiary_subjects)}")
-        
+
         # Quaternary analysis: All MDD types + Controls
         quaternary_subjects = classified_subjects[
             classified_subjects['mdd_status'].isin(['Control', 'MDD_Primary', 'MDD_Comorbid', 'MDD_Past'])
         ].copy()
         groups['quaternary'] = quaternary_subjects
         print(f"  Quaternary (All MDD + Controls): {len(quaternary_subjects)}")
-        
+
         return groups
 
     def export_results(self, classified_subjects: pd.DataFrame, analysis_groups: Dict[str, pd.DataFrame], statistics: Dict) -> None:
@@ -308,7 +339,7 @@ class DiagnosisClassificationPipeline:
         print(f"\n{'=' * 60}")
         print(f"DIAGNOSIS CLASSIFICATION SUMMARY")
         print(f"{'=' * 60}")
-        
+
         print(f"\nClassification criteria:")
         print(f"  Control: Group = 'GenPop'")
         print(f"  MDD_Primary: Group = 'Patient' AND Primary_Dx contains 'MDD'")

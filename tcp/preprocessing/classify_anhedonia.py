@@ -3,7 +3,7 @@
 TCP Anhedonia Classification Script
 
 Classifies subjects into anhedonia categories based on SHAPS total scores:
-- non-anhedonic: SHAPS 0-2 
+- non-anhedonic: SHAPS 0-2
 - low-anhedonic: SHAPS 3-8
 - high-anhedonic: SHAPS 9-14
 
@@ -14,23 +14,22 @@ Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import pandas as pd
+
 import numpy as np
-import json
-from datetime import datetime
+import pandas as pd
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
-from tcp.preprocessing.utils.phenotype_filters import (
-    AnhedoniaSegmentationFilter
-)
+from tcp.preprocessing.utils.phenotype_filters import AnhedoniaSegmentationFilter
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
@@ -40,12 +39,28 @@ class AnhedoniaClassificationPipeline:
     def __init__(self,
                  dataset_path: Optional[Path] = None,
                  base_subjects_dir: Optional[Path] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 restrict_non_anhedonic_to_controls: bool = True):
+        """
+        Initialize the anhedonia classification pipeline.
+
+        Args:
+            dataset_path: Path to dataset
+            base_subjects_dir: Directory with filtered subjects
+            output_dir: Output directory for results
+            restrict_non_anhedonic_to_controls: If True, only control subjects (GenPop)
+                are classified as 'non-anhedonic'. Non-anhedonic patients are excluded
+                from the binary classification (anhedonic_status=None). Set to False to
+                include all non-anhedonic subjects regardless of patient/control status.
+        """
         self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
         self.base_subjects_dir = Path(base_subjects_dir) if base_subjects_dir else \
             get_script_output_path('tcp_preprocessing', 'filter_base_subjects')
         self.output_dir = Path(output_dir) if output_dir else \
             get_script_output_path('tcp_preprocessing', 'classify_anhedonia')
+
+        # Configuration: Control-only filter for non-anhedonic group
+        self.restrict_non_anhedonic_to_controls = restrict_non_anhedonic_to_controls
 
         self.subjects_df: Optional[pd.DataFrame] = None
         self.phenotype_data: Dict[str, pd.DataFrame] = {}
@@ -55,7 +70,7 @@ class AnhedoniaClassificationPipeline:
         print(f"Output directory: {self.output_dir}")
 
     def load_base_subjects(self) -> None:
-        """Load base filtered subjects"""
+        """Load base filtered subjects and merge with patient/control information"""
         print("Loading base filtered subjects...")
 
         base_subjects_file = self.base_subjects_dir / "base_filtered_subjects.csv"
@@ -71,6 +86,36 @@ class AnhedoniaClassificationPipeline:
 
         if 'subject_id' not in self.subjects_df.columns:
             raise ValueError("subject_id column not found in base subjects data")
+
+        # Load patient/control status from participants.tsv
+        participants_file = self.dataset_path / "participants.tsv"
+        if participants_file.exists():
+            print(f"  Loading patient/control status from participants.tsv...")
+            participants_df = pd.read_csv(participants_file, sep='\t')
+
+            # Map Group column to patient_control (GenPop -> Control, Patient -> Patient)
+            if 'Group' in participants_df.columns and 'participant_id' in participants_df.columns:
+                participants_df['patient_control'] = participants_df['Group'].apply(
+                    lambda x: 'Control' if x == 'GenPop' else 'Patient'
+                )
+
+                # Merge with subjects_df
+                self.subjects_df = self.subjects_df.merge(
+                    participants_df[['participant_id', 'patient_control']],
+                    left_on='subject_id',
+                    right_on='participant_id',
+                    how='left'
+                ).drop('participant_id', axis=1)  # Drop redundant participant_id from merge
+
+                # Count how many have patient_control info
+                has_status = self.subjects_df['patient_control'].notna().sum()
+                print(f"    Patient/control status available for {has_status}/{len(self.subjects_df)} subjects")
+            else:
+                print(f"    WARNING: Could not find Group or participant_id columns in participants.tsv")
+                self.subjects_df['patient_control'] = None
+        else:
+            print(f"  WARNING: participants.tsv not found at {participants_file}")
+            self.subjects_df['patient_control'] = None
 
     def load_phenotype_data(self) -> None:
         """Load phenotype data files from dataset"""
@@ -144,21 +189,51 @@ class AnhedoniaClassificationPipeline:
         return classified_subjects, statistics
 
     def add_binary_anhedonia_status(self, classified_subjects: pd.DataFrame) -> pd.DataFrame:
-        """Add binary anhedonic vs non-anhedonic status for easier analysis"""
+        """Add binary anhedonic vs non-anhedonic status for easier analysis
+
+        Uses the restrict_non_anhedonic_to_controls configuration to optionally filter
+        the non-anhedonic group to only include controls.
+        """
         print("Adding binary anhedonia status...")
+        if self.restrict_non_anhedonic_to_controls:
+            print("  [CONFIG] Non-anhedonic group restricted to controls only")
 
         classified_subjects = classified_subjects.copy()
 
         # Create binary anhedonic status (anhedonic >= 3, non-anhedonic < 3)
         if 'anhedonia_class' in classified_subjects.columns:
-            classified_subjects['anhedonic_status'] = classified_subjects['anhedonia_class'].apply(
-                lambda x: 'anhedonic' if x in ['low-anhedonic', 'high-anhedonic'] else 'non-anhedonic'
-            )
+            if self.restrict_non_anhedonic_to_controls:
+                # Filter non-anhedonic to controls only (modular plugin behavior)
+                def determine_anhedonic_status(row):
+                    """Determine anhedonic status, filtering non-anhedonic to controls only"""
+                    anhedonia_class = row.get('anhedonia_class')
+                    patient_control = row.get('patient_control', '')
+
+                    if anhedonia_class in ['low-anhedonic', 'high-anhedonic']:
+                        return 'anhedonic'
+                    elif anhedonia_class == 'non-anhedonic' and patient_control == 'Control':
+                        return 'non-anhedonic'
+                    else:
+                        # Non-anhedonic patients (not controls) are excluded from binary analysis
+                        return None
+
+                classified_subjects['anhedonic_status'] = classified_subjects.apply(
+                    determine_anhedonic_status, axis=1
+                )
+            else:
+                # Include all non-anhedonic subjects (original behavior)
+                classified_subjects['anhedonic_status'] = classified_subjects['anhedonia_class'].apply(
+                    lambda x: 'anhedonic' if x in ['low-anhedonic', 'high-anhedonic'] else 'non-anhedonic'
+                )
 
             binary_counts = classified_subjects['anhedonic_status'].value_counts()
+            excluded_count = classified_subjects['anhedonic_status'].isna().sum()
+
             print(f"  Binary anhedonia distribution:")
             for status, count in binary_counts.items():
                 print(f"    {status}: {count}")
+            if excluded_count > 0:
+                print(f"    Excluded (non-anhedonic non-controls): {excluded_count}")
 
         return classified_subjects
 
@@ -197,7 +272,7 @@ class AnhedoniaClassificationPipeline:
             subjects_df=self.subjects_df,
             phenotype_data=self.phenotype_data
         )
-        
+
         if len(filter_result.excluded_subjects) > 0:
             excluded_file = self.output_dir / "anhedonia_excluded_subjects.csv"
             filter_result.excluded_subjects.to_csv(excluded_file, index=False)
@@ -227,7 +302,7 @@ class AnhedoniaClassificationPipeline:
         print(f"\n{'=' * 60}")
         print(f"ANHEDONIA CLASSIFICATION SUMMARY")
         print(f"{'=' * 60}")
-        
+
         print(f"\nClassification criteria:")
         print(f"  non-anhedonic: SHAPS score 0-2")
         print(f"  low-anhedonic: SHAPS score 3-8")
@@ -260,6 +335,9 @@ def main():
                         help='Override base subjects directory')
     parser.add_argument('--output-dir', type=Path,
                         help='Override output directory')
+    parser.add_argument('--include-all-non-anhedonic', action='store_true',
+                        help='Include all non-anhedonic subjects (patients and controls). '
+                             'By default, only control subjects are classified as non-anhedonic.')
 
     args = parser.parse_args()
 
@@ -271,7 +349,8 @@ def main():
         pipeline = AnhedoniaClassificationPipeline(
             dataset_path=args.dataset_path,
             base_subjects_dir=args.base_subjects_dir,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            restrict_non_anhedonic_to_controls=not args.include_all_non_anhedonic
         )
 
         # Load input data
