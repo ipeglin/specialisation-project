@@ -2098,8 +2098,8 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         region2 = parts[4] if len(parts) > 4 else 'Unknown'
                         network2 = parts[6] if len(parts) > 6 else 'Unknown'
 
-                    # Create unique key for this ipsilateral connection
-                    region_network_key = f"{region1}_{network1}_to_{region2}_{network2}"
+                    # Create unique key for this ipsilateral connection (include hemisphere to distinguish RH/LH)
+                    region_network_key = f"{region1}_{network1}_to_{region2}_{network2}_{hemi}"
                     display_label = f"{region1} ({network1}) - {region2} ({network2}) [{hemi}]"
                     is_cortical = True
 
@@ -2110,7 +2110,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     region2 = parts[3]
                     subdivision2 = parts[5]
 
-                    region_network_key = f"{region1}_{subdivision1}_to_{region2}_{subdivision2}"
+                    region_network_key = f"{region1}_{subdivision1}_to_{region2}_{subdivision2}_{hemi}"
                     display_label = f"{region1} ({subdivision1}) - {region2} ({subdivision2}) [{hemi}]"
                     is_cortical = False
 
@@ -2267,7 +2267,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             rectangles_drawn = 0
             for connection_key, info in unique_ipsi_connections.items():
                 # Parse connection_key to extract region/network info for both ends
-                # Format: "region1_network1_to_region2_network2" or "region1_subdivision1_to_region2_subdivision2"
+                # Format: "region1_network1_to_region2_network2_hemi" or "region1_subdivision1_to_region2_subdivision2_hemi"
 
                 if '_to_' not in connection_key:
                     if verbose:
@@ -2281,24 +2281,30 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                     continue
 
                 region_network_1 = parts[0]  # e.g., "PFCm_DefaultA" or "AMY_lAMY"
-                region_network_2 = parts[1]  # e.g., "PFCv_DefaultB" or "AMY_mAMY"
+                region_network_2_with_hemi = parts[1]  # e.g., "PFCv_DefaultB_RH" or "AMY_mAMY_LH"
 
-                # Extract region and network/subdivision from each part
-                rn1_parts = region_network_1.split('_')
-                rn2_parts = region_network_2.split('_')
-
-                if len(rn1_parts) < 2 or len(rn2_parts) < 2:
+                # Extract hemisphere from the end of region_network_2
+                rn2_parts = region_network_2_with_hemi.split('_')
+                if len(rn2_parts) < 3:  # Need at least region_network_hemi
                     if verbose:
-                        print(f"  [SKIP] {connection_key}: Invalid region/network parts")
+                        print(f"  [SKIP] {connection_key}: Invalid region/network parts in part 2")
+                    continue
+
+                # Hemisphere is the last part
+                hemisphere = rn2_parts[-1]
+                # Region and network are before the hemisphere
+                region2 = rn2_parts[0]
+                network2 = rn2_parts[1]
+
+                # Extract region and network/subdivision from first part
+                rn1_parts = region_network_1.split('_')
+                if len(rn1_parts) < 2:
+                    if verbose:
+                        print(f"  [SKIP] {connection_key}: Invalid region/network parts in part 1")
                     continue
 
                 region1 = rn1_parts[0]
                 network1 = rn1_parts[1]
-                region2 = rn2_parts[0]
-                network2 = rn2_parts[1]
-
-                # Get hemisphere from connection info
-                hemisphere = info['hemisphere']
 
                 # Find all parcels for region1_network1 in this hemisphere
                 region1_parcels = []
@@ -2315,8 +2321,7 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         if label_region == region1 and label_network == network1 and label_hemi == hemisphere:
                             region1_parcels.append(idx)
                         # Check if this label matches region2/network2 in the correct hemisphere
-                        # Changed from 'elif' to 'if' to allow checking both conditions
-                        if label_region == region2 and label_network == network2 and label_hemi == hemisphere:
+                        elif label_region == region2 and label_network == network2 and label_hemi == hemisphere:
                             region2_parcels.append(idx)
 
                 if verbose:
