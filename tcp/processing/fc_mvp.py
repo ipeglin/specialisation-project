@@ -4461,14 +4461,17 @@ Output:
     parser.add_argument('--no-save', action='store_true', default=False,
                        help='Skip saving figures to disk. Figures are still created for '
                            'display if --show-plots is enabled')
+    parser.add_argument('--skip-plots', action='store_true', default=False,
+                       help='Skip creating plots entirely. Overrides --show-plots and --no-save. '
+                           'Use this to run analysis without any visualization overhead')
 
     args = parser.parse_args()
 
     # Display configuration
     VERBOSE_OUTPUT = args.verbose
-    CREATE_PLOTS = True  # Whether to create plots (required for both displaying and saving)
-    SHOW_PLOTS = args.show_plots  # Whether to display plots interactively (requires CREATE_PLOTS=True)
-    SAVE_FIGURES = not args.no_save  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
+    CREATE_PLOTS = not args.skip_plots  # Whether to create plots (required for both displaying and saving)
+    SHOW_PLOTS = args.show_plots and CREATE_PLOTS  # Whether to display plots interactively (requires CREATE_PLOTS=True)
+    SAVE_FIGURES = not args.no_save and CREATE_PLOTS  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
