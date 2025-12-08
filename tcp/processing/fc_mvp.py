@@ -3333,14 +3333,17 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     print("=== Functional Connectivity MVP ===")
 
-    # Create timestamped parent folder for this analysis run
+    # Create timestamped parent folder for this analysis run only if saving figures
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    run_parent_dir = get_analysis_path(f'analysis_runs/run_{run_timestamp}')
-    run_parent_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\nAnalysis Run Directory: {run_parent_dir}")
-    print(f"Timestamp: {run_timestamp}")
-    print(f"All outputs for this run will be saved in this directory\n")
+    if save_figures:
+        run_parent_dir = get_analysis_path(f'analysis_runs/run_{run_timestamp}')
+        run_parent_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\nAnalysis Run Directory: {run_parent_dir}")
+        print(f"Timestamp: {run_timestamp}")
+        print(f"All outputs for this run will be saved in this directory\n")
+    else:
+        run_parent_dir = None
+        print(f"\nRunning in no-save mode - figures will not be saved to disk\n")
 
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
     LIMIT_SUBJECTS = subjects_per_group is not None  # Enable limiting if subjects_per_group is specified
@@ -3644,31 +3647,32 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"  Need at least 1 subject per group with successful FC analysis")
 
     # ===== EXPORT FC RESULTS TO CSV =====
-    print(f"\n{'='*80}")
-    print(f"EXPORTING STATIC FC RESULTS TO CSV")
-    print(f"{'='*80}")
+    if save_figures:
+        print(f"\n{'='*80}")
+        print(f"EXPORTING STATIC FC RESULTS TO CSV")
+        print(f"{'='*80}")
 
-    # Create output directory for FC CSV files within run folder
-    fc_output_dir = run_parent_dir / 'static_fc'
-    fc_output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Output directory: {fc_output_dir}")
+        # Create output directory for FC CSV files within run folder
+        fc_output_dir = run_parent_dir / 'static_fc'
+        fc_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Output directory: {fc_output_dir}")
 
-    csv_export_count = 0
-    all_results = {**anhedonic_results, **non_anhedonic_results}
+        csv_export_count = 0
+        all_results = {**anhedonic_results, **non_anhedonic_results}
 
-    for subject_id, result in all_results.items():
-        if not result['success']:
-            continue
+        for subject_id, result in all_results.items():
+            if not result['success']:
+                continue
 
-        static_fc_data = result.get('static_functional_connectivity')
-        if static_fc_data:
-            print(f"\nExporting static FC results for {subject_id}...")
-            exported_files = export_static_fc_results_to_csv(static_fc_data, subject_id, fc_output_dir)
-            if exported_files:
-                csv_export_count += 1
+            static_fc_data = result.get('static_functional_connectivity')
+            if static_fc_data:
+                print(f"\nExporting static FC results for {subject_id}...")
+                exported_files = export_static_fc_results_to_csv(static_fc_data, subject_id, fc_output_dir)
+                if exported_files:
+                    csv_export_count += 1
 
-    print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
-    print(f"  Files saved to: {fc_output_dir}")
+        print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
+        print(f"  Files saved to: {fc_output_dir}")
 
     # ===== GROUP-AVERAGED FC ANALYSIS =====
     print(f"\n{'='*80}")
@@ -3731,32 +3735,33 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"  Slow-band FC: {total_slow_band_groups} group×band combinations")
 
     # Export group-averaged FC to CSV within run folder
-    print(f"\n--- Exporting Group-Averaged FC ---")
-    group_avg_output_dir = run_parent_dir / 'group_averages'
-    group_avg_output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Output directory: {group_avg_output_dir}")
+    if save_figures:
+        print(f"\n--- Exporting Group-Averaged FC ---")
+        group_avg_output_dir = run_parent_dir / 'group_averages'
+        group_avg_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Output directory: {group_avg_output_dir}")
 
-    exported_count = 0
+        exported_count = 0
 
-    # Export static FC
-    print(f"\n  Static FC:")
-    for group_name, avg_data in group_averaged_fc['static'].items():
-        if avg_data:
-            export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
-            exported_count += 1
+        # Export static FC
+        print(f"\n  Static FC:")
+        for group_name, avg_data in group_averaged_fc['static'].items():
+            if avg_data:
+                export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
+                exported_count += 1
 
-    # Export slow-band FC
-    print(f"\n  Slow-Band FC:")
-    for band_key, band_groups in group_averaged_fc['slow_bands'].items():
-        if band_groups:
-            print(f"    {band_key}:")
-            for group_name, avg_data in band_groups.items():
-                if avg_data:
-                    export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
-                    exported_count += 1
+        # Export slow-band FC
+        print(f"\n  Slow-Band FC:")
+        for band_key, band_groups in group_averaged_fc['slow_bands'].items():
+            if band_groups:
+                print(f"    {band_key}:")
+                for group_name, avg_data in band_groups.items():
+                    if avg_data:
+                        export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
+                        exported_count += 1
 
-    print(f"\n✓ Exported {exported_count} group-averaged FC results")
-    print(f"  Files saved to: {group_avg_output_dir}")
+        print(f"\n✓ Exported {exported_count} group-averaged FC results")
+        print(f"  Files saved to: {group_avg_output_dir}")
 
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
@@ -4359,31 +4364,36 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"WRITING ANALYSIS LOG")
     print(f"{'='*80}")
 
-    log_file = write_analysis_log(
-        output_dir=run_parent_dir,
-        groups_config=groups_config,
-        all_results=all_results,
-        low_anhedonic_subjects=low_anhedonic_subjects,
-        high_anhedonic_subjects=high_anhedonic_subjects,
-        timestamp=run_timestamp
-    )
+    if save_figures:
+        log_file = write_analysis_log(
+            output_dir=run_parent_dir,
+            groups_config=groups_config,
+            all_results=all_results,
+            low_anhedonic_subjects=low_anhedonic_subjects,
+            high_anhedonic_subjects=high_anhedonic_subjects,
+            timestamp=run_timestamp
+        )
 
-    print(f"Analysis log saved to: {log_file}")
+        print(f"Analysis log saved to: {log_file}")
 
     # ===== FINAL SUMMARY =====
     print(f"\n{'='*80}")
     print(f"ANALYSIS COMPLETE")
     print(f"{'='*80}")
-    print(f"All outputs saved to: {run_parent_dir}")
-    print(f"  - Static FC CSVs: {fc_output_dir}")
-    print(f"  - Group averages: {group_avg_output_dir}")
-    if save_figures and figures_saved_count > 0:
-        print(f"  - Figures ({figures_saved_count} total):")
-        print(f"    - FC analysis: {fc_figures_dir}")
-        print(f"    - MVMD analysis: {mvmd_figures_dir}")
-        print(f"    - ROI extraction: {roi_figures_dir}")
-    print(f"  - Analysis log: {log_file}")
-    print(f"\nRun ID: {run_timestamp}")
+    if save_figures:
+        print(f"All outputs saved to: {run_parent_dir}")
+        print(f"  - Static FC CSVs: {fc_output_dir}")
+        print(f"  - Group averages: {group_avg_output_dir}")
+        if figures_saved_count > 0:
+            print(f"  - Figures ({figures_saved_count} total):")
+            print(f"    - FC analysis: {fc_figures_dir}")
+            print(f"    - MVMD analysis: {mvmd_figures_dir}")
+            print(f"    - ROI extraction: {roi_figures_dir}")
+        print(f"  - Analysis log: {log_file}")
+        print(f"\nRun ID: {run_timestamp}")
+    else:
+        print(f"No files saved (--no-save mode)")
+        print(f"Analysis completed successfully")
 
     # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {
