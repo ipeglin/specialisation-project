@@ -6,13 +6,13 @@ Generates the final 4 analysis group datasets by combining anhedonia and diagnos
 
 PRIMARY: Anhedonia Analysis (ALL subjects with valid SHAPS)
 - Group A: non-anhedonic (SHAPS 0-2)
-- Group B: low-anhedonic (SHAPS 3-8) 
+- Group B: low-anhedonic (SHAPS 3-8)
 - Group C: high-anhedonic (SHAPS 9-14)
 
 SECONDARY: MDD Primary + Controls
 - Controls (Group = "GenPop") + MDD Primary patients
 
-TERTIARY: MDD Primary/Comorbid + Controls  
+TERTIARY: MDD Primary/Comorbid + Controls
 - Controls + MDD Primary + MDD Comorbid
 
 QUATERNARY: All MDD types + Controls
@@ -22,14 +22,15 @@ Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
-import pandas as pd
-import numpy as np
 import json
+import sys
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import numpy as np
+import pandas as pd
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
@@ -90,9 +91,13 @@ class AnalysisGroupsGenerator:
         """Merge anhedonia and diagnosis classifications"""
         print("Merging anhedonia and diagnosis classifications...")
 
+        # Drop patient_control from anhedonia if it exists (we'll use diagnosis version)
+        anhedonia_cols_to_use = [col for col in self.anhedonia_subjects.columns if col != 'patient_control']
+        anhedonia_subset = self.anhedonia_subjects[anhedonia_cols_to_use]
+
         # Merge on subject_id
         merged_subjects = pd.merge(
-            self.anhedonia_subjects,
+            anhedonia_subset,
             self.diagnosis_subjects[['subject_id', 'mdd_status', 'patient_control']],
             on='subject_id',
             how='inner'
@@ -250,8 +255,8 @@ class AnalysisGroupsGenerator:
         # Anhedonia by diagnosis
         if 'anhedonia_class' in merged_subjects.columns and 'mdd_status' in merged_subjects.columns:
             anhedonia_by_diagnosis = pd.crosstab(
-                merged_subjects['anhedonia_class'], 
-                merged_subjects['mdd_status'], 
+                merged_subjects['anhedonia_class'],
+                merged_subjects['mdd_status'],
                 margins=True
             )
             statistics['anhedonia_by_diagnosis'] = anhedonia_by_diagnosis.to_dict()
@@ -259,8 +264,8 @@ class AnalysisGroupsGenerator:
         # Diagnosis by anhedonia (binary)
         if 'anhedonic_status' in merged_subjects.columns and 'patient_control' in merged_subjects.columns:
             diagnosis_by_anhedonia = pd.crosstab(
-                merged_subjects['patient_control'], 
-                merged_subjects['anhedonic_status'], 
+                merged_subjects['patient_control'],
+                merged_subjects['anhedonic_status'],
                 margins=True
             )
             statistics['diagnosis_by_anhedonia'] = diagnosis_by_anhedonia.to_dict()
@@ -280,8 +285,10 @@ class AnalysisGroupsGenerator:
             print(f"  {CHECK} {group_name.upper()} analysis group: {group_file}")
 
         # 2. Export combined dataset with all classifications
+        # Drop patient_control from anhedonia if it exists (we'll use diagnosis version)
+        anhedonia_cols_to_use = [col for col in self.anhedonia_subjects.columns if col != 'patient_control']
         merged_subjects = pd.merge(
-            self.anhedonia_subjects,
+            self.anhedonia_subjects[anhedonia_cols_to_use],
             self.diagnosis_subjects[['subject_id', 'mdd_status', 'patient_control']],
             on='subject_id',
             how='inner'
