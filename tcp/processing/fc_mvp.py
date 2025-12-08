@@ -767,7 +767,8 @@ def combine_slow_band_components(time_modes, center_freqs, verbose=True):
         Slow-5: 0.01–0.027Hz
         Slow-4: 0.027–0.073Hz
         Slow-3: 0.073–0.198Hz
-        Slow-2: 0.198–0.25Hz
+        Slow-2: 0.198–0.5Hz
+        Slow-1: 0.5-0.75Hz
 
     Returns:
         dict: Dictionary with band names as keys, each containing:
@@ -777,6 +778,7 @@ def combine_slow_band_components(time_modes, center_freqs, verbose=True):
     """
     # Initialize separate dictionaries for each band to avoid shared reference issue
     band_signals = {
+        '1': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
         '2': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
         '3': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
         '4': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
@@ -794,8 +796,10 @@ def combine_slow_band_components(time_modes, center_freqs, verbose=True):
             return "4"
         elif 0.073 < frequency <= 0.198:
             return "3"
-        elif 0.198 < frequency <= 0.25:
+        elif 0.198 < frequency <= 0.5:
             return "2"
+        elif 0.5 < frequency <= 0.75:
+            return "1"
         else:
             return 'excluded'
 
@@ -842,7 +846,7 @@ def get_frequency_range(band_key):
     Return frequency range string for slow-band visualization.
 
     Args:
-        band_key: str, band identifier ('2', '3', '4', '5', or '6')
+        band_key: str, band identifier ('1', '2', '3', '4', '5', or '6')
 
     Returns:
         str: Frequency range in Hz (e.g., '0.027-0.073 Hz')
@@ -852,7 +856,8 @@ def get_frequency_range(band_key):
         '5': '0.010-0.027 Hz',
         '4': '0.027-0.073 Hz',
         '3': '0.073-0.198 Hz',
-        '2': '0.198-0.250 Hz',
+        '2': '0.198-0.500 Hz',
+        '1': '0.500-0.750 Hz',
     }
     return ranges.get(band_key, 'Unknown')
 
@@ -2505,7 +2510,7 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
 def plot_slow_band_decomposition(original, band_signals, subject_id=None, channel_label_map=None, max_figures_per_batch=20):
     """
     Plot signal decomposition organized by slow frequency bands for each channel separately.
-    Only plots the banded signals (Slow-2 through Slow-6), excluding frequencies outside all bands.
+    Only plots the banded signals (Slow-1 through Slow-6), excluding frequencies outside all bands.
 
     Args:
         original: The original signal that has been decomposed (channels x samples)
@@ -2520,14 +2525,15 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
     channel_count = original.shape[0]
     current_batch = []
 
-    # Define band order for plotting: Slow-6 through Slow-2 (exclude 'excluded')
-    band_order = ['6', '5', '4', '3', '2']
+    # Define band order for plotting: Slow-6 through Slow-1 (exclude 'excluded')
+    band_order = ['6', '5', '4', '3', '2', '1']
     band_names = {
         '6': 'Slow-6 (0-0.01 Hz)',
         '5': 'Slow-5 (0.01-0.027 Hz)',
         '4': 'Slow-4 (0.027-0.073 Hz)',
         '3': 'Slow-3 (0.073-0.198 Hz)',
-        '2': 'Slow-2 (0.198-0.25 Hz)',
+        '2': 'Slow-2 (0.198-0.5 Hz)',
+        '1': 'Slow-1 (0.5-0.75 Hz)',
     }
 
     # Count total subplots needed per channel (original + slow bands only)
@@ -2558,7 +2564,7 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
         current_subplot += 1
 
         # Plot slow band signals (summed components for each band)
-        for band_key in ['6', '5', '4', '3', '2']:
+        for band_key in ['6', '5', '4', '3', '2', '1']:
             if band_key in band_signals and len(band_signals[band_key]['components']) > 0:
                 band_signal = band_signals[band_key]['band_signal']
                 center_freqs = band_signals[band_key]['center_freqs']
@@ -3200,7 +3206,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             # Combine modes into slow-bands
             band_signals = combine_slow_band_components(time_modes, center_freqs, verbose=verbose)
 
-            for band_key in ['6', '5', '4', '3', '2']:
+            for band_key in ['6', '5', '4', '3', '2', '1']:
                 band_data = band_signals.get(band_key)
 
                 # Skip if no modes in this band
@@ -3710,7 +3716,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     # 2. Compute group-averaged slow-band FC
     print(f"\n--- Slow-Band FC ---")
-    slow_bands = ['slow-6', 'slow-5', 'slow-4', 'slow-3', 'slow-2']
+    slow_bands = ['slow-6', 'slow-5', 'slow-4', 'slow-3', 'slow-2', 'slow-1']
 
     for band_key in slow_bands:
         print(f"\n  {band_key.upper()}:")
