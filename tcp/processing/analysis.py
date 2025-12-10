@@ -46,6 +46,11 @@ from tcp.processing.roi import (
 )
 from tcp.processing.signal_processing.mvmd import MVMD
 
+# ===== SIGNAL ACQUISITION PARAMETERS =====
+TR = 800e-3  # Repetition Time [seconds]
+SAMPLING_RATE = 1 / TR  # 1.25 Hz
+NYQUIST_FREQUENCY = 0.5 * SAMPLING_RATE  # 0.625 Hz
+
 
 def is_actual_file(file_path: Path) -> bool:
     """
@@ -2617,6 +2622,743 @@ def plot_slow_band_decomposition(original, band_signals, subject_id=None, channe
     if current_batch:
         yield current_batch
 
+
+def compute_hilbert_transform_per_mode(time_modes, sampling_rate):
+    """
+    Apply Hilbert Transform to each MVMD mode to extract instantaneous properties.
+
+    This is the correct approach for multi-channel signals:
+    1. MVMD decomposes multi-channel signal into K mono-component modes
+    2. Hilbert Transform is applied to each mode separately
+    3. Instantaneous frequency and amplitude are extracted per mode
+
+    Args:
+        time_modes: MVMD time-domain modes with shape (modes, channels, samples)
+        sampling_rate: Sampling frequency in Hz (e.g., 1.25 Hz for TR=800ms)
+
+    Returns:
+        dict: Dictionary containing per-mode instantaneous properties:
+            - 'modes_data': List of dicts, one per mode, each containing:
+                - 'mode_idx': Mode index (0-based)
+                - 'instantaneous_frequency': (channels, samples)
+                - 'instantaneous_amplitude': (channels, samples)
+                - 'analytic_signal': Complex analytic signal (channels, samples)
+            - 'sampling_rate': Sampling rate in Hz
+            - 'n_modes': Number of modes
+            - 'n_channels': Number of channels
+            - 'n_samples': Number of time samples
+    """
+    n_modes, n_channels, n_samples = time_modes.shape
+
+    modes_data = []
+
+    # Process each mode independently
+    for mode_idx in range(n_modes):
+        mode_signal = time_modes[mode_idx, :, :]  # Shape: (channels, samples)
+
+        # Initialize arrays for this mode
+        inst_freq = np.zeros((n_channels, n_samples))
+        inst_amp = np.zeros((n_channels, n_samples))
+        analytic_signals = np.zeros((n_channels, n_samples), dtype=complex)
+
+        # Apply Hilbert transform to each channel of this mode
+        for ch_idx in range(n_channels):
+            # Get analytic signal using Hilbert transform
+            analytic_signal = signal.hilbert(mode_signal[ch_idx, :])
+            analytic_signals[ch_idx, :] = analytic_signal
+
+            # Extract instantaneous amplitude (envelope)
+            inst_amp[ch_idx, :] = np.abs(analytic_signal)
+
+            # Extract instantaneous phase and unwrap to avoid discontinuities
+            inst_phase = np.unwrap(np.angle(analytic_signal))
+
+            # Compute instantaneous frequency from phase derivative
+            # f(t) = (1/2π) * dφ/dt * fs
+            inst_freq[ch_idx, :] = np.gradient(inst_phase) * sampling_rate / (2 * np.pi)
+
+        # Store data for this mode
+        modes_data.append({
+            'mode_idx': mode_idx,
+            'instantaneous_frequency': inst_freq,
+            'instantaneous_amplitude': inst_amp,
+            'analytic_signal': analytic_signals
+        })
+
+    return {
+        'modes_data': modes_data,
+        'sampling_rate': sampling_rate,
+        'n_modes': n_modes,
+        'n_channels': n_channels,
+        'n_samples': n_samples
+    }
+
+
+def compute_hilbert_transform_per_band(band_signals, sampling_rate):
+    """
+    Apply Hilbert Transform to each slow-band signal to extract instantaneous properties.
+
+    Similar to compute_hilbert_transform_per_mode, but operates on reconstructed band signals
+    instead of individual MVMD modes. Each band signal is the sum of multiple modes.
+
+    Args:
+        band_signals: Dictionary from combine_slow_band_components(), containing band signals
+        sampling_rate: Sampling frequency in Hz (e.g., 1.25 Hz for TR=800ms)
+
+    Returns:
+        dict: Dictionary containing per-band instantaneous properties:
+            - 'bands_data': List of dicts, one per band, each containing:
+                - 'band_key': Band identifier (e.g., '1', '2', '3', '4', '5', '6')
+                - 'band_name': Full band name (e.g., 'Slow-1', 'Slow-2')
+                - 'instantaneous_frequency': (channels, samples)
+                - 'instantaneous_amplitude': (channels, samples)
+                - 'analytic_signal': Complex analytic signal (channels, samples)
+            - 'sampling_rate': Sampling rate in Hz
+            - 'n_bands': Number of bands processed
+            - 'n_channels': Number of channels
+            - 'n_samples': Number of time samples
+    """
+    bands_data = []
+
+    # Define band names mapping
+    band_names = {
+        '1': 'Slow-1 (0.5-0.75 Hz)',
+        '2': 'Slow-2 (0.198-0.5 Hz)',
+        '3': 'Slow-3 (0.073-0.198 Hz)',
+        '4': 'Slow-4 (0.027-0.073 Hz)',
+        '5': 'Slow-5 (0.01-0.027 Hz)',
+        '6': 'Slow-6 (0-0.01 Hz)'
+    }
+
+    n_channels = None
+    n_samples = None
+
+    # Process each band (skip 'excluded')
+    for band_key in ['1', '2', '3', '4', '5', '6']:
+        if band_key not in band_signals:
+            continue
+
+        band_data = band_signals[band_key]
+        band_signal = band_data.get('band_signal')
+
+        # Skip if no signal for this band
+        if band_signal is None or len(band_data['components']) == 0:
+            continue
+
+        # band_signal shape: (channels, samples)
+        if n_channels is None:
+            n_channels = band_signal.shape[0]
+            n_samples = band_signal.shape[1]
+
+        # Initialize arrays for this band
+        inst_freq = np.zeros((n_channels, n_samples))
+        inst_amp = np.zeros((n_channels, n_samples))
+        analytic_signals = np.zeros((n_channels, n_samples), dtype=complex)
+
+        # Apply Hilbert transform to each channel of this band signal
+        for ch_idx in range(n_channels):
+            # Get analytic signal using Hilbert transform
+            analytic_signal = signal.hilbert(band_signal[ch_idx, :])
+            analytic_signals[ch_idx, :] = analytic_signal
+
+            # Extract instantaneous amplitude (envelope)
+            inst_amp[ch_idx, :] = np.abs(analytic_signal)
+
+            # Extract instantaneous phase and unwrap to avoid discontinuities
+            inst_phase = np.unwrap(np.angle(analytic_signal))
+
+            # Compute instantaneous frequency from phase derivative
+            inst_freq[ch_idx, :] = np.gradient(inst_phase) * sampling_rate / (2 * np.pi)
+
+        # Store data for this band
+        bands_data.append({
+            'band_key': band_key,
+            'band_name': band_names.get(band_key, f'Slow-{band_key}'),
+            'instantaneous_frequency': inst_freq,
+            'instantaneous_amplitude': inst_amp,
+            'analytic_signal': analytic_signals
+        })
+
+    return {
+        'bands_data': bands_data,
+        'sampling_rate': sampling_rate,
+        'n_bands': len(bands_data),
+        'n_channels': n_channels,
+        'n_samples': n_samples
+    }
+
+
+def plot_multivariate_hilbert_spectrum(hsa_data, subject_id=None, center_freqs=None, channel_labels=None):
+    """
+    Plot Hilbert Spectrum for each mode with channels kept completely separate.
+
+    CRITICAL: Channels are NEVER aggregated. Each channel's spectrum is plotted
+    separately, grouped by region+network.
+
+    Args:
+        hsa_data: Dictionary from compute_hilbert_transform_per_mode()
+        subject_id: Optional subject identifier
+        center_freqs: Optional array of MVMD center frequencies for each mode
+        channel_labels: List of channel labels (e.g., ['PFCm_RH_DefaultA_p1', ...])
+
+    Returns:
+        List of tuples: Each tuple contains (figure, region_network_key) for one region+network group
+    """
+    modes_data = hsa_data['modes_data']
+    sampling_rate = hsa_data['sampling_rate']
+    n_samples = hsa_data['n_samples']
+    n_modes = hsa_data['n_modes']
+
+    # Get number of channels from first mode
+    n_channels = modes_data[0]['instantaneous_frequency'].shape[0]
+
+    # Define frequency bins (0 to Nyquist)
+    nyquist_freq = sampling_rate / 2
+    n_freq_bins = 256  # Resolution for frequency axis
+    freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
+    freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+
+    # Convert time to seconds
+    time_seconds = np.arange(n_samples) / sampling_rate
+
+    # Helper function to parse channel labels and group by region+network
+    def parse_channel_label(label):
+        """Extract region_network_key and display label with hemisphere from channel label."""
+        parts = label.split('_')
+        if len(parts) >= 4 and parts[3].startswith('p'):
+            # Cortical: region_hemi_network_pSubarea (e.g., PFCm_RH_DefaultA_p1)
+            region_network_key = f"{parts[0]}_{parts[2]}"  # e.g., "PFCm_DefaultA"
+            display_label = f"{parts[1]} {parts[3]}"  # e.g., "RH p1"
+            return region_network_key, display_label, label
+        elif len(parts) >= 3:
+            # Subcortical: region_hemi_subdivision (e.g., AMY_RH_lAMY)
+            region_network_key = f"{parts[0]}_{parts[2]}"  # e.g., "AMY_lAMY"
+            display_label = f"{parts[1]} {parts[2]}"  # e.g., "RH lAMY"
+            return region_network_key, display_label, label
+        else:
+            return 'Unknown', label, label
+
+    # Group channels by region+network
+    if channel_labels is None:
+        # Fallback: create generic labels
+        channel_labels = [f'Ch{i+1}' for i in range(n_channels)]
+
+    region_network_groups = {}
+    for ch_idx, label in enumerate(channel_labels):
+        region_network_key, display_label, full_label = parse_channel_label(label)
+        if region_network_key not in region_network_groups:
+            region_network_groups[region_network_key] = []
+        region_network_groups[region_network_key].append((ch_idx, display_label, full_label))
+
+    # Create one figure per region+network group
+    figures = []
+
+    for region_network_key, channels in region_network_groups.items():
+        n_channels_in_group = len(channels)
+
+        # Create figure: 1 row, columns = channels (all modes superimposed per channel)
+        fig, axes = plt.subplots(1, n_channels_in_group, figsize=(4 * n_channels_in_group, 5),
+                                 sharex=True, sharey=True)
+
+        # Handle single channel case
+        if n_channels_in_group == 1:
+            axes = [axes]
+
+        # Process each channel: superimpose ALL modes
+        for col_idx, (ch_idx, display_label, full_label) in enumerate(channels):
+            ax = axes[col_idx]
+
+            # Initialize Hilbert Spectrum for THIS CHANNEL (summing across ALL modes)
+            hilbert_spectrum_superimposed = np.zeros((n_freq_bins, n_samples))
+
+            # Superimpose all K modes for this channel
+            for mode_idx, mode_data in enumerate(modes_data):
+                inst_freq = mode_data['instantaneous_frequency']  # (channels, samples)
+                inst_amp = mode_data['instantaneous_amplitude']    # (channels, samples)
+
+                # Process this channel's contribution from this mode
+                for t_idx in range(n_samples):
+                    freq_val = inst_freq[ch_idx, t_idx]
+                    amp_val = inst_amp[ch_idx, t_idx]
+
+                    # Only bin if frequency is within valid range
+                    if 0 <= freq_val < nyquist_freq:
+                        freq_bin_idx = np.searchsorted(freq_bins, freq_val) - 1
+                        freq_bin_idx = np.clip(freq_bin_idx, 0, n_freq_bins - 1)
+
+                        # Superimpose energy from this mode (NO aggregation across channels!)
+                        hilbert_spectrum_superimposed[freq_bin_idx, t_idx] += amp_val ** 2
+
+            # Use log scale for better visualization
+            hs_log = np.log10(hilbert_spectrum_superimposed + 1e-10)
+
+            # Plot as heatmap with hot colormap
+            extent = [time_seconds[0], time_seconds[-1], freq_bin_centers[0], freq_bin_centers[-1]]
+            im = ax.imshow(hs_log, aspect='auto', origin='lower', cmap='hot',
+                           extent=extent, interpolation='bilinear')
+
+            # Labels
+            ax.set_title(display_label, fontsize=10, fontweight='bold')
+            ax.set_xlabel('Time (s)', fontsize=9)
+            if col_idx == 0:
+                ax.set_ylabel('Frequency (Hz)', fontsize=9, fontweight='bold')
+
+            ax.tick_params(labelsize=8)
+
+        # Add single colorbar for entire figure positioned to the right of all subplots
+        # Create space for colorbar by adjusting figure layout
+        fig.subplots_adjust(right=0.92)
+        cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        fig.colorbar(im, cax=cbar_ax, label='$\log_{10}$(Energy)')
+
+        # Figure title
+        title_parts = [f'Hilbert Spectrum ({n_modes} Modes Superimposed): {region_network_key}']
+        if subject_id:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=14, fontweight='bold', y=0.98)
+
+        plt.tight_layout(rect=[0, 0, 0.92, 0.96])
+
+        figures.append((fig, region_network_key))
+
+    return figures
+def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None, channel_labels=None):
+    """
+    Plot Marginal Hilbert Spectrum with separate cell for each mode and channel.
+
+    The marginal spectrum is computed by integrating the Hilbert Spectrum over time only,
+    showing the frequency content for each mode and channel combination in a grid layout.
+
+    Args:
+        hsa_data: Dictionary from compute_hilbert_transform_per_mode()
+        subject_id: Optional subject identifier
+        center_freqs: Optional array of MVMD center frequencies for each mode
+        channel_labels: List of channel labels (e.g., ['PFCm_RH_DefaultA_p1', ...])
+
+    Returns:
+        List of tuples: Each tuple contains (figure, region_network_key) for one region+network group
+    """
+    modes_data = hsa_data['modes_data']
+    sampling_rate = hsa_data['sampling_rate']
+    n_modes = hsa_data['n_modes']
+    n_samples = hsa_data['n_samples']
+
+    # Get number of channels
+    n_channels = modes_data[0]['instantaneous_frequency'].shape[0]
+
+    # Define frequency bins
+    nyquist_freq = sampling_rate / 2
+    n_freq_bins = 256
+    freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
+    freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+
+    # Helper function to parse channel labels and group by region+network
+    def parse_channel_label(label):
+        """Extract region_network_key and display label from channel label."""
+        parts = label.split('_')
+        if len(parts) >= 4 and parts[3].startswith('p'):
+            # Cortical: region_hemi_network_pSubarea (e.g., PFCm_RH_DefaultA_p1)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[3]}"
+            return region_network_key, display_label, label
+        elif len(parts) >= 3:
+            # Subcortical: region_hemi_subdivision (e.g., AMY_RH_lAMY)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[2]}"
+            return region_network_key, display_label, label
+        else:
+            return 'Unknown', label, label
+
+    # Group channels by region+network
+    if channel_labels is None:
+        channel_labels = [f'Ch{i+1}' for i in range(n_channels)]
+
+    region_network_groups = {}
+    for ch_idx, label in enumerate(channel_labels):
+        region_network_key, display_label, full_label = parse_channel_label(label)
+        if region_network_key not in region_network_groups:
+            region_network_groups[region_network_key] = []
+        region_network_groups[region_network_key].append((ch_idx, display_label, full_label))
+
+    # Create one figure per region+network group
+    figures = []
+
+    for region_network_key, channels in region_network_groups.items():
+        n_channels_in_group = len(channels)
+
+        # Create grid: rows = modes, columns = channels
+        fig, axes = plt.subplots(n_modes, n_channels_in_group,
+                                figsize=(n_channels_in_group * 3, n_modes * 2.5),
+                                squeeze=False)
+
+        # Iterate through each mode and each channel
+        for mode_idx, mode_data in enumerate(modes_data):
+            inst_freq = mode_data['instantaneous_frequency']  # (channels, samples)
+            inst_amp = mode_data['instantaneous_amplitude']    # (channels, samples)
+            mode_num = mode_data['mode_idx'] + 1  # Convert 0-based index to 1-based for display
+
+            # Get center frequency for this mode
+            center_freq = center_freqs[mode_idx] if center_freqs is not None else None
+
+            for col_idx, (ch_idx, display_label, full_label) in enumerate(channels):
+                ax = axes[mode_idx, col_idx]
+
+                # Compute marginal spectrum for this specific mode and channel
+                mhs = np.zeros(n_freq_bins)
+
+                # Integrate over time only (NOT over channels or modes)
+                for t_idx in range(n_samples):
+                    freq_val = inst_freq[ch_idx, t_idx]
+                    amp_val = inst_amp[ch_idx, t_idx]
+
+                    if 0 <= freq_val < nyquist_freq:
+                        freq_bin_idx = np.searchsorted(freq_bins, freq_val) - 1
+                        freq_bin_idx = np.clip(freq_bin_idx, 0, n_freq_bins - 1)
+
+                        # Accumulate energy (integrate over time only)
+                        mhs[freq_bin_idx] += amp_val ** 2
+
+                # Normalize by number of samples
+                mhs /= n_samples
+
+                # Plot marginal spectrum for this mode-channel combination
+                ax.plot(freq_bin_centers, mhs, color='black', linewidth=0.8, alpha=0.9)
+
+                # Add vertical line at center frequency for this mode
+                if center_freq is not None:
+                    ax.axvline(x=center_freq, color='crimson', linestyle='--',
+                             linewidth=0.8, alpha=0.6)
+                    y_min, y_max = ax.get_ylim()
+                    y_text = y_min + 0.02 * (y_max - y_min) if y_max > y_min else y_min
+                    ax.text(center_freq, y_text,
+                            f'$\\omega_{{{mode_num}}}={center_freq:.3f}Hz$',
+                            fontsize=7, color='crimson', ha='center', va='top')
+
+                # Set labels
+                if mode_idx == 0:
+                    # Top row: add channel labels as column titles
+                    ax.set_title(display_label, fontsize=9, fontweight='bold')
+
+                if col_idx == 0:
+                    # Leftmost column: add mode labels as y-axis labels
+                    mode_label = f'$u_{{{mode_num}}}$'
+                    if center_freq is not None:
+                        mode_label += f'\n{center_freq:.3f} Hz'
+                    ax.set_ylabel(mode_label, fontsize=9, fontweight='bold', rotation=0,
+                                ha='right', va='center')
+
+                if mode_idx == n_modes - 1:
+                    # Bottom row: add x-axis label
+                    ax.set_xlabel('Freq (Hz)', fontsize=8)
+                else:
+                    ax.set_xticklabels([])
+
+                # Styling
+                ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.tick_params(labelsize=7)
+
+        # Figure title
+        title_parts = [f'Marginal Hilbert Spectrum per Mode and Channel: {region_network_key}']
+        if subject_id:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=14, fontweight='bold', y=0.995)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.99])
+
+        figures.append((fig, region_network_key))
+
+    return figures
+def plot_band_hilbert_spectrum(hsa_band_data, subject_id=None, channel_labels=None):
+    """
+    Plot Hilbert Spectrum for each slow-band signal with channels kept completely separate.
+
+    CRITICAL: Channels are NEVER aggregated. Each channel's spectrum is plotted
+    separately, grouped by region+network. Bands replace modes in this visualization.
+
+    Args:
+        hsa_band_data: Dictionary from compute_hilbert_transform_per_band()
+        subject_id: Optional subject identifier
+        channel_labels: List of channel labels (e.g., ['PFCm_RH_DefaultA_p1', ...])
+
+    Returns:
+        List of tuples: Each tuple contains (figure, region_network_key) for one region+network group
+    """
+    bands_data = hsa_band_data['bands_data']
+    sampling_rate = hsa_band_data['sampling_rate']
+    n_samples = hsa_band_data['n_samples']
+    n_bands = hsa_band_data['n_bands']
+
+    # Get number of channels from first band
+    n_channels = bands_data[0]['instantaneous_frequency'].shape[0]
+
+    # Define frequency bins (0 to Nyquist)
+    nyquist_freq = sampling_rate / 2
+    n_freq_bins = 256  # Resolution for frequency axis
+    freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
+    freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+
+    # Convert time to seconds
+    time_seconds = np.arange(n_samples) / sampling_rate
+
+    # Helper function to parse channel labels and group by region+network
+    def parse_channel_label(label):
+        """Extract region_network_key and display label with hemisphere from channel label."""
+        parts = label.split('_')
+        if len(parts) >= 4 and parts[3].startswith('p'):
+            # Cortical: region_hemi_network_pSubarea (e.g., PFCm_RH_DefaultA_p1)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[3]}"
+            return region_network_key, display_label, label
+        elif len(parts) >= 3:
+            # Subcortical: region_hemi_subdivision (e.g., AMY_RH_lAMY)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[2]}"
+            return region_network_key, display_label, label
+        else:
+            return 'Unknown', label, label
+
+    # Group channels by region+network
+    if channel_labels is None:
+        channel_labels = [f'Ch{i+1}' for i in range(n_channels)]
+
+    region_network_groups = {}
+    for ch_idx, label in enumerate(channel_labels):
+        region_network_key, display_label, full_label = parse_channel_label(label)
+        if region_network_key not in region_network_groups:
+            region_network_groups[region_network_key] = []
+        region_network_groups[region_network_key].append((ch_idx, display_label, full_label))
+
+    # Create one figure per region+network group
+    figures = []
+
+    for region_network_key, channels in region_network_groups.items():
+        n_channels_in_group = len(channels)
+
+        # Create figure: rows = bands, cols = channels in this group
+        n_rows = n_bands
+        n_cols = n_channels_in_group
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows),
+                                 sharex=True, sharey=True)
+
+        # Handle single band or single channel cases
+        if n_bands == 1 and n_channels_in_group == 1:
+            axes = np.array([[axes]])
+        elif n_bands == 1:
+            axes = axes.reshape(1, -1)
+        elif n_channels_in_group == 1:
+            axes = axes.reshape(-1, 1)
+
+        # Process each band and channel separately (NO AGGREGATION)
+        for band_idx, band_data in enumerate(bands_data):
+            inst_freq = band_data['instantaneous_frequency']  # (channels, samples)
+            inst_amp = band_data['instantaneous_amplitude']    # (channels, samples)
+            band_name = band_data['band_name']
+
+            for col_idx, (ch_idx, display_label, full_label) in enumerate(channels):
+                ax = axes[band_idx, col_idx]
+
+                # Initialize Hilbert Spectrum for THIS CHANNEL ONLY
+                hilbert_spectrum = np.zeros((n_freq_bins, n_samples))
+
+                # Process this single channel
+                for t_idx in range(n_samples):
+                    freq_val = inst_freq[ch_idx, t_idx]
+                    amp_val = inst_amp[ch_idx, t_idx]
+
+                    # Only bin if frequency is within valid range
+                    if 0 <= freq_val < nyquist_freq:
+                        freq_bin_idx = np.searchsorted(freq_bins, freq_val) - 1
+                        freq_bin_idx = np.clip(freq_bin_idx, 0, n_freq_bins - 1)
+
+                        # Store energy for THIS channel only (NO aggregation)
+                        hilbert_spectrum[freq_bin_idx, t_idx] = amp_val ** 2
+
+                # Use log scale for better visualization
+                hs_log = np.log10(hilbert_spectrum + 1e-10)
+
+                # Plot as heatmap with hot colormap
+                extent = [time_seconds[0], time_seconds[-1], freq_bin_centers[0], freq_bin_centers[-1]]
+                im = ax.imshow(hs_log, aspect='auto', origin='lower', cmap='hot',
+                               extent=extent, interpolation='bilinear')
+
+                # Labels
+                if col_idx == 0:
+                    ax.set_ylabel(f'{band_name}\nFreq (Hz)', fontsize=9, fontweight='bold', rotation=0, ha='right', va='center')
+                if band_idx == 0:
+                    ax.set_title(display_label, fontsize=9, fontweight='bold')
+                if band_idx == n_bands - 1:
+                    ax.set_xlabel('Time (s)', fontsize=8)
+
+                ax.tick_params(labelsize=7)
+
+        # Add single colorbar for entire figure positioned to the right of all subplots
+        fig.subplots_adjust(right=0.92)
+        cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        fig.colorbar(im, cax=cbar_ax, label='$\log_{10}$(Energy)')
+
+        # Figure title
+        title_parts = [f'Band Hilbert Spectrum: {region_network_key}']
+        if subject_id:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=14, fontweight='bold', y=0.995)
+
+        plt.tight_layout(rect=[0, 0, 0.92, 0.99])
+
+        figures.append((fig, region_network_key))
+
+    return figures
+
+
+def plot_band_marginal_spectrum(hsa_band_data, subject_id=None, channel_labels=None):
+    """
+    Plot Marginal Hilbert Spectrum for each slow-band signal, integrating over time.
+
+    Creates one subplot per band, integrating over time and all channels in each region+network.
+    Bands are kept SEPARATE (not superimposed).
+
+    Args:
+        hsa_band_data: Dictionary from compute_hilbert_transform_per_band()
+        subject_id: Optional subject identifier
+        channel_labels: List of channel labels (e.g., ['PFCm_RH_DefaultA_p1', ...])
+
+    Returns:
+        List of tuples: Each tuple contains (figure, region_network_key) for one region+network group
+    """
+    bands_data = hsa_band_data['bands_data']
+    sampling_rate = hsa_band_data['sampling_rate']
+    n_bands = hsa_band_data['n_bands']
+    n_samples = hsa_band_data['n_samples']
+
+    # Get number of channels
+    n_channels = bands_data[0]['instantaneous_frequency'].shape[0]
+
+    # Define frequency bins
+    nyquist_freq = sampling_rate / 2
+    n_freq_bins = 256
+    freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
+    freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+
+    # Helper function to parse channel labels and group by region+network
+    def parse_channel_label(label):
+        """Extract region_network_key and display label from channel label."""
+        parts = label.split('_')
+        if len(parts) >= 4 and parts[3].startswith('p'):
+            # Cortical: region_hemi_network_pSubarea (e.g., PFCm_RH_DefaultA_p1)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[3]}"
+            return region_network_key, display_label, label
+        elif len(parts) >= 3:
+            # Subcortical: region_hemi_subdivision (e.g., AMY_RH_lAMY)
+            region_network_key = f"{parts[0]}_{parts[2]}"
+            display_label = f"{parts[1]} {parts[2]}"
+            return region_network_key, display_label, label
+        else:
+            return 'Unknown', label, label
+
+    # Group channels by region+network
+    if channel_labels is None:
+        channel_labels = [f'Ch{i+1}' for i in range(n_channels)]
+
+    region_network_groups = {}
+    for ch_idx, label in enumerate(channel_labels):
+        region_network_key, display_label, full_label = parse_channel_label(label)
+        if region_network_key not in region_network_groups:
+            region_network_groups[region_network_key] = []
+        region_network_groups[region_network_key].append((ch_idx, display_label, full_label))
+
+    # Create one figure per region+network group
+    figures = []
+
+    for region_network_key, channels in region_network_groups.items():
+        n_channels_in_group = len(channels)
+
+        # Compute integrated MHS for each band (integrating over time and channels)
+        mhs_per_band = []
+
+        for band_data in bands_data:
+            inst_freq = band_data['instantaneous_frequency']  # (channels, samples)
+            inst_amp = band_data['instantaneous_amplitude']    # (channels, samples)
+            band_name = band_data['band_name']
+
+            # Initialize MHS for this band
+            mhs_band_integrated = np.zeros(n_freq_bins)
+
+            # Integrate over all channels in this group
+            for ch_idx, display_label, full_label in channels:
+                # Integrate over time for this channel
+                for t_idx in range(n_samples):
+                    freq_val = inst_freq[ch_idx, t_idx]
+                    amp_val = inst_amp[ch_idx, t_idx]
+
+                    if 0 <= freq_val < nyquist_freq:
+                        freq_bin_idx = np.searchsorted(freq_bins, freq_val) - 1
+                        freq_bin_idx = np.clip(freq_bin_idx, 0, n_freq_bins - 1)
+
+                        # Accumulate energy (integrate over time and channels)
+                        mhs_band_integrated[freq_bin_idx] += amp_val ** 2
+
+            # Normalize by time samples
+            mhs_band_integrated /= n_samples
+
+            mhs_per_band.append((mhs_band_integrated, band_name))
+
+        # Create subplot layout - one subplot per band
+        n_cols = 2
+        n_rows = int(np.ceil(n_bands / n_cols))
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows), sharex=True)
+
+        # Handle single row case
+        if n_rows == 1:
+            axes = axes.reshape(1, -1)
+
+        for band_idx in range(n_bands):
+            row = band_idx // n_cols
+            col = band_idx % n_cols
+            ax = axes[row, col]
+
+            mhs_band_integrated, band_name = mhs_per_band[band_idx]
+
+            # Plot integrated marginal spectrum for this band
+            ax.plot(freq_bin_centers, mhs_band_integrated, color='black', linewidth=0.8, alpha=0.9)
+
+            ax.set_ylabel('Energy', fontsize=10, fontweight='bold')
+            ax.set_title(f'{band_name} - Marginal Spectrum\n({n_channels_in_group} Channels Integrated)',
+                        fontsize=11, fontweight='bold', pad=8)
+            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+
+        # Hide unused subplots
+        for band_idx in range(n_bands, n_rows * n_cols):
+            row = band_idx // n_cols
+            col = band_idx % n_cols
+            axes[row, col].axis('off')
+
+        # Set x-label on bottom plots
+        for col in range(n_cols):
+            if (n_rows - 1) * n_cols + col < n_bands:
+                axes[-1, col].set_xlabel('Frequency (Hz)', fontsize=11, fontweight='bold')
+
+        # Figure title
+        title_parts = [f'Band Marginal Hilbert Spectrum: {region_network_key}']
+        if subject_id:
+            title_parts.append(f'({subject_id})')
+
+        fig.suptitle(' - '.join(title_parts), fontsize=16, fontweight='bold', y=0.995)
+
+        plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.99])
+
+        figures.append((fig, region_network_key))
+
+    return figures
+
+
 def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name="Group1", group2_name="Group2"):
     """
     Compare functional connectivity patterns between two groups.
@@ -3087,21 +3829,15 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         for i, channel_label in enumerate(all_channel_labels):
             activity_timeseries[channel_label] = all_channels[i]
 
-        # Compute envelope of analytic signal
+    # Compute envelope of analytic signal
         analytic_envelope = np.abs(analytic_timeseries) # Activity
 
         # Apply low-pass filter for smoothing envelope
-
-        # Signal properties
-        TR = 800e-3 # Repetition Time [seconds]
-        sampling_rate = 1 / TR  # 1.25 Hz
-        nyquist_frequency = 0.5 * sampling_rate  # 0.625 Hz
-
         # Filter properties
         filter_order = 2
         cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
                                 # Digital filter critical frequencies must be 0 < Wn < 1
-        normalized_cutoff = cutoff_frequency / nyquist_frequency
+        normalized_cutoff = cutoff_frequency / NYQUIST_FREQUENCY
         b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
 
         filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
@@ -3200,11 +3936,64 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             print(f"Modes shape: {time_modes.shape}")
             print(f"Signal reconstruction error: {reconstruction_error:.4f}")
 
+        # ===== HILBERT SPECTRAL ANALYSIS =====
+        if verbose:
+            print(f"\n{'='*80}")
+            print("HILBERT SPECTRAL ANALYSIS")
+            print(f"{'='*80}")
+
+        # Apply Hilbert Transform to each mode to extract instantaneous properties
+        if verbose:
+            print("\nComputing Hilbert Transform per mode...")
+
+        hsa_data = compute_hilbert_transform_per_mode(
+            time_modes=time_modes,
+            sampling_rate=SAMPLING_RATE
+        )
+
+        if verbose:
+            print(f"  Processed {hsa_data['n_modes']} modes")
+            print(f"  Channels per mode: {hsa_data['n_channels']}")
+            print(f"  Time samples: {hsa_data['n_samples']}")
+
+        # Store HSA results in mvmd_result
+        mvmd_result['hilbert_spectral_analysis'] = hsa_data
+
+        if verbose:
+            print(f"\n{'='*80}")
+            print("HILBERT SPECTRAL ANALYSIS COMPLETE")
+            print(f"{'='*80}")
+
         # Compute slow-band FC after MVMD decomposition
         slow_band_fc_results = {}
         if mvmd_result['success']:
             # Combine modes into slow-bands
             band_signals = combine_slow_band_components(time_modes, center_freqs, verbose=verbose)
+
+            # ===== BAND-WISE HILBERT SPECTRAL ANALYSIS =====
+            if verbose:
+                print(f"\n{'='*80}")
+                print("BAND-WISE HILBERT SPECTRAL ANALYSIS")
+                print(f"{'='*80}")
+                print("\nComputing Hilbert Transform per band...")
+
+            hsa_band_data = compute_hilbert_transform_per_band(
+                band_signals=band_signals,
+                sampling_rate=SAMPLING_RATE
+            )
+
+            if verbose:
+                print(f"  Processed {hsa_band_data['n_bands']} bands")
+                print(f"  Channels per band: {hsa_band_data['n_channels']}")
+                print(f"  Time samples: {hsa_band_data['n_samples']}")
+
+            # Store band HSA results in mvmd_result
+            mvmd_result['hilbert_spectral_analysis_bands'] = hsa_band_data
+
+            if verbose:
+                print(f"\n{'='*80}")
+                print("BAND-WISE HILBERT SPECTRAL ANALYSIS COMPLETE")
+                print(f"{'='*80}")
 
             for band_key in ['6', '5', '4', '3', '2', '1']:
                 band_data = band_signals.get(band_key)
@@ -3774,22 +4563,43 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     figures_saved_count = 0
 
     # Create output directories for different analysis types
-    fc_figures_dir = None
+    figures_base_dir = run_parent_dir / 'figures' if save_figures and create_plots else None
+    fc_subject_dir = None
+    fc_group_dir = None
     mvmd_figures_dir = None
+    hsa_figures_dir = None
+    marginal_hsa_figures_dir = None
     roi_figures_dir = None
 
     if save_figures and create_plots:
-        fc_figures_dir = run_parent_dir / 'figures' / 'fc_analysis'
-        mvmd_figures_dir = run_parent_dir / 'figures' / 'mvmd_analysis'
-        roi_figures_dir = run_parent_dir / 'figures' / 'roi_extraction'
+        # FC directories
+        fc_subject_dir = figures_base_dir / 'fc_subject'
+        fc_group_dir = figures_base_dir / 'fc_group'
 
-        fc_figures_dir.mkdir(parents=True, exist_ok=True)
+        # MVMD decomposition directory
+        mvmd_figures_dir = figures_base_dir / 'mvmd_analysis'
+
+        # Hilbert Spectral Analysis directories
+        hsa_figures_dir = figures_base_dir / 'hilbert_spectral_analysis'
+        marginal_hsa_figures_dir = figures_base_dir / 'marginal_hilbert_spectral_analysis'
+
+        # ROI extraction directory
+        roi_figures_dir = figures_base_dir / 'roi_extraction'
+
+        # Create base directories
+        fc_subject_dir.mkdir(parents=True, exist_ok=True)
+        fc_group_dir.mkdir(parents=True, exist_ok=True)
         mvmd_figures_dir.mkdir(parents=True, exist_ok=True)
+        hsa_figures_dir.mkdir(parents=True, exist_ok=True)
+        marginal_hsa_figures_dir.mkdir(parents=True, exist_ok=True)
         roi_figures_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n[INFO] Figures will be saved to:")
-        print(f"  FC analysis: {fc_figures_dir}")
-        print(f"  MVMD analysis: {mvmd_figures_dir}")
+        print(f"  FC (subject-level): {fc_subject_dir}")
+        print(f"  FC (group-level): {fc_group_dir}")
+        print(f"  MVMD decomposition: {mvmd_figures_dir}")
+        print(f"  Hilbert Spectral Analysis: {hsa_figures_dir}")
+        print(f"  Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
         print(f"  ROI extraction: {roi_figures_dir}")
 
     if create_plots and total_success > 0:
@@ -3812,7 +4622,11 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'fc_slow_bands': [],
             'fc_group_avg': [],
             'mvmd_modes': [],
-            'mvmd_slow_bands': []
+            'mvmd_slow_bands': [],
+            'hsa_multivariate': [],
+            'hsa_marginal': [],
+            'hsa_band_multivariate': [],
+            'hsa_band_marginal': []
         }
 
         for subject_id, result in all_results.items():
@@ -3839,7 +4653,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plot_batches['roi_cortical'].append({
                         'subject_id': subject_id,
                         'data': cortical_data,
-                        'save_path': roi_figures_dir / f'{subject_id}_roi_timeseries_cortical_yeo17.svg' if save_figures and roi_figures_dir else None
+                        'save_dir': roi_figures_dir if save_figures and roi_figures_dir else None
                     })
                     plots_for_subject += 1
 
@@ -3850,7 +4664,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plot_batches['roi_subcortical'].append({
                         'subject_id': subject_id,
                         'data': subcortical_data,
-                        'save_path': roi_figures_dir / f'{subject_id}_roi_timeseries_subcortical_tian.svg' if save_figures and roi_figures_dir else None
+                        'save_dir': roi_figures_dir if save_figures and roi_figures_dir else None
                     })
                     plots_for_subject += 1
 
@@ -3914,7 +4728,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         'data': static_fc_data,
                         'mask_diagonal': mask_diagonal,
                         'mask_nonsignificant': mask_nonsignificant,
-                        'save_path': fc_figures_dir / f'{subject_id}_static_fc_pearson_correlation.svg' if save_figures and fc_figures_dir else None
+                        'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
                     })
                     plots_for_subject += 1
 
@@ -3930,7 +4744,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                             'data': band_fc_data,
                             'mask_diagonal': mask_diagonal,
                             'mask_nonsignificant': mask_nonsignificant,
-                            'save_path': fc_figures_dir / f'{subject_id}_{band_key}_fc.svg' if save_figures and fc_figures_dir else None
+                            'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
                         })
                         plots_for_subject += 1
 
@@ -3973,6 +4787,77 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     channel_count = mvmd_data['original'].shape[0] if 'original' in mvmd_data else 0
                     plots_for_subject += channel_count
 
+            # 8. Prepare Multivariate Hilbert Spectrum plots
+            if result.get('mvmd'):
+                mvmd_data = result['mvmd']
+                if mvmd_data.get('hilbert_spectral_analysis') is not None:
+                    hsa_data = mvmd_data['hilbert_spectral_analysis']
+                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+                    channel_label_map = mvmd_data.get('channel_label_map', {})
+                    # Convert channel_label_map to list of labels
+                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+
+                    plot_batches['hsa_multivariate'].append({
+                        'subject_id': subject_id,
+                        'hsa_data': hsa_data,
+                        'center_freqs': center_freqs,
+                        'channel_labels': channel_labels,
+                        'save_dir': hsa_figures_dir if save_figures and hsa_figures_dir else None
+                    })
+                    plots_for_subject += 1
+
+            # 9. Prepare Marginal Spectrum per Mode plots
+            if result.get('mvmd'):
+                mvmd_data = result['mvmd']
+                if mvmd_data.get('hilbert_spectral_analysis') is not None:
+                    hsa_data = mvmd_data['hilbert_spectral_analysis']
+                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+                    channel_label_map = mvmd_data.get('channel_label_map', {})
+                    # Convert channel_label_map to list of labels
+                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+
+                    plot_batches['hsa_marginal'].append({
+                        'subject_id': subject_id,
+                        'hsa_data': hsa_data,
+                        'center_freqs': center_freqs,
+                        'channel_labels': channel_labels,
+                        'save_dir': marginal_hsa_figures_dir if save_figures and marginal_hsa_figures_dir else None
+                    })
+                    plots_for_subject += 1
+
+            # 10. Prepare Band-wise Hilbert Spectrum plots
+            if result.get('mvmd'):
+                mvmd_data = result['mvmd']
+                if mvmd_data.get('hilbert_spectral_analysis_bands') is not None:
+                    hsa_band_data = mvmd_data['hilbert_spectral_analysis_bands']
+                    channel_label_map = mvmd_data.get('channel_label_map', {})
+                    # Convert channel_label_map to list of labels
+                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+
+                    plot_batches['hsa_band_multivariate'].append({
+                        'subject_id': subject_id,
+                        'hsa_band_data': hsa_band_data,
+                        'channel_labels': channel_labels,
+                        'save_dir': hsa_figures_dir if save_figures and hsa_figures_dir else None
+                    })
+                    plots_for_subject += 1
+
+            # 11. Prepare Band-wise Marginal Spectrum plots
+            if result.get('mvmd'):
+                mvmd_data = result['mvmd']
+                if mvmd_data.get('hilbert_spectral_analysis_bands') is not None:
+                    hsa_band_data = mvmd_data['hilbert_spectral_analysis_bands']
+                    channel_label_map = mvmd_data.get('channel_label_map', {})
+                    # Convert channel_label_map to list of labels
+                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+
+                    plot_batches['hsa_band_marginal'].append({
+                        'subject_id': subject_id,
+                        'hsa_band_data': hsa_band_data,
+                        'channel_labels': channel_labels,
+                        'save_dir': marginal_hsa_figures_dir if save_figures and marginal_hsa_figures_dir else None
+                    })
+                    plots_for_subject += 1
 
             if plots_for_subject > 0:
                 individual_plots_created += 1
@@ -3992,7 +4877,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     'data': avg_data,
                     'mask_diagonal': mask_diagonal,
                     'mask_nonsignificant': False,  # No p-values for group averages
-                    'save_path': fc_figures_dir / f'group_avg_{group_name_clean}_static_fc.svg' if save_figures and fc_figures_dir else None,
+                    'save_path': fc_group_dir / f'group_avg_{group_name_clean}_static_fc.svg' if save_figures and fc_group_dir else None,
                     'is_slow_band': False
                 })
 
@@ -4006,7 +4891,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         'data': avg_data,
                         'mask_diagonal': mask_diagonal,
                         'mask_nonsignificant': False,
-                        'save_path': fc_figures_dir / f'group_avg_{group_name_clean}_{band_key}_fc.svg' if save_figures and fc_figures_dir else None,
+                        'save_path': fc_group_dir / f'group_avg_{group_name_clean}_{band_key}_fc.svg' if save_figures and fc_group_dir else None,
                         'is_slow_band': True,
                         'band_key': band_key
                     })
@@ -4020,13 +4905,16 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 1: ROI Cortical Timeseries
         if plot_batches['roi_cortical']:
-            print(f"\n[Batch 1/7] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            print(f"\n[Batch 1/11] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
                 for fig in figures:
-                    if plot_info['save_path']:
-                        # Generate separate filenames for each ROI
+                    if plot_info['save_dir']:
+                        # Create subject directory
+                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
+
                         # Extract ROI name from figure title
                         fig_title = fig._suptitle.get_text() if fig._suptitle else ''
                         roi_name = 'unknown'
@@ -4035,10 +4923,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         elif 'PFCv' in fig_title:
                             roi_name = 'PFCv'
 
-                        # Create ROI-specific filename
-                        save_path = plot_info['save_path']
-                        save_path_with_roi = save_path.parent / f"{save_path.stem}_{roi_name}{save_path.suffix}"
-                        fig.savefig(save_path_with_roi, format='svg', bbox_inches='tight', dpi=300)
+                        # Create ROI-specific filename in subject directory
+                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_cortical.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
                     if not show_plots:
                         plt.close(fig)
@@ -4048,23 +4935,25 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Batch 2: ROI Subcortical Timeseries
         if plot_batches['roi_subcortical']:
-            print(f"\n[Batch 2/7] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            print(f"\n[Batch 2/11] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
                 # plot_roi_timeseries_result now returns a list of figures (one per ROI)
                 for fig in figures:
-                    if plot_info['save_path']:
-                        # Generate separate filenames for each ROI
+                    if plot_info['save_dir']:
+                        # Create subject directory
+                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
+
                         # Extract ROI name from figure title
                         fig_title = fig._suptitle.get_text() if fig._suptitle else ''
                         roi_name = 'unknown'
                         if 'AMY' in fig_title:
                             roi_name = 'AMY'
 
-                        # Create ROI-specific filename
-                        save_path = plot_info['save_path']
-                        save_path_with_roi = save_path.parent / f"{save_path.stem}_{roi_name}{save_path.suffix}"
-                        fig.savefig(save_path_with_roi, format='svg', bbox_inches='tight', dpi=300)
+                        # Create ROI-specific filename in subject directory
+                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_subcortical.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                         figures_saved_count += 1
                     if not show_plots:
                         plt.close(fig)
@@ -4072,9 +4961,139 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 3: Static FC Analysis
+        # Batch 3: Multivariate Hilbert Spectrum
+        if plot_batches['hsa_multivariate']:
+            print(f"\n[Batch 3/11] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
+
+            for plot_info in plot_batches['hsa_multivariate']:
+                # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
+                hs_results = plot_multivariate_hilbert_spectrum(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
+
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+
+                    for hs_fig, region_network_key in hs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
+                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for hs_fig, _ in hs_results:
+                        plt.close(hs_fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 4: Marginal Spectrum per Mode
+        if plot_batches['hsa_marginal']:
+            print(f"\n[Batch 4/11] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
+
+            for plot_info in plot_batches['hsa_marginal']:
+                # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
+                mhs_results = plot_marginal_spectrum_per_mode(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
+
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+
+                    for mhs_fig, region_network_key in mhs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
+                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for mhs_fig, _ in mhs_results:
+                        plt.close(mhs_fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 5: Band-wise Hilbert Spectrum
+        if plot_batches['hsa_band_multivariate']:
+            print(f"\n[Batch 5/11] Creating {len(plot_batches['hsa_band_multivariate'])} Band Hilbert Spectrum plots...")
+
+            for plot_info in plot_batches['hsa_band_multivariate']:
+                # Create band-wise HS plot (returns list of tuples: (figure, region_network_key))
+                hs_band_results = plot_band_hilbert_spectrum(
+                    hsa_band_data=plot_info['hsa_band_data'],
+                    subject_id=plot_info['subject_id'],
+                    channel_labels=plot_info['channel_labels']
+                )
+
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/slow-band/ directory structure
+                    subject_band_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'slow-band'
+                    subject_band_dir.mkdir(parents=True, exist_ok=True)
+
+                    for hs_fig, region_network_key in hs_band_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_band_dir / f'{region_network_key}_band_hs.svg'
+                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for hs_fig, _ in hs_band_results:
+                        plt.close(hs_fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_band_multivariate'])} Band Hilbert Spectrum plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 6: Band-wise Marginal Spectrum
+        if plot_batches['hsa_band_marginal']:
+            print(f"\n[Batch 6/11] Creating {len(plot_batches['hsa_band_marginal'])} Band Marginal Spectrum plots...")
+
+            for plot_info in plot_batches['hsa_band_marginal']:
+                # Create band-wise marginal spectrum plot (returns list of tuples: (figure, region_network_key))
+                mhs_band_results = plot_band_marginal_spectrum(
+                    hsa_band_data=plot_info['hsa_band_data'],
+                    subject_id=plot_info['subject_id'],
+                    channel_labels=plot_info['channel_labels']
+                )
+
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/slow-band/ directory structure
+                    subject_band_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'slow-band'
+                    subject_band_dir.mkdir(parents=True, exist_ok=True)
+
+                    for mhs_fig, region_network_key in mhs_band_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_band_dir / f'{region_network_key}_band_marginal_spectrum.svg'
+                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for mhs_fig, _ in mhs_band_results:
+                        plt.close(mhs_fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_band_marginal'])} Band Marginal Spectrum plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 7: Static FC Analysis
         if plot_batches['fc_static']:
-            print(f"\n[Batch 3/7] Creating {len(plot_batches['fc_static'])} static FC plots...")
+            print(f"\n[Batch 7/11] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -4095,14 +5114,18 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 fc_fig_inter.suptitle(f'FC Analysis (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
                 fc_fig_ipsi.suptitle(f'FC Analysis (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
 
-                if plot_info['save_path']:
+                if plot_info['save_dir']:
+                    # Create subject directory
+                    subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_fc_dir.mkdir(parents=True, exist_ok=True)
+
                     # Save interhemispheric figure
-                    save_path_inter = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_interhemispheric{plot_info['save_path'].suffix}"
+                    save_path_inter = subject_fc_dir / 'static_fc_interhemispheric.svg'
                     fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
 
                     # Save ipsilateral figure
-                    save_path_ipsi = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_ipsilateral{plot_info['save_path'].suffix}"
+                    save_path_ipsi = subject_fc_dir / 'static_fc_ipsilateral.svg'
                     fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
 
@@ -4113,9 +5136,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 4: Slow-Band FC Analysis
+        # Batch 8: Slow-Band FC Analysis
         if plot_batches['fc_slow_bands']:
-            print(f"\n[Batch 4/7] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
+            print(f"\n[Batch 8/11] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -4143,14 +5166,18 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 fc_fig_inter.suptitle(f'Slow-{band_number} FC (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
                 fc_fig_ipsi.suptitle(f'Slow-{band_number} FC (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
 
-                if plot_info['save_path']:
+                if plot_info['save_dir']:
+                    # Create subject directory
+                    subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_fc_dir.mkdir(parents=True, exist_ok=True)
+
                     # Save interhemispheric figure
-                    save_path_inter = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_interhemispheric{plot_info['save_path'].suffix}"
+                    save_path_inter = subject_fc_dir / f'slow_{band_number}_fc_interhemispheric.svg'
                     fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
 
                     # Save ipsilateral figure
-                    save_path_ipsi = plot_info['save_path'].parent / f"{plot_info['save_path'].stem}_ipsilateral{plot_info['save_path'].suffix}"
+                    save_path_ipsi = subject_fc_dir / f'slow_{band_number}_fc_ipsilateral.svg'
                     fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
                     figures_saved_count += 1
 
@@ -4161,9 +5188,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 5: Group-Averaged FC Analysis
+        # Batch 9: Group-Averaged FC Analysis
         if plot_batches['fc_group_avg']:
-            print(f"\n[Batch 5/7] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
+            print(f"\n[Batch 9/11] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
             for plot_info in plot_batches['fc_group_avg']:
                 # Compute connectivity patterns for group-averaged matrix
                 # Use computed p-values from statistical testing
@@ -4239,13 +5266,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 6: MVMD Mode Decomposition
+        # Batch 10: MVMD Mode Decomposition
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-            print(f"\n[Batch 6/7] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+            print(f"\n[Batch 10/11] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
 
-            # Process in sub-batches of 20 figures to avoid memory issues
-            MAX_FIGS_PER_BATCH = 20
+            # Process in sub-batches of 28 figures to avoid memory issues
+            MAX_FIGS_PER_BATCH = 28
             current_batch_figs = []
 
             for plot_info in plot_batches['mvmd_modes']:
@@ -4296,10 +5323,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 7: MVMD Slow-Band Decomposition
+        # Batch 11: MVMD Slow-Band Decomposition
         if plot_batches['mvmd_slow_bands']:
             total_band_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_slow_bands'])
-            print(f"\n[Batch 7/7] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
+            print(f"\n[Batch 11/11] Creating {total_band_figs} MVMD slow-band plots ({len(plot_batches['mvmd_slow_bands'])} subjects)...")
             current_batch_figs = []
 
             for plot_info in plot_batches['mvmd_slow_bands']:
@@ -4357,8 +5384,11 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Summary of saved figures
         if save_figures and figures_saved_count > 0:
             print(f"✓ Saved {figures_saved_count} figures across multiple directories:")
-            print(f"  FC analysis: {fc_figures_dir}")
+            print(f"  FC (subject-level): {fc_subject_dir}")
+            print(f"  FC (group-level): {fc_group_dir}")
             print(f"  MVMD analysis: {mvmd_figures_dir}")
+            print(f"  Hilbert Spectral Analysis: {hsa_figures_dir}")
+            print(f"  Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
             print(f"  ROI extraction: {roi_figures_dir}")
     elif not create_plots:
         print(f"\n[INFO] Plot creation disabled (CREATE_PLOTS=False)")
@@ -4392,8 +5422,11 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"  - Group averages: {group_avg_output_dir}")
         if figures_saved_count > 0:
             print(f"  - Figures ({figures_saved_count} total):")
-            print(f"    - FC analysis: {fc_figures_dir}")
+            print(f"    - FC (subject-level): {fc_subject_dir}")
+            print(f"    - FC (group-level): {fc_group_dir}")
             print(f"    - MVMD analysis: {mvmd_figures_dir}")
+            print(f"    - Hilbert Spectral Analysis: {hsa_figures_dir}")
+            print(f"    - Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
             print(f"    - ROI extraction: {roi_figures_dir}")
         print(f"  - Analysis log: {log_file}")
         print(f"\nRun ID: {run_timestamp}")
