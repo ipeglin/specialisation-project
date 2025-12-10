@@ -2818,8 +2818,8 @@ def plot_multivariate_hilbert_spectrum(hsa_data, subject_id=None, center_freqs=N
     freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
     freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
 
-    # Convert time to seconds
-    time_seconds = np.arange(n_samples) / sampling_rate
+    # Create volume indices (discrete samples)
+    volumes = np.arange(n_samples)
 
     # Helper function to parse channel labels and group by region+network
     def parse_channel_label(label):
@@ -2893,13 +2893,13 @@ def plot_multivariate_hilbert_spectrum(hsa_data, subject_id=None, center_freqs=N
             hs_log = np.log10(hilbert_spectrum_superimposed + 1e-10)
 
             # Plot as heatmap with hot colormap
-            extent = [time_seconds[0], time_seconds[-1], freq_bin_centers[0], freq_bin_centers[-1]]
+            extent = [volumes[0], volumes[-1], freq_bin_centers[0], freq_bin_centers[-1]]
             im = ax.imshow(hs_log, aspect='auto', origin='lower', cmap='hot',
                            extent=extent, interpolation='bilinear')
 
             # Labels
             ax.set_title(display_label, fontsize=10, fontweight='bold')
-            ax.set_xlabel('Time (s)', fontsize=9)
+            ax.set_xlabel('Volumes', fontsize=9)
             if col_idx == 0:
                 ax.set_ylabel('Frequency (Hz)', fontsize=9, fontweight='bold')
 
@@ -3101,8 +3101,8 @@ def plot_band_hilbert_spectrum(hsa_band_data, subject_id=None, channel_labels=No
     freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
     freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
 
-    # Convert time to seconds
-    time_seconds = np.arange(n_samples) / sampling_rate
+    # Create volume indices (discrete samples)
+    volumes = np.arange(n_samples)
 
     # Helper function to parse channel labels and group by region+network
     def parse_channel_label(label):
@@ -3181,7 +3181,7 @@ def plot_band_hilbert_spectrum(hsa_band_data, subject_id=None, channel_labels=No
                 hs_log = np.log10(hilbert_spectrum + 1e-10)
 
                 # Plot as heatmap with hot colormap
-                extent = [time_seconds[0], time_seconds[-1], freq_bin_centers[0], freq_bin_centers[-1]]
+                extent = [volumes[0], volumes[-1], freq_bin_centers[0], freq_bin_centers[-1]]
                 im = ax.imshow(hs_log, aspect='auto', origin='lower', cmap='hot',
                                extent=extent, interpolation='bilinear')
 
@@ -3191,7 +3191,7 @@ def plot_band_hilbert_spectrum(hsa_band_data, subject_id=None, channel_labels=No
                 if band_idx == 0:
                     ax.set_title(display_label, fontsize=9, fontweight='bold')
                 if band_idx == n_bands - 1:
-                    ax.set_xlabel('Time (s)', fontsize=8)
+                    ax.set_xlabel('Volumes', fontsize=8)
 
                 ax.tick_params(labelsize=7)
 
