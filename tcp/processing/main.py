@@ -622,11 +622,18 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                 # Interhemispheric (same region, different hemispheres)
                 if roi1_region == roi2_region and roi1_hemi != roi2_hemi:
+                    # Extract network information (3rd field in label)
+                    roi1_network = roi1_parts[2] if len(roi1_parts) > 2 else None
+                    roi2_network = roi2_parts[2] if len(roi2_parts) > 2 else None
+
                     results['interhemispheric']['pairs'][pair_key] = {
                         'correlation': corr_val,
                         'p_value': p_val,
                         'significant': is_significant,
-                        'region': roi1_region
+                        'region': roi1_region,
+                        'network': roi1_network,  # NEW: Store network info
+                        'roi1_index': i,  # NEW: Store indices for later use
+                        'roi2_index': j
                     }
 
                 # Cross-regional (different regions)
@@ -677,6 +684,66 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
             'significant_pairs': significant_count,
             'significance_percentage': significance_pct
         }
+
+    # NEW: Group interhemispheric pairs by region+network and compute mean Fisher-Z coherence
+    interhemi_pairs = results['interhemispheric']['pairs']
+    network_pairs = {}
+    network_stats = {}
+
+    for pair_key, pair_data in interhemi_pairs.items():
+        region = pair_data.get('region')
+        network = pair_data.get('network')
+
+        # Skip if network info is missing
+        if region is None or network is None:
+            continue
+
+        # Create network-level key (e.g., 'PFCm_DefaultA', 'AMY_lAMY')
+        network_key = f"{region}_{network}"
+
+        # Initialize network group if first time seeing this network
+        if network_key not in network_pairs:
+            network_pairs[network_key] = {
+                'correlations': [],
+                'fisher_z_values': [],
+                'p_values': [],
+                'parcel_pairs': [],
+                'lh_indices': [],
+                'rh_indices': []
+            }
+
+        # Add this pair's data to the network group
+        network_pairs[network_key]['correlations'].append(pair_data['correlation'])
+        network_pairs[network_key]['p_values'].append(pair_data.get('p_value'))
+        network_pairs[network_key]['parcel_pairs'].append(pair_key)
+        # Note: We don't know which is LH vs RH from just the pair, but we store indices
+        network_pairs[network_key]['lh_indices'].append(pair_data.get('roi1_index'))
+        network_pairs[network_key]['rh_indices'].append(pair_data.get('roi2_index'))
+
+    # Compute mean Fisher-Z coherence for each network
+    for network_key, network_data in network_pairs.items():
+        correlations = np.array(network_data['correlations'])
+
+        # Apply Fisher Z-transformation
+        fisher_z = fisher_r_to_z(correlations)
+        network_data['fisher_z_values'] = fisher_z.tolist()
+
+        # Compute mean coherence (in Fisher-Z space)
+        mean_fisher_z = np.nanmean(fisher_z)
+
+        # Store network-level statistics
+        p_values_array = np.array([pv for pv in network_data['p_values'] if pv is not None])
+        network_stats[network_key] = {
+            'mean_fisher_z': float(mean_fisher_z),
+            'mean_correlation': float(np.nanmean(correlations)),  # For interpretation
+            'n_parcel_pairs': len(correlations),
+            'n_significant': int(np.sum(p_values_array < alpha)) if len(p_values_array) > 0 else 0,
+            'all_fisher_z_values': fisher_z.tolist()  # For later analysis
+        }
+
+    # Add network-level results to interhemispheric category
+    results['interhemispheric']['network_pairs'] = network_pairs
+    results['interhemispheric']['network_stats'] = network_stats
 
     return results
 
@@ -1482,9 +1549,19 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
             connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
 
+            # NEW: Extract network-level interhemispheric coherence
+            static_interhemi_networks = connectivity_patterns['interhemispheric'].get('network_stats', {})
+
             if verbose:
                 pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric']['pairs'].keys())
                 print(f"\nInterhemispheric connections (same order): \n\t- {pattern_labels}")
+
+                # NEW: Print network-level coherence summary
+                if static_interhemi_networks:
+                    print(f"\nInterhemispheric Network Coherence (Fisher-Z):")
+                    for network_key, network_data in static_interhemi_networks.items():
+                        print(f"  {network_key}: mean_z = {network_data['mean_fisher_z']:.3f}, "
+                              f"n_pairs = {network_data['n_parcel_pairs']}")
 
             if verbose:
                 print(f"\nConnectivity Pattern Analysis:")
@@ -1497,6 +1574,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'static_fc_labels': fc_labels,
                 'static_fc_pvalues': fc_pvalues,
                 'static_connectivity_patterns': connectivity_patterns,
+                'interhemispheric_network_coherence': static_interhemi_networks,  # NEW
                 'timeseries_used': fc_timeseries,
                 'channel_label_map': channel_label_map
             }
@@ -1621,8 +1699,12 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                     alpha=0.05
                 )
 
+                # NEW: Extract network-level interhemispheric coherence for this band
+                band_interhemi_networks = band_connectivity_patterns['interhemispheric'].get('network_stats', {})
+
                 # Add metadata to results
                 band_fc['connectivity_patterns'] = band_connectivity_patterns
+                band_fc['interhemispheric_network_coherence'] = band_interhemi_networks  # NEW
                 band_fc['components_used'] = band_fc['mode_indices']  # Alias for backward compatibility
                 band_fc['center_freqs'] = band_fc['mode_frequencies']  # Alias for backward compatibility
                 band_fc['channel_label_map'] = mvmd_channel_label_map
@@ -1961,6 +2043,92 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"FC analysis available:")
     print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
     print(f"  Non-anhedonic: {len(non_anhedonic_fc_results)} subjects")
+
+    # ===== NEW: AGGREGATE INTERHEMISPHERIC NETWORK COHERENCE BY GROUP =====
+    print(f"\n{'='*80}")
+    print(f"AGGREGATING INTERHEMISPHERIC NETWORK COHERENCE")
+    print(f"{'='*80}")
+
+    grouped_interhemi_coherence = {
+        'Non-anhedonic': {},
+        'Low-Anhedonic': {},
+        'High-Anhedonic': {}
+    }
+
+    # Process non-anhedonic (control) group
+    for subject_id, result in non_anhedonic_results.items():
+        if not result.get('success'):
+            continue
+
+        static_fc = result.get('static_functional_connectivity', {})
+        network_coherence = static_fc.get('interhemispheric_network_coherence', {})
+
+        for network_key, network_stats in network_coherence.items():
+            if network_key not in grouped_interhemi_coherence['Non-anhedonic']:
+                grouped_interhemi_coherence['Non-anhedonic'][network_key] = {
+                    'subject_ids': [],
+                    'mean_fisher_z_values': [],
+                    'n_parcel_pairs_per_subject': []
+                }
+
+            grouped_interhemi_coherence['Non-anhedonic'][network_key]['subject_ids'].append(subject_id)
+            grouped_interhemi_coherence['Non-anhedonic'][network_key]['mean_fisher_z_values'].append(
+                network_stats['mean_fisher_z']
+            )
+            grouped_interhemi_coherence['Non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
+                network_stats['n_parcel_pairs']
+            )
+
+    # Process anhedonic subjects (split by low/high)
+    for subject_id, result in anhedonic_results.items():
+        if not result.get('success'):
+            continue
+
+        # Determine if low or high anhedonic
+        if subject_id in low_anhedonic_subjects:
+            group_name = 'Low-Anhedonic'
+        elif subject_id in high_anhedonic_subjects:
+            group_name = 'High-Anhedonic'
+        else:
+            print(f"Warning: {subject_id} in anhedonic_results but not in low/high lists, skipping")
+            continue
+
+        static_fc = result.get('static_functional_connectivity', {})
+        network_coherence = static_fc.get('interhemispheric_network_coherence', {})
+
+        for network_key, network_stats in network_coherence.items():
+            if network_key not in grouped_interhemi_coherence[group_name]:
+                grouped_interhemi_coherence[group_name][network_key] = {
+                    'subject_ids': [],
+                    'mean_fisher_z_values': [],
+                    'n_parcel_pairs_per_subject': []
+                }
+
+            grouped_interhemi_coherence[group_name][network_key]['subject_ids'].append(subject_id)
+            grouped_interhemi_coherence[group_name][network_key]['mean_fisher_z_values'].append(
+                network_stats['mean_fisher_z']
+            )
+            grouped_interhemi_coherence[group_name][network_key]['n_parcel_pairs_per_subject'].append(
+                network_stats['n_parcel_pairs']
+            )
+
+    # Filter out NaN values and track excluded subjects
+    for group_name, networks in grouped_interhemi_coherence.items():
+        for network_key, network_data in networks.items():
+            values = np.array(network_data['mean_fisher_z_values'])
+
+            # Remove NaN values (subjects with no valid pairs for this network)
+            valid_mask = ~np.isnan(values)
+
+            network_data['valid_subject_ids'] = [
+                sid for sid, valid in zip(network_data['subject_ids'], valid_mask) if valid
+            ]
+            network_data['valid_fisher_z_values'] = values[valid_mask].tolist()
+            network_data['n_valid_subjects'] = int(np.sum(valid_mask))
+            network_data['n_excluded_subjects'] = int(np.sum(~valid_mask))
+
+    print(f"Network coherence aggregation complete")
+    print(f"  Groups processed: {list(grouped_interhemi_coherence.keys())}")
 
     # ===== GROUP COMPARISON ANALYSIS =====
     group_comparison_results = None
@@ -2762,6 +2930,102 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"\n[INFO] Plot creation disabled (CREATE_PLOTS=False)")
     else:
         print(f"\n[INFO] No plots created (no successful subjects)")
+
+    # ===== INTERHEMISPHERIC NETWORK COHERENCE VALIDATION SUMMARY =====
+    print(f"\n{'='*80}")
+    print(f"INTERHEMISPHERIC NETWORK COHERENCE EXTRACTION SUMMARY")
+    print(f"{'='*80}")
+
+    # Get all unique networks across all groups
+    all_networks = set()
+    for group_data in grouped_interhemi_coherence.values():
+        all_networks.update(group_data.keys())
+    all_networks = sorted(all_networks)
+
+    print(f"\nTotal Networks Detected: {len(all_networks)}")
+    if all_networks:
+        print(f"Networks: {', '.join(all_networks)}")
+
+    # Show detailed stats for each network
+    for network_key in all_networks:
+        print(f"\n{'─'*80}")
+        print(f"Network: {network_key}")
+        print(f"{'─'*80}")
+
+        for group_name in ['Non-anhedonic', 'Low-Anhedonic', 'High-Anhedonic']:
+            if network_key in grouped_interhemi_coherence[group_name]:
+                network_data = grouped_interhemi_coherence[group_name][network_key]
+                values = np.array(network_data['valid_fisher_z_values'])
+
+                if len(values) > 0:
+                    mean_z = np.mean(values)
+                    std_z = np.std(values, ddof=1) if len(values) > 1 else 0.0
+                    min_z = np.min(values)
+                    max_z = np.max(values)
+                    n_valid = network_data['n_valid_subjects']
+                    n_excluded = network_data['n_excluded_subjects']
+
+                    print(f"  {group_name:20s}: Mean = {mean_z:7.3f}, SD = {std_z:6.3f}, "
+                          f"Range = [{min_z:7.3f}, {max_z:7.3f}], "
+                          f"N = {n_valid:3d} (excluded: {n_excluded})")
+                else:
+                    print(f"  {group_name:20s}: NO VALID SUBJECTS")
+            else:
+                print(f"  {group_name:20s}: NETWORK NOT PRESENT")
+
+    # Validation warnings
+    print(f"\n{'='*80}")
+    print(f"VALIDATION CHECKS")
+    print(f"{'='*80}")
+
+    warnings_found = False
+    for group_name, networks in grouped_interhemi_coherence.items():
+        for network_key, network_data in networks.items():
+            values = np.array(network_data['valid_fisher_z_values'])
+
+            # Check for extreme values (|z| > 2.0 unusual but valid)
+            if len(values) > 0:
+                extreme_mask = np.abs(values) > 2.0
+                if np.any(extreme_mask):
+                    warnings_found = True
+                    n_extreme = np.sum(extreme_mask)
+                    extreme_vals = values[extreme_mask]
+                    print(f"⚠ {group_name}/{network_key}: {n_extreme} subjects with |Fisher-Z| > 2.0")
+                    print(f"  Extreme values: {extreme_vals}")
+
+            # Check for networks with few subjects
+            if len(values) < 5 and len(values) > 0:
+                warnings_found = True
+                print(f"⚠ {group_name}/{network_key}: Only {len(values)} subjects (statistical power may be low)")
+
+            # Check for excluded subjects
+            if network_data['n_excluded_subjects'] > 0:
+                warnings_found = True
+                print(f"ℹ {group_name}/{network_key}: {network_data['n_excluded_subjects']} subjects excluded (no valid parcel pairs)")
+
+    if not warnings_found:
+        print("✓ No validation warnings - all values within expected ranges")
+
+    # Save detailed results to JSON
+    import json
+    from datetime import datetime
+
+    if save_figures:
+        output_file = run_parent_dir / f"interhemispheric_network_coherence_{run_timestamp}.json"
+
+        with open(output_file, 'w') as f:
+            json.dump(grouped_interhemi_coherence, f, indent=2)
+
+        print(f"\n✓ Detailed results saved to: {output_file}")
+
+    print(f"\n{'='*80}")
+    print(f"ANALYSIS HALTED - AWAITING USER CONFIRMATION")
+    print(f"{'='*80}")
+    print(f"\nNext Steps (NOT IMPLEMENTED YET):")
+    print(f"  1. Permutation-based ANOVA across groups")
+    print(f"  2. Post-hoc pairwise comparisons")
+    print(f"  3. Multiple comparison correction (FDR/Bonferroni)")
+    print(f"\n{'='*80}\n")
 
     # ===== WRITE ANALYSIS LOG =====
     print(f"\n{'='*80}")
