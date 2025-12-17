@@ -626,17 +626,17 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
                     roi1_network = roi1_parts[2] if len(roi1_parts) > 2 else None
                     roi2_network = roi2_parts[2] if len(roi2_parts) > 2 else None
 
-                    # ONLY include intra-network interhemispheric pairs (same network across hemispheres)
-                    if roi1_network == roi2_network and roi1_network is not None:
-                        results['interhemispheric']['pairs'][pair_key] = {
-                            'correlation': corr_val,
-                            'p_value': p_val,
-                            'significant': is_significant,
-                            'region': roi1_region,
-                            'network': roi1_network,  # Store network info
-                            'roi1_index': i,  # Store indices for later use
-                            'roi2_index': j
-                        }
+                    results['interhemispheric']['pairs'][pair_key] = {
+                        'correlation': corr_val,
+                        'p_value': p_val,
+                        'significant': is_significant,
+                        'region': roi1_region,
+                        'network': roi1_network,  # Store network info for roi1
+                        'network2': roi2_network,  # NEW: Also store network for roi2
+                        'roi1_index': i,  # Store indices for later use
+                        'roi2_index': j,
+                        'is_intra_network': (roi1_network == roi2_network and roi1_network is not None)  # NEW: Flag for filtering
+                    }
 
                 # Cross-regional (different regions)
                 elif roi1_region != roi2_region:
@@ -688,11 +688,16 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
         }
 
     # NEW: Group interhemispheric pairs by region+network and compute mean Fisher-Z coherence
+    # NOTE: This grouping is ONLY for intra-network pairs (for statistical testing)
     interhemi_pairs = results['interhemispheric']['pairs']
     network_pairs = {}
     network_stats = {}
 
     for pair_key, pair_data in interhemi_pairs.items():
+        # FILTER: Only include intra-network pairs for statistical analysis
+        if not pair_data.get('is_intra_network', False):
+            continue
+
         region = pair_data.get('region')
         network = pair_data.get('network')
 
