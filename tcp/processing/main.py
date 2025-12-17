@@ -626,15 +626,17 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
                     roi1_network = roi1_parts[2] if len(roi1_parts) > 2 else None
                     roi2_network = roi2_parts[2] if len(roi2_parts) > 2 else None
 
-                    results['interhemispheric']['pairs'][pair_key] = {
-                        'correlation': corr_val,
-                        'p_value': p_val,
-                        'significant': is_significant,
-                        'region': roi1_region,
-                        'network': roi1_network,  # NEW: Store network info
-                        'roi1_index': i,  # NEW: Store indices for later use
-                        'roi2_index': j
-                    }
+                    # ONLY include intra-network interhemispheric pairs (same network across hemispheres)
+                    if roi1_network == roi2_network and roi1_network is not None:
+                        results['interhemispheric']['pairs'][pair_key] = {
+                            'correlation': corr_val,
+                            'p_value': p_val,
+                            'significant': is_significant,
+                            'region': roi1_region,
+                            'network': roi1_network,  # Store network info
+                            'roi1_index': i,  # Store indices for later use
+                            'roi2_index': j
+                        }
 
                 # Cross-regional (different regions)
                 elif roi1_region != roi2_region:
@@ -2669,133 +2671,133 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         current_plot_batch = 0
 
-        # Batch 1: ROI Cortical Timeseries
-        if plot_batches['roi_cortical']:
-            current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
-            for plot_info in plot_batches['roi_cortical']:
-                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
-                # plot_roi_timeseries_result now returns a list of figures (one per ROI)
-                for fig in figures:
-                    if plot_info['save_dir']:
-                        # Create subject directory
-                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
-                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
+        # # Batch 1: ROI Cortical Timeseries
+        # if plot_batches['roi_cortical']:
+        #     current_plot_batch += 1
+        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+        #     for plot_info in plot_batches['roi_cortical']:
+        #         figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
+        #         # plot_roi_timeseries_result now returns a list of figures (one per ROI)
+        #         for fig in figures:
+        #             if plot_info['save_dir']:
+        #                 # Create subject directory
+        #                 subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+        #                 subject_roi_dir.mkdir(parents=True, exist_ok=True)
 
-                        # Extract ROI name from figure title
-                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
-                        roi_name = 'unknown'
-                        if 'PFCm' in fig_title:
-                            roi_name = 'PFCm'
-                        elif 'PFCv' in fig_title:
-                            roi_name = 'PFCv'
+        #                 # Extract ROI name from figure title
+        #                 fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+        #                 roi_name = 'unknown'
+        #                 if 'PFCm' in fig_title:
+        #                     roi_name = 'PFCm'
+        #                 elif 'PFCv' in fig_title:
+        #                     roi_name = 'PFCv'
 
-                        # Create ROI-specific filename in subject directory
-                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_cortical.svg'
-                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
-                    if not show_plots:
-                        plt.close(fig)
-            if show_plots:
-                print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
-                plt.show()
+        #                 # Create ROI-specific filename in subject directory
+        #                 fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_cortical.svg'
+        #                 fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+        #                 figures_saved_count += 1
+        #             if not show_plots:
+        #                 plt.close(fig)
+        #     if show_plots:
+        #         print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
+        #         plt.show()
 
-        # Batch 2: ROI Subcortical Timeseries
-        if plot_batches['roi_subcortical']:
-            current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
-            for plot_info in plot_batches['roi_subcortical']:
-                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
-                # plot_roi_timeseries_result now returns a list of figures (one per ROI)
-                for fig in figures:
-                    if plot_info['save_dir']:
-                        # Create subject directory
-                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
-                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
+        # # Batch 2: ROI Subcortical Timeseries
+        # if plot_batches['roi_subcortical']:
+        #     current_plot_batch += 1
+        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+        #     for plot_info in plot_batches['roi_subcortical']:
+        #         figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
+        #         # plot_roi_timeseries_result now returns a list of figures (one per ROI)
+        #         for fig in figures:
+        #             if plot_info['save_dir']:
+        #                 # Create subject directory
+        #                 subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+        #                 subject_roi_dir.mkdir(parents=True, exist_ok=True)
 
-                        # Extract ROI name from figure title
-                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
-                        roi_name = 'unknown'
-                        if 'AMY' in fig_title:
-                            roi_name = 'AMY'
+        #                 # Extract ROI name from figure title
+        #                 fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+        #                 roi_name = 'unknown'
+        #                 if 'AMY' in fig_title:
+        #                     roi_name = 'AMY'
 
-                        # Create ROI-specific filename in subject directory
-                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_subcortical.svg'
-                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
-                    if not show_plots:
-                        plt.close(fig)
-            if show_plots:
-                print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
-                plt.show()
+        #                 # Create ROI-specific filename in subject directory
+        #                 fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_subcortical.svg'
+        #                 fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+        #                 figures_saved_count += 1
+        #             if not show_plots:
+        #                 plt.close(fig)
+        #     if show_plots:
+        #         print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
+        #         plt.show()
 
-        # Batch 3: Multivariate Hilbert Spectrum
-        if plot_batches['hsa_multivariate']:
-            current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
+        # # Batch 3: Multivariate Hilbert Spectrum
+        # if plot_batches['hsa_multivariate']:
+        #     current_plot_batch += 1
+        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
 
-            for plot_info in plot_batches['hsa_multivariate']:
-                # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
-                hs_results = plot_multivariate_hilbert_spectrum(
-                    hsa_data=plot_info['hsa_data'],
-                    subject_id=plot_info['subject_id'],
-                    center_freqs=plot_info['center_freqs'],
-                    channel_labels=plot_info['channel_labels']
-                )
+        #     for plot_info in plot_batches['hsa_multivariate']:
+        #         # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
+        #         hs_results = plot_multivariate_hilbert_spectrum(
+        #             hsa_data=plot_info['hsa_data'],
+        #             subject_id=plot_info['subject_id'],
+        #             center_freqs=plot_info['center_freqs'],
+        #             channel_labels=plot_info['channel_labels']
+        #         )
 
-                # Save figures if enabled
-                if plot_info['save_dir']:
-                    # Create subject/composite/ directory structure
-                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+        #         # Save figures if enabled
+        #         if plot_info['save_dir']:
+        #             # Create subject/composite/ directory structure
+        #             subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+        #             subject_composite_dir.mkdir(parents=True, exist_ok=True)
 
-                    for hs_fig, region_network_key in hs_results:
-                        # Use region+network+hemisphere info in filename
-                        fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
-                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+        #             for hs_fig, region_network_key in hs_results:
+        #                 # Use region+network+hemisphere info in filename
+        #                 fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
+        #                 hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+        #                 figures_saved_count += 1
 
-                if not show_plots:
-                    for hs_fig, _ in hs_results:
-                        plt.close(hs_fig)
+        #         if not show_plots:
+        #             for hs_fig, _ in hs_results:
+        #                 plt.close(hs_fig)
 
-            if show_plots:
-                print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
-                plt.show()
+        #     if show_plots:
+        #         print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
+        #         plt.show()
 
-        # Batch 4: Marginal Spectrum per Mode
-        if plot_batches['hsa_marginal']:
-            current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
+        # # Batch 4: Marginal Spectrum per Mode
+        # if plot_batches['hsa_marginal']:
+        #     current_plot_batch += 1
+        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
 
-            for plot_info in plot_batches['hsa_marginal']:
-                # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
-                mhs_results = plot_marginal_spectrum_per_mode(
-                    hsa_data=plot_info['hsa_data'],
-                    subject_id=plot_info['subject_id'],
-                    center_freqs=plot_info['center_freqs'],
-                    channel_labels=plot_info['channel_labels']
-                )
+        #     for plot_info in plot_batches['hsa_marginal']:
+        #         # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
+        #         mhs_results = plot_marginal_spectrum_per_mode(
+        #             hsa_data=plot_info['hsa_data'],
+        #             subject_id=plot_info['subject_id'],
+        #             center_freqs=plot_info['center_freqs'],
+        #             channel_labels=plot_info['channel_labels']
+        #         )
 
-                # Save figures if enabled
-                if plot_info['save_dir']:
-                    # Create subject/composite/ directory structure
-                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+        #         # Save figures if enabled
+        #         if plot_info['save_dir']:
+        #             # Create subject/composite/ directory structure
+        #             subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+        #             subject_composite_dir.mkdir(parents=True, exist_ok=True)
 
-                    for mhs_fig, region_network_key in mhs_results:
-                        # Use region+network+hemisphere info in filename
-                        fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
-                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+        #             for mhs_fig, region_network_key in mhs_results:
+        #                 # Use region+network+hemisphere info in filename
+        #                 fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
+        #                 mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+        #                 figures_saved_count += 1
 
-                if not show_plots:
-                    for mhs_fig, _ in mhs_results:
-                        plt.close(mhs_fig)
+        #         if not show_plots:
+        #             for mhs_fig, _ in mhs_results:
+        #                 plt.close(mhs_fig)
 
-            if show_plots:
-                print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
-                plt.show()
+        #     if show_plots:
+        #         print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
+        #         plt.show()
 
         # Batch 5: Static FC Analysis
         if plot_batches['fc_static']:
@@ -2975,63 +2977,63 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
                 plt.show()
 
-        # Batch 8: MVMD Mode Decomposition
-        if plot_batches['mvmd_modes']:
-            total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-            current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+        # # Batch 8: MVMD Mode Decomposition
+        # if plot_batches['mvmd_modes']:
+        #     total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
+        #     current_plot_batch += 1
+        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
 
-            # Process in sub-batches of 28 figures to avoid memory issues
-            MAX_FIGS_PER_BATCH = 28
-            current_batch_figs = []
+        #     # Process in sub-batches of 28 figures to avoid memory issues
+        #     MAX_FIGS_PER_BATCH = 28
+        #     current_batch_figs = []
 
-            for plot_info in plot_batches['mvmd_modes']:
-                mvmd_figure_generator = plot_signal_decomposition(
-                    plot_info['mvmd_data']['original'],
-                    plot_info['mvmd_data']['time_modes'],
-                    subject_id=plot_info['subject_id'],
-                    channel_label_map=plot_info['channel_label_map'],
-                    center_freqs=plot_info['center_freqs'],
-                    max_figures_per_batch=MAX_FIGS_PER_BATCH
-                )
+        #     for plot_info in plot_batches['mvmd_modes']:
+        #         mvmd_figure_generator = plot_signal_decomposition(
+        #             plot_info['mvmd_data']['original'],
+        #             plot_info['mvmd_data']['time_modes'],
+        #             subject_id=plot_info['subject_id'],
+        #             channel_label_map=plot_info['channel_label_map'],
+        #             center_freqs=plot_info['center_freqs'],
+        #             max_figures_per_batch=MAX_FIGS_PER_BATCH
+        #         )
 
-                # Process each batch of figures from the generator
-                channel_idx_base = 0
-                for mvmd_figures in mvmd_figure_generator:
-                    if plot_info['save_dir']:
-                        subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
-                        subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+        #         # Process each batch of figures from the generator
+        #         channel_idx_base = 0
+        #         for mvmd_figures in mvmd_figure_generator:
+        #             if plot_info['save_dir']:
+        #                 subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+        #                 subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
 
-                        for fig_idx, fig in enumerate(mvmd_figures):
-                            channel_idx = channel_idx_base + fig_idx
-                            if plot_info['channel_label_map'] is not None:
-                                channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
-                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-                            else:
-                                channel_label_clean = f'ch{channel_idx}'
+        #                 for fig_idx, fig in enumerate(mvmd_figures):
+        #                     channel_idx = channel_idx_base + fig_idx
+        #                     if plot_info['channel_label_map'] is not None:
+        #                         channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+        #                         channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+        #                     else:
+        #                         channel_label_clean = f'ch{channel_idx}'
 
-                            fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
-                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                            figures_saved_count += 1
+        #                     fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
+        #                     fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+        #                     figures_saved_count += 1
 
-                    if show_plots:
-                        current_batch_figs.extend(mvmd_figures)
+        #             if show_plots:
+        #                 current_batch_figs.extend(mvmd_figures)
 
-                        # Display and clear batch when reaching limit
-                        if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
-                            print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-                            plt.show()
-                            current_batch_figs = []
-                    else:
-                        for fig in mvmd_figures:
-                            plt.close(fig)
+        #                 # Display and clear batch when reaching limit
+        #                 if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
+        #                     print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
+        #                     plt.show()
+        #                     current_batch_figs = []
+        #             else:
+        #                 for fig in mvmd_figures:
+        #                     plt.close(fig)
 
-                    channel_idx_base += len(mvmd_figures)
+        #             channel_idx_base += len(mvmd_figures)
 
-            # Display remaining figures if any
-            if show_plots and current_batch_figs:
-                print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-                plt.show()
+        #     # Display remaining figures if any
+        #     if show_plots and current_batch_figs:
+        #         print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
+        #         plt.show()
 
 
         print(f"\n{'='*80}")
