@@ -444,7 +444,7 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
     Args:
         subject_results: Dictionary of all subject results
         group_subjects: List of subject IDs belonging to this group
-        group_name: Name of the group (e.g., 'Non-anhedonic', 'Low Anhedonic', 'High Anhedonic')
+        group_name: Name of the group (e.g., 'non-anhedonic', 'Low Anhedonic', 'High Anhedonic')
         fc_type: Type of FC to average ('static' or 'slow_band')
         band_key: If fc_type='slow_band', specify which band (e.g., 'slow-5')
         verbose: Print progress messages
@@ -2050,9 +2050,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*80}")
 
     grouped_interhemi_coherence = {
-        'Non-anhedonic': {},
-        'Low-Anhedonic': {},
-        'High-Anhedonic': {}
+        'non-anhedonic': {},
+        'low-anhedonic': {},
+        'high-anhedonic': {}
     }
 
     # Process non-anhedonic (control) group
@@ -2064,18 +2064,18 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         network_coherence = static_fc.get('interhemispheric_network_coherence', {})
 
         for network_key, network_stats in network_coherence.items():
-            if network_key not in grouped_interhemi_coherence['Non-anhedonic']:
-                grouped_interhemi_coherence['Non-anhedonic'][network_key] = {
+            if network_key not in grouped_interhemi_coherence['non-anhedonic']:
+                grouped_interhemi_coherence['non-anhedonic'][network_key] = {
                     'subject_ids': [],
                     'mean_fisher_z_values': [],
                     'n_parcel_pairs_per_subject': []
                 }
 
-            grouped_interhemi_coherence['Non-anhedonic'][network_key]['subject_ids'].append(subject_id)
-            grouped_interhemi_coherence['Non-anhedonic'][network_key]['mean_fisher_z_values'].append(
+            grouped_interhemi_coherence['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
+            grouped_interhemi_coherence['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
                 network_stats['mean_fisher_z']
             )
-            grouped_interhemi_coherence['Non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
+            grouped_interhemi_coherence['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
                 network_stats['n_parcel_pairs']
             )
 
@@ -2086,9 +2086,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Determine if low or high anhedonic
         if subject_id in low_anhedonic_subjects:
-            group_name = 'Low-Anhedonic'
+            group_name = 'low-anhedonic'
         elif subject_id in high_anhedonic_subjects:
-            group_name = 'High-Anhedonic'
+            group_name = 'high-anhedonic'
         else:
             print(f"Warning: {subject_id} in anhedonic_results but not in low/high lists, skipping")
             continue
@@ -2129,6 +2129,127 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     print(f"Network coherence aggregation complete")
     print(f"  Groups processed: {list(grouped_interhemi_coherence.keys())}")
+
+    # ===== COMPUTE OBSERVED TEST STATISTICS =====
+    print(f"\n{'='*80}")
+    print(f"COMPUTING OBSERVED TEST STATISTICS")
+    print(f"{'='*80}")
+
+    from scipy import stats as scipy_stats
+
+    observed_test_statistics = {}
+
+    # Get all unique networks
+    all_networks_for_stats = set()
+    for group_data in grouped_interhemi_coherence.values():
+        all_networks_for_stats.update(group_data.keys())
+
+    for network_key in sorted(all_networks_for_stats):
+        # Collect valid data for each group
+        non_anhedonic_values = []
+        low_anhedonic_values = []
+        high_anhedonic_values = []
+
+        if network_key in grouped_interhemi_coherence['non-anhedonic']:
+            non_anhedonic_values = np.array(
+                grouped_interhemi_coherence['non-anhedonic'][network_key]['valid_fisher_z_values']
+            )
+
+        if network_key in grouped_interhemi_coherence['low-anhedonic']:
+            low_anhedonic_values = np.array(
+                grouped_interhemi_coherence['low-anhedonic'][network_key]['valid_fisher_z_values']
+            )
+
+        if network_key in grouped_interhemi_coherence['high-anhedonic']:
+            high_anhedonic_values = np.array(
+                grouped_interhemi_coherence['high-anhedonic'][network_key]['valid_fisher_z_values']
+            )
+
+        # Initialize results for this network
+        observed_test_statistics[network_key] = {
+            'group_sizes': {
+                'non-anhedonic': len(non_anhedonic_values),
+                'low-anhedonic': len(low_anhedonic_values),
+                'high-anhedonic': len(high_anhedonic_values)
+            },
+            'group_means': {
+                'non-anhedonic': float(np.mean(non_anhedonic_values)) if len(non_anhedonic_values) > 0 else np.nan,
+                'low-anhedonic': float(np.mean(low_anhedonic_values)) if len(low_anhedonic_values) > 0 else np.nan,
+                'high-anhedonic': float(np.mean(high_anhedonic_values)) if len(high_anhedonic_values) > 0 else np.nan
+            },
+            'group_sds': {
+                'non-anhedonic': float(np.std(non_anhedonic_values, ddof=1)) if len(non_anhedonic_values) > 1 else np.nan,
+                'low-anhedonic': float(np.std(low_anhedonic_values, ddof=1)) if len(low_anhedonic_values) > 1 else np.nan,
+                'high-anhedonic': float(np.std(high_anhedonic_values, ddof=1)) if len(high_anhedonic_values) > 1 else np.nan
+            }
+        }
+
+        # One-way ANOVA across all three groups
+        all_groups = [non_anhedonic_values, low_anhedonic_values, high_anhedonic_values]
+        valid_groups = [g for g in all_groups if len(g) > 0]
+
+        if len(valid_groups) >= 2:
+            # Perform one-way ANOVA
+            f_stat, p_val = scipy_stats.f_oneway(*valid_groups)
+            observed_test_statistics[network_key]['anova'] = {
+                'F_statistic': float(f_stat),
+                'p_value': float(p_val),
+                'n_groups_compared': len(valid_groups)
+            }
+        else:
+            observed_test_statistics[network_key]['anova'] = {
+                'F_statistic': np.nan,
+                'p_value': np.nan,
+                'n_groups_compared': len(valid_groups),
+                'note': 'Insufficient groups for ANOVA'
+            }
+
+        # Pairwise comparisons (independent t-tests)
+        pairwise_comparisons = {}
+
+        # non-anhedonic vs low-anhedonic
+        if len(non_anhedonic_values) > 0 and len(low_anhedonic_values) > 0:
+            t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, low_anhedonic_values)
+            pairwise_comparisons['non-anhedonic_vs_low-anhedonic'] = {
+                't_statistic': float(t_stat),
+                'p_value': float(p_val),
+                'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(low_anhedonic_values))
+            }
+
+        # non-anhedonic vs high-anhedonic
+        if len(non_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
+            t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, high_anhedonic_values)
+            pairwise_comparisons['non-anhedonic_vs_high-anhedonic'] = {
+                't_statistic': float(t_stat),
+                'p_value': float(p_val),
+                'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(high_anhedonic_values))
+            }
+
+        # low-anhedonic vs high-anhedonic
+        if len(low_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
+            t_stat, p_val = scipy_stats.ttest_ind(low_anhedonic_values, high_anhedonic_values)
+            pairwise_comparisons['low-anhedonic_vs_high-anhedonic'] = {
+                't_statistic': float(t_stat),
+                'p_value': float(p_val),
+                'mean_diff': float(np.mean(low_anhedonic_values) - np.mean(high_anhedonic_values))
+            }
+
+        observed_test_statistics[network_key]['pairwise'] = pairwise_comparisons
+
+    print(f"Observed test statistics computed for {len(observed_test_statistics)} networks")
+
+    # Print summary of significant results (uncorrected)
+    print(f"\nNetworks with p < 0.05 (ANOVA, uncorrected):")
+    significant_networks = []
+    for network_key, stats in observed_test_statistics.items():
+        if 'anova' in stats and stats['anova'].get('p_value', 1.0) < 0.05:
+            significant_networks.append((network_key, stats['anova']['p_value']))
+
+    if significant_networks:
+        for network_key, p_val in sorted(significant_networks, key=lambda x: x[1]):
+            print(f"  {network_key}: F = {observed_test_statistics[network_key]['anova']['F_statistic']:.3f}, p = {p_val:.4f}")
+    else:
+        print(f"  None (no networks show p < 0.05)")
 
     # ===== GROUP COMPARISON ANALYSIS =====
     group_comparison_results = None
@@ -2192,7 +2313,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     # Define groups
     groups_config = [
-        ('Non-anhedonic', non_anhedonic_subjects),
+        ('non-anhedonic', non_anhedonic_subjects),
         ('Low Anhedonic', low_anhedonic_subjects),
         ('High Anhedonic', high_anhedonic_subjects)
     ]
@@ -2952,7 +3073,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"Network: {network_key}")
         print(f"{'─'*80}")
 
-        for group_name in ['Non-anhedonic', 'Low-Anhedonic', 'High-Anhedonic']:
+        for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
             if network_key in grouped_interhemi_coherence[group_name]:
                 network_data = grouped_interhemi_coherence[group_name][network_key]
                 values = np.array(network_data['valid_fisher_z_values'])
@@ -2972,6 +3093,46 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     print(f"  {group_name:20s}: NO VALID SUBJECTS")
             else:
                 print(f"  {group_name:20s}: NETWORK NOT PRESENT")
+
+    # Test statistics detailed summary
+    print(f"\n{'='*80}")
+    print(f"OBSERVED TEST STATISTICS SUMMARY")
+    print(f"{'='*80}")
+
+    for network_key in all_networks:
+        if network_key in observed_test_statistics:
+            stats = observed_test_statistics[network_key]
+
+            print(f"\n{network_key}:")
+            print(f"  Group Means (Fisher-Z):")
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                mean_val = stats['group_means'].get(group_name, np.nan)
+                sd_val = stats['group_sds'].get(group_name, np.nan)
+                n_val = stats['group_sizes'].get(group_name, 0)
+                if not np.isnan(mean_val):
+                    print(f"    {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {n_val:3d}")
+                else:
+                    print(f"    {group_name:20s}: No data")
+
+            # ANOVA results
+            if 'anova' in stats:
+                anova = stats['anova']
+                if not np.isnan(anova.get('F_statistic', np.nan)):
+                    print(f"  ANOVA: F({anova['n_groups_compared']-1},{sum(stats['group_sizes'].values())-anova['n_groups_compared']}) = "
+                          f"{anova['F_statistic']:.3f}, p = {anova['p_value']:.4f} "
+                          f"{'***' if anova['p_value'] < 0.001 else '**' if anova['p_value'] < 0.01 else '*' if anova['p_value'] < 0.05 else 'ns'}")
+                else:
+                    print(f"  ANOVA: {anova.get('note', 'Not computed')}")
+
+            # Pairwise comparisons
+            if 'pairwise' in stats and len(stats['pairwise']) > 0:
+                print(f"  Pairwise comparisons:")
+                for comparison_name, comparison_data in stats['pairwise'].items():
+                    t_stat = comparison_data['t_statistic']
+                    p_val = comparison_data['p_value']
+                    mean_diff = comparison_data['mean_diff']
+                    sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
+                    print(f"    {comparison_name:45s}: t = {t_stat:7.3f}, p = {p_val:.4f} {sig_marker:3s} (Δ = {mean_diff:7.3f})")
 
     # Validation warnings
     print(f"\n{'='*80}")
@@ -3011,12 +3172,28 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     from datetime import datetime
 
     if save_figures:
+        # Combine coherence data and test statistics
+        results_to_save = {
+            'grouped_interhemi_coherence': grouped_interhemi_coherence,
+            'observed_test_statistics': observed_test_statistics,
+            'metadata': {
+                'analysis_date': run_timestamp,
+                'n_subjects': {
+                    'non-anhedonic': len(non_anhedonic_results),
+                    'low-anhedonic': len([sid for sid in anhedonic_results.keys() if sid in low_anhedonic_subjects]),
+                    'high-anhedonic': len([sid for sid in anhedonic_results.keys() if sid in high_anhedonic_subjects])
+                },
+                'n_networks': len(all_networks)
+            }
+        }
+
         output_file = run_parent_dir / f"interhemispheric_network_coherence_{run_timestamp}.json"
 
         with open(output_file, 'w') as f:
-            json.dump(grouped_interhemi_coherence, f, indent=2)
+            json.dump(results_to_save, f, indent=2)
 
         print(f"\n✓ Detailed results saved to: {output_file}")
+        print(f"  Includes: coherence values, test statistics, and metadata")
 
     print(f"\n{'='*80}")
     print(f"ANALYSIS HALTED - AWAITING USER CONFIRMATION")
