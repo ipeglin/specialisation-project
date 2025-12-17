@@ -2056,35 +2056,71 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"AGGREGATING INTERHEMISPHERIC NETWORK COHERENCE")
     print(f"{'='*80}")
 
+    # Structure: grouped_interhemi_coherence[fc_type][group][network]
+    # fc_type can be 'static', 'slow-1', 'slow-2', etc.
     grouped_interhemi_coherence = {
-        'non-anhedonic': {},
-        'low-anhedonic': {},
-        'high-anhedonic': {}
+        'static': {
+            'non-anhedonic': {},
+            'low-anhedonic': {},
+            'high-anhedonic': {}
+        }
     }
+
+    # Initialize slow-band structures
+    for band_key in ['1', '2', '3', '4', '5', '6']:
+        grouped_interhemi_coherence[f'slow-{band_key}'] = {
+            'non-anhedonic': {},
+            'low-anhedonic': {},
+            'high-anhedonic': {}
+        }
 
     # Process non-anhedonic (control) group
     for subject_id, result in non_anhedonic_results.items():
         if not result.get('success'):
             continue
 
+        # Process static FC
         static_fc = result.get('static_functional_connectivity', {})
         network_coherence = static_fc.get('interhemispheric_network_coherence', {})
 
         for network_key, network_stats in network_coherence.items():
-            if network_key not in grouped_interhemi_coherence['non-anhedonic']:
-                grouped_interhemi_coherence['non-anhedonic'][network_key] = {
+            if network_key not in grouped_interhemi_coherence['static']['non-anhedonic']:
+                grouped_interhemi_coherence['static']['non-anhedonic'][network_key] = {
                     'subject_ids': [],
                     'mean_fisher_z_values': [],
                     'n_parcel_pairs_per_subject': []
                 }
 
-            grouped_interhemi_coherence['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
-            grouped_interhemi_coherence['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
+            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
+            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
                 network_stats['mean_fisher_z']
             )
-            grouped_interhemi_coherence['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
+            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
                 network_stats['n_parcel_pairs']
             )
+
+        # Process slow-band FC
+        slow_band_fc = result.get('slow_band_functional_connectivity', {})
+        for band_key in ['1', '2', '3', '4', '5', '6']:
+            band_name = f'slow-{band_key}'
+            if band_name in slow_band_fc:
+                band_network_coherence = slow_band_fc[band_name].get('interhemispheric_network_coherence', {})
+
+                for network_key, network_stats in band_network_coherence.items():
+                    if network_key not in grouped_interhemi_coherence[band_name]['non-anhedonic']:
+                        grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key] = {
+                            'subject_ids': [],
+                            'mean_fisher_z_values': [],
+                            'n_parcel_pairs_per_subject': []
+                        }
+
+                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
+                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
+                        network_stats['mean_fisher_z']
+                    )
+                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
+                        network_stats['n_parcel_pairs']
+                    )
 
     # Process anhedonic subjects (split by low/high)
     for subject_id, result in anhedonic_results.items():
@@ -2100,42 +2136,68 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             print(f"Warning: {subject_id} in anhedonic_results but not in low/high lists, skipping")
             continue
 
+        # Process static FC
         static_fc = result.get('static_functional_connectivity', {})
         network_coherence = static_fc.get('interhemispheric_network_coherence', {})
 
         for network_key, network_stats in network_coherence.items():
-            if network_key not in grouped_interhemi_coherence[group_name]:
-                grouped_interhemi_coherence[group_name][network_key] = {
+            if network_key not in grouped_interhemi_coherence['static'][group_name]:
+                grouped_interhemi_coherence['static'][group_name][network_key] = {
                     'subject_ids': [],
                     'mean_fisher_z_values': [],
                     'n_parcel_pairs_per_subject': []
                 }
 
-            grouped_interhemi_coherence[group_name][network_key]['subject_ids'].append(subject_id)
-            grouped_interhemi_coherence[group_name][network_key]['mean_fisher_z_values'].append(
+            grouped_interhemi_coherence['static'][group_name][network_key]['subject_ids'].append(subject_id)
+            grouped_interhemi_coherence['static'][group_name][network_key]['mean_fisher_z_values'].append(
                 network_stats['mean_fisher_z']
             )
-            grouped_interhemi_coherence[group_name][network_key]['n_parcel_pairs_per_subject'].append(
+            grouped_interhemi_coherence['static'][group_name][network_key]['n_parcel_pairs_per_subject'].append(
                 network_stats['n_parcel_pairs']
             )
 
+        # Process slow-band FC
+        slow_band_fc = result.get('slow_band_functional_connectivity', {})
+        for band_key in ['1', '2', '3', '4', '5', '6']:
+            band_name = f'slow-{band_key}'
+            if band_name in slow_band_fc:
+                band_network_coherence = slow_band_fc[band_name].get('interhemispheric_network_coherence', {})
+
+                for network_key, network_stats in band_network_coherence.items():
+                    if network_key not in grouped_interhemi_coherence[band_name][group_name]:
+                        grouped_interhemi_coherence[band_name][group_name][network_key] = {
+                            'subject_ids': [],
+                            'mean_fisher_z_values': [],
+                            'n_parcel_pairs_per_subject': []
+                        }
+
+                    grouped_interhemi_coherence[band_name][group_name][network_key]['subject_ids'].append(subject_id)
+                    grouped_interhemi_coherence[band_name][group_name][network_key]['mean_fisher_z_values'].append(
+                        network_stats['mean_fisher_z']
+                    )
+                    grouped_interhemi_coherence[band_name][group_name][network_key]['n_parcel_pairs_per_subject'].append(
+                        network_stats['n_parcel_pairs']
+                    )
+
     # Filter out NaN values and track excluded subjects
-    for group_name, networks in grouped_interhemi_coherence.items():
-        for network_key, network_data in networks.items():
-            values = np.array(network_data['mean_fisher_z_values'])
+    for fc_type in grouped_interhemi_coherence.keys():
+        for group_name, networks in grouped_interhemi_coherence[fc_type].items():
+            for network_key, network_data in networks.items():
+                values = np.array(network_data['mean_fisher_z_values'])
 
-            # Remove NaN values (subjects with no valid pairs for this network)
-            valid_mask = ~np.isnan(values)
+                # Remove NaN values (subjects with no valid pairs for this network)
+                valid_mask = ~np.isnan(values)
 
-            network_data['valid_subject_ids'] = [
-                sid for sid, valid in zip(network_data['subject_ids'], valid_mask) if valid
-            ]
-            network_data['valid_fisher_z_values'] = values[valid_mask].tolist()
-            network_data['n_valid_subjects'] = int(np.sum(valid_mask))
-            network_data['n_excluded_subjects'] = int(np.sum(~valid_mask))
+                network_data['valid_subject_ids'] = [
+                    sid for sid, valid in zip(network_data['subject_ids'], valid_mask) if valid
+                ]
+                network_data['valid_fisher_z_values'] = values[valid_mask].tolist()
+                network_data['n_valid_subjects'] = int(np.sum(valid_mask))
+                network_data['n_excluded_subjects'] = int(np.sum(~valid_mask))
 
     print(f"Network coherence aggregation complete")
-    print(f"  Groups processed: {list(grouped_interhemi_coherence.keys())}")
+    print(f"  FC types processed: {list(grouped_interhemi_coherence.keys())}")
+    print(f"  Groups per FC type: {['non-anhedonic', 'low-anhedonic', 'high-anhedonic']}")
 
     # ===== COMPUTE OBSERVED TEST STATISTICS =====
     print(f"\n{'='*80}")
@@ -2144,119 +2206,130 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     from scipy import stats as scipy_stats
 
+    # Structure: observed_test_statistics[fc_type][network]
     observed_test_statistics = {}
 
-    # Get all unique networks
-    all_networks_for_stats = set()
-    for group_data in grouped_interhemi_coherence.values():
-        all_networks_for_stats.update(group_data.keys())
+    # Process each FC type (static, slow-1, slow-2, etc.)
+    for fc_type in grouped_interhemi_coherence.keys():
+        print(f"\nComputing test statistics for {fc_type}...")
 
-    for network_key in sorted(all_networks_for_stats):
-        # Collect valid data for each group
-        non_anhedonic_values = []
-        low_anhedonic_values = []
-        high_anhedonic_values = []
+        observed_test_statistics[fc_type] = {}
 
-        if network_key in grouped_interhemi_coherence['non-anhedonic']:
-            non_anhedonic_values = np.array(
-                grouped_interhemi_coherence['non-anhedonic'][network_key]['valid_fisher_z_values']
-            )
+        # Get all unique networks for this FC type
+        all_networks_for_stats = set()
+        for group_data in grouped_interhemi_coherence[fc_type].values():
+            all_networks_for_stats.update(group_data.keys())
 
-        if network_key in grouped_interhemi_coherence['low-anhedonic']:
-            low_anhedonic_values = np.array(
-                grouped_interhemi_coherence['low-anhedonic'][network_key]['valid_fisher_z_values']
-            )
+        for network_key in sorted(all_networks_for_stats):
+            # Collect valid data for each group
+            non_anhedonic_values = []
+            low_anhedonic_values = []
+            high_anhedonic_values = []
 
-        if network_key in grouped_interhemi_coherence['high-anhedonic']:
-            high_anhedonic_values = np.array(
-                grouped_interhemi_coherence['high-anhedonic'][network_key]['valid_fisher_z_values']
-            )
+            if network_key in grouped_interhemi_coherence[fc_type]['non-anhedonic']:
+                non_anhedonic_values = np.array(
+                    grouped_interhemi_coherence[fc_type]['non-anhedonic'][network_key]['valid_fisher_z_values']
+                )
 
-        # Initialize results for this network
-        observed_test_statistics[network_key] = {
-            'group_sizes': {
-                'non-anhedonic': len(non_anhedonic_values),
-                'low-anhedonic': len(low_anhedonic_values),
-                'high-anhedonic': len(high_anhedonic_values)
-            },
-            'group_means': {
-                'non-anhedonic': float(np.mean(non_anhedonic_values)) if len(non_anhedonic_values) > 0 else np.nan,
-                'low-anhedonic': float(np.mean(low_anhedonic_values)) if len(low_anhedonic_values) > 0 else np.nan,
-                'high-anhedonic': float(np.mean(high_anhedonic_values)) if len(high_anhedonic_values) > 0 else np.nan
-            },
-            'group_sds': {
-                'non-anhedonic': float(np.std(non_anhedonic_values, ddof=1)) if len(non_anhedonic_values) > 1 else np.nan,
-                'low-anhedonic': float(np.std(low_anhedonic_values, ddof=1)) if len(low_anhedonic_values) > 1 else np.nan,
-                'high-anhedonic': float(np.std(high_anhedonic_values, ddof=1)) if len(high_anhedonic_values) > 1 else np.nan
+            if network_key in grouped_interhemi_coherence[fc_type]['low-anhedonic']:
+                low_anhedonic_values = np.array(
+                    grouped_interhemi_coherence[fc_type]['low-anhedonic'][network_key]['valid_fisher_z_values']
+                )
+
+            if network_key in grouped_interhemi_coherence[fc_type]['high-anhedonic']:
+                high_anhedonic_values = np.array(
+                    grouped_interhemi_coherence[fc_type]['high-anhedonic'][network_key]['valid_fisher_z_values']
+                )
+
+            # Initialize results for this network
+            observed_test_statistics[fc_type][network_key] = {
+                'group_sizes': {
+                    'non-anhedonic': len(non_anhedonic_values),
+                    'low-anhedonic': len(low_anhedonic_values),
+                    'high-anhedonic': len(high_anhedonic_values)
+                },
+                'group_means': {
+                    'non-anhedonic': float(np.mean(non_anhedonic_values)) if len(non_anhedonic_values) > 0 else np.nan,
+                    'low-anhedonic': float(np.mean(low_anhedonic_values)) if len(low_anhedonic_values) > 0 else np.nan,
+                    'high-anhedonic': float(np.mean(high_anhedonic_values)) if len(high_anhedonic_values) > 0 else np.nan
+                },
+                'group_sds': {
+                    'non-anhedonic': float(np.std(non_anhedonic_values, ddof=1)) if len(non_anhedonic_values) > 1 else np.nan,
+                    'low-anhedonic': float(np.std(low_anhedonic_values, ddof=1)) if len(low_anhedonic_values) > 1 else np.nan,
+                    'high-anhedonic': float(np.std(high_anhedonic_values, ddof=1)) if len(high_anhedonic_values) > 1 else np.nan
+                }
             }
-        }
 
-        # One-way ANOVA across all three groups
-        all_groups = [non_anhedonic_values, low_anhedonic_values, high_anhedonic_values]
-        valid_groups = [g for g in all_groups if len(g) > 0]
+            # One-way ANOVA across all three groups
+            all_groups = [non_anhedonic_values, low_anhedonic_values, high_anhedonic_values]
+            valid_groups = [g for g in all_groups if len(g) > 0]
 
-        if len(valid_groups) >= 2:
-            # Perform one-way ANOVA
-            f_stat, p_val = scipy_stats.f_oneway(*valid_groups)
-            observed_test_statistics[network_key]['anova'] = {
-                'F_statistic': float(f_stat),
-                'p_value': float(p_val),
-                'n_groups_compared': len(valid_groups)
-            }
+            if len(valid_groups) >= 2:
+                # Perform one-way ANOVA
+                f_stat, p_val = scipy_stats.f_oneway(*valid_groups)
+                observed_test_statistics[fc_type][network_key]['anova'] = {
+                    'F_statistic': float(f_stat),
+                    'p_value': float(p_val),
+                    'n_groups_compared': len(valid_groups)
+                }
+            else:
+                observed_test_statistics[fc_type][network_key]['anova'] = {
+                    'F_statistic': np.nan,
+                    'p_value': np.nan,
+                    'n_groups_compared': len(valid_groups),
+                    'note': 'Insufficient groups for ANOVA'
+                }
+
+            # Pairwise comparisons (independent t-tests)
+            pairwise_comparisons = {}
+
+            # non-anhedonic vs low-anhedonic
+            if len(non_anhedonic_values) > 0 and len(low_anhedonic_values) > 0:
+                t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, low_anhedonic_values)
+                pairwise_comparisons['non-anhedonic_vs_low-anhedonic'] = {
+                    't_statistic': float(t_stat),
+                    'p_value': float(p_val),
+                    'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(low_anhedonic_values))
+                }
+
+            # non-anhedonic vs high-anhedonic
+            if len(non_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
+                t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, high_anhedonic_values)
+                pairwise_comparisons['non-anhedonic_vs_high-anhedonic'] = {
+                    't_statistic': float(t_stat),
+                    'p_value': float(p_val),
+                    'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(high_anhedonic_values))
+                }
+
+            # low-anhedonic vs high-anhedonic
+            if len(low_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
+                t_stat, p_val = scipy_stats.ttest_ind(low_anhedonic_values, high_anhedonic_values)
+                pairwise_comparisons['low-anhedonic_vs_high-anhedonic'] = {
+                    't_statistic': float(t_stat),
+                    'p_value': float(p_val),
+                    'mean_diff': float(np.mean(low_anhedonic_values) - np.mean(high_anhedonic_values))
+                }
+
+            observed_test_statistics[fc_type][network_key]['pairwise'] = pairwise_comparisons
+
+        # Print summary for this FC type
+        print(f"  {fc_type}: Computed statistics for {len(observed_test_statistics[fc_type])} networks")
+
+        # Print summary of significant results (uncorrected) for this FC type
+        significant_networks = []
+        for network_key, stats in observed_test_statistics[fc_type].items():
+            if 'anova' in stats and stats['anova'].get('p_value', 1.0) < 0.05:
+                significant_networks.append((network_key, stats['anova']['p_value']))
+
+        if significant_networks:
+            print(f"  Networks with p < 0.05 (ANOVA, uncorrected) for {fc_type}:")
+            for network_key, p_val in sorted(significant_networks, key=lambda x: x[1]):
+                print(f"    {network_key}: F = {observed_test_statistics[fc_type][network_key]['anova']['F_statistic']:.3f}, p = {p_val:.4f}")
         else:
-            observed_test_statistics[network_key]['anova'] = {
-                'F_statistic': np.nan,
-                'p_value': np.nan,
-                'n_groups_compared': len(valid_groups),
-                'note': 'Insufficient groups for ANOVA'
-            }
+            print(f"  No networks show p < 0.05 for {fc_type}")
 
-        # Pairwise comparisons (independent t-tests)
-        pairwise_comparisons = {}
-
-        # non-anhedonic vs low-anhedonic
-        if len(non_anhedonic_values) > 0 and len(low_anhedonic_values) > 0:
-            t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, low_anhedonic_values)
-            pairwise_comparisons['non-anhedonic_vs_low-anhedonic'] = {
-                't_statistic': float(t_stat),
-                'p_value': float(p_val),
-                'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(low_anhedonic_values))
-            }
-
-        # non-anhedonic vs high-anhedonic
-        if len(non_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
-            t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, high_anhedonic_values)
-            pairwise_comparisons['non-anhedonic_vs_high-anhedonic'] = {
-                't_statistic': float(t_stat),
-                'p_value': float(p_val),
-                'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(high_anhedonic_values))
-            }
-
-        # low-anhedonic vs high-anhedonic
-        if len(low_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
-            t_stat, p_val = scipy_stats.ttest_ind(low_anhedonic_values, high_anhedonic_values)
-            pairwise_comparisons['low-anhedonic_vs_high-anhedonic'] = {
-                't_statistic': float(t_stat),
-                'p_value': float(p_val),
-                'mean_diff': float(np.mean(low_anhedonic_values) - np.mean(high_anhedonic_values))
-            }
-
-        observed_test_statistics[network_key]['pairwise'] = pairwise_comparisons
-
-    print(f"Observed test statistics computed for {len(observed_test_statistics)} networks")
-
-    # Print summary of significant results (uncorrected)
-    print(f"\nNetworks with p < 0.05 (ANOVA, uncorrected):")
-    significant_networks = []
-    for network_key, stats in observed_test_statistics.items():
-        if 'anova' in stats and stats['anova'].get('p_value', 1.0) < 0.05:
-            significant_networks.append((network_key, stats['anova']['p_value']))
-
-    if significant_networks:
-        for network_key, p_val in sorted(significant_networks, key=lambda x: x[1]):
-            print(f"  {network_key}: F = {observed_test_statistics[network_key]['anova']['F_statistic']:.3f}, p = {p_val:.4f}")
-    else:
-        print(f"  None (no networks show p < 0.05)")
+    print(f"\nObserved test statistics computation complete")
+    print(f"  Total FC types processed: {len(observed_test_statistics)}")
 
     # ===== GROUP COMPARISON ANALYSIS =====
     group_comparison_results = None
@@ -3064,82 +3137,93 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"INTERHEMISPHERIC NETWORK COHERENCE EXTRACTION SUMMARY")
     print(f"{'='*80}")
 
-    # Get all unique networks across all groups
-    all_networks = set()
-    for group_data in grouped_interhemi_coherence.values():
-        all_networks.update(group_data.keys())
-    all_networks = sorted(all_networks)
-
-    print(f"\nTotal Networks Detected: {len(all_networks)}")
-    if all_networks:
-        print(f"Networks: {', '.join(all_networks)}")
-
-    # Show detailed stats for each network
-    for network_key in all_networks:
+    # Process each FC type separately
+    for fc_type in grouped_interhemi_coherence.keys():
         print(f"\n{'─'*80}")
-        print(f"Network: {network_key}")
+        print(f"FC Type: {fc_type.upper()}")
         print(f"{'─'*80}")
 
-        for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
-            if network_key in grouped_interhemi_coherence[group_name]:
-                network_data = grouped_interhemi_coherence[group_name][network_key]
-                values = np.array(network_data['valid_fisher_z_values'])
+        # Get all unique networks for this FC type
+        all_networks = set()
+        for group_data in grouped_interhemi_coherence[fc_type].values():
+            all_networks.update(group_data.keys())
+        all_networks = sorted(all_networks)
 
-                if len(values) > 0:
-                    mean_z = np.mean(values)
-                    std_z = np.std(values, ddof=1) if len(values) > 1 else 0.0
-                    min_z = np.min(values)
-                    max_z = np.max(values)
-                    n_valid = network_data['n_valid_subjects']
-                    n_excluded = network_data['n_excluded_subjects']
+        print(f"Total Networks Detected: {len(all_networks)}")
+        if all_networks:
+            print(f"Networks: {', '.join(all_networks)}")
 
-                    print(f"  {group_name:20s}: Mean = {mean_z:7.3f}, SD = {std_z:6.3f}, "
-                          f"Range = [{min_z:7.3f}, {max_z:7.3f}], "
-                          f"N = {n_valid:3d} (excluded: {n_excluded})")
+        # Show detailed stats for each network
+        for network_key in all_networks:
+            print(f"\n  Network: {network_key}")
+
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                if network_key in grouped_interhemi_coherence[fc_type][group_name]:
+                    network_data = grouped_interhemi_coherence[fc_type][group_name][network_key]
+                    values = np.array(network_data['valid_fisher_z_values'])
+
+                    if len(values) > 0:
+                        mean_z = np.mean(values)
+                        std_z = np.std(values, ddof=1) if len(values) > 1 else 0.0
+                        min_z = np.min(values)
+                        max_z = np.max(values)
+                        n_valid = network_data['n_valid_subjects']
+                        n_excluded = network_data['n_excluded_subjects']
+
+                        print(f"    {group_name:20s}: Mean = {mean_z:7.3f}, SD = {std_z:6.3f}, "
+                              f"Range = [{min_z:7.3f}, {max_z:7.3f}], "
+                              f"N = {n_valid:3d} (excluded: {n_excluded})")
+                    else:
+                        print(f"    {group_name:20s}: NO VALID SUBJECTS")
                 else:
-                    print(f"  {group_name:20s}: NO VALID SUBJECTS")
-            else:
-                print(f"  {group_name:20s}: NETWORK NOT PRESENT")
+                    print(f"    {group_name:20s}: NETWORK NOT PRESENT")
 
     # Test statistics detailed summary
     print(f"\n{'='*80}")
     print(f"OBSERVED TEST STATISTICS SUMMARY")
     print(f"{'='*80}")
 
-    for network_key in all_networks:
-        if network_key in observed_test_statistics:
-            stats = observed_test_statistics[network_key]
+    for fc_type in observed_test_statistics.keys():
+        print(f"\n{'─'*80}")
+        print(f"FC Type: {fc_type.upper()}")
+        print(f"{'─'*80}")
 
-            print(f"\n{network_key}:")
-            print(f"  Group Means (Fisher-Z):")
+        # Get all networks for this FC type
+        all_networks_fc = sorted(observed_test_statistics[fc_type].keys())
+
+        for network_key in all_networks_fc:
+            stats = observed_test_statistics[fc_type][network_key]
+
+            print(f"\n  {network_key}:")
+            print(f"    Group Means (Fisher-Z):")
             for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                 mean_val = stats['group_means'].get(group_name, np.nan)
                 sd_val = stats['group_sds'].get(group_name, np.nan)
                 n_val = stats['group_sizes'].get(group_name, 0)
                 if not np.isnan(mean_val):
-                    print(f"    {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {n_val:3d}")
+                    print(f"      {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {n_val:3d}")
                 else:
-                    print(f"    {group_name:20s}: No data")
+                    print(f"      {group_name:20s}: No data")
 
             # ANOVA results
             if 'anova' in stats:
                 anova = stats['anova']
                 if not np.isnan(anova.get('F_statistic', np.nan)):
-                    print(f"  ANOVA: F({anova['n_groups_compared']-1},{sum(stats['group_sizes'].values())-anova['n_groups_compared']}) = "
+                    print(f"    ANOVA: F({anova['n_groups_compared']-1},{sum(stats['group_sizes'].values())-anova['n_groups_compared']}) = "
                           f"{anova['F_statistic']:.3f}, p = {anova['p_value']:.4f} "
                           f"{'***' if anova['p_value'] < 0.001 else '**' if anova['p_value'] < 0.01 else '*' if anova['p_value'] < 0.05 else 'ns'}")
                 else:
-                    print(f"  ANOVA: {anova.get('note', 'Not computed')}")
+                    print(f"    ANOVA: {anova.get('note', 'Not computed')}")
 
             # Pairwise comparisons
             if 'pairwise' in stats and len(stats['pairwise']) > 0:
-                print(f"  Pairwise comparisons:")
+                print(f"    Pairwise comparisons:")
                 for comparison_name, comparison_data in stats['pairwise'].items():
                     t_stat = comparison_data['t_statistic']
                     p_val = comparison_data['p_value']
                     mean_diff = comparison_data['mean_diff']
                     sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
-                    print(f"    {comparison_name:45s}: t = {t_stat:7.3f}, p = {p_val:.4f} {sig_marker:3s} (Δ = {mean_diff:7.3f})")
+                    print(f"      {comparison_name:45s}: t = {t_stat:7.3f}, p = {p_val:.4f} {sig_marker:3s} (Δ = {mean_diff:7.3f})")
 
     # Validation warnings
     print(f"\n{'='*80}")
@@ -3147,29 +3231,30 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*80}")
 
     warnings_found = False
-    for group_name, networks in grouped_interhemi_coherence.items():
-        for network_key, network_data in networks.items():
-            values = np.array(network_data['valid_fisher_z_values'])
+    for fc_type in grouped_interhemi_coherence.keys():
+        for group_name, networks in grouped_interhemi_coherence[fc_type].items():
+            for network_key, network_data in networks.items():
+                values = np.array(network_data['valid_fisher_z_values'])
 
-            # Check for extreme values (|z| > 2.0 unusual but valid)
-            if len(values) > 0:
-                extreme_mask = np.abs(values) > 2.0
-                if np.any(extreme_mask):
+                # Check for extreme values (|z| > 2.0 unusual but valid)
+                if len(values) > 0:
+                    extreme_mask = np.abs(values) > 2.0
+                    if np.any(extreme_mask):
+                        warnings_found = True
+                        n_extreme = np.sum(extreme_mask)
+                        extreme_vals = values[extreme_mask]
+                        print(f"⚠ {fc_type}/{group_name}/{network_key}: {n_extreme} subjects with |Fisher-Z| > 2.0")
+                        print(f"  Extreme values: {extreme_vals}")
+
+                # Check for networks with few subjects
+                if len(values) < 5 and len(values) > 0:
                     warnings_found = True
-                    n_extreme = np.sum(extreme_mask)
-                    extreme_vals = values[extreme_mask]
-                    print(f"⚠ {group_name}/{network_key}: {n_extreme} subjects with |Fisher-Z| > 2.0")
-                    print(f"  Extreme values: {extreme_vals}")
+                    print(f"⚠ {fc_type}/{group_name}/{network_key}: Only {len(values)} subjects (statistical power may be low)")
 
-            # Check for networks with few subjects
-            if len(values) < 5 and len(values) > 0:
-                warnings_found = True
-                print(f"⚠ {group_name}/{network_key}: Only {len(values)} subjects (statistical power may be low)")
-
-            # Check for excluded subjects
-            if network_data['n_excluded_subjects'] > 0:
-                warnings_found = True
-                print(f"ℹ {group_name}/{network_key}: {network_data['n_excluded_subjects']} subjects excluded (no valid parcel pairs)")
+                # Check for excluded subjects
+                if network_data['n_excluded_subjects'] > 0:
+                    warnings_found = True
+                    print(f"ℹ {fc_type}/{group_name}/{network_key}: {network_data['n_excluded_subjects']} subjects excluded (no valid parcel pairs)")
 
     if not warnings_found:
         print("✓ No validation warnings - all values within expected ranges")
@@ -3190,7 +3275,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     'low-anhedonic': len([sid for sid in anhedonic_results.keys() if sid in low_anhedonic_subjects]),
                     'high-anhedonic': len([sid for sid in anhedonic_results.keys() if sid in high_anhedonic_subjects])
                 },
-                'n_networks': len(all_networks)
+                'fc_types': list(grouped_interhemi_coherence.keys()),
+                'n_fc_types': len(grouped_interhemi_coherence)
             }
         }
 
