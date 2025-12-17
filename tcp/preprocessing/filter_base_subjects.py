@@ -2,7 +2,7 @@
 """
 TCP Base Subject Filtering Script
 
-Applies universal inclusion criteria that must be met by ALL subjects 
+Applies universal inclusion criteria that must be met by ALL subjects
 across all analysis groups:
 1. Valid BIDS directory structure (from validate_subjects.py)
 2. Has at least one task-based scan (hammer OR stroop)
@@ -14,13 +14,14 @@ Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
-import json
-from datetime import datetime
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
@@ -28,10 +29,12 @@ sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.utils.phenotype_filters import (
-    PhenotypeFilter, PhenotypeFilterResult, ShapsCompletionFilter
+    PhenotypeFilter,
+    PhenotypeFilterResult,
+    ShapsCompletionFilter,
 )
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
-from tcp.preprocessing.utils.git_annex_utils import read_tsv_with_annex_support
+from tcp.utils.file_utils import read_tsv_with_annex_support
 
 
 class BaseSubjectFilterPipeline:
@@ -150,7 +153,7 @@ class BaseSubjectFilterPipeline:
 
         # Apply SHAPS completion filter
         shaps_result = self.apply_shaps_completion_filter()
-        
+
         # Use included subjects as our base pool
         base_subjects = shaps_result.included_subjects.copy()
         excluded_subjects = shaps_result.excluded_subjects.copy()
@@ -162,7 +165,7 @@ class BaseSubjectFilterPipeline:
             'final_base_subjects': len(base_subjects),
             'exclusion_breakdown': {}
         }
-        
+
         # Add exclusion breakdown if there are excluded subjects
         if len(excluded_subjects) > 0 and 'exclusion_reason' in excluded_subjects.columns:
             statistics['exclusion_breakdown']['missing_shaps'] = len(
@@ -223,7 +226,7 @@ class BaseSubjectFilterPipeline:
         print(f"\n{'=' * 60}")
         print(f"BASE SUBJECT FILTERING SUMMARY")
         print(f"{'=' * 60}")
-        
+
         print(f"\nUniversal inclusion criteria:")
         print(f"  {CHECK} Valid BIDS directory structure")
         print(f"  {CHECK} Has at least one task-based scan (hammer OR stroop)")

@@ -9,28 +9,36 @@ Author: Ian Philip Eglin
 Date: 2025-09-23
 """
 
-import sys
+import json
 import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import json
-from datetime import datetime
 
 # Add project root to path to import config
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
-from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, WARNING, SUCCESS, ERROR, ARROW_RIGHT
-from tcp.preprocessing.utils.git_annex_utils import is_git_annex_pointer
+from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.utils.unicode_compat import (
+    ARROW_RIGHT,
+    CHECK,
+    CROSS,
+    ERROR,
+    SUCCESS,
+    WARNING,
+)
+from tcp.utils.file_utils import is_git_annex_pointer
+
 
 class GlobalDataFetcher:
     """Fetches global dataset files needed for subject filtering"""
-    
+
     def __init__(self, dataset_path: Optional[Path] = None, output_dir: Optional[Path] = None):
         self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
         self.output_dir = Path(output_dir) if output_dir else get_script_output_path('tcp_preprocessing', 'fetch_global_data')
-        
+
         # Global files needed for filtering
         self.global_files = {
             'participants': {
@@ -64,10 +72,10 @@ class GlobalDataFetcher:
                 'required': False
             }
         }
-        
+
         print(f"Dataset path: {self.dataset_path}")
         print(f"Output directory: {self.output_dir}")
-    
+
     def validate_dataset(self) -> bool:
         """Validate that dataset is properly initialized"""
         if not self.dataset_path.exists():
@@ -81,7 +89,7 @@ class GlobalDataFetcher:
 
         print(f"{CHECK} Dataset directory validated: {self.dataset_path}")
         return True
-    
+
     def check_datalad_available(self) -> bool:
         """Check if datalad is available"""
         try:
@@ -94,31 +102,31 @@ class GlobalDataFetcher:
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
-    
+
     def is_file_downloaded(self, file_path: Path) -> bool:
         """Check if a file has been downloaded (not a git-annex pointer/symlink)"""
         full_path = self.dataset_path / file_path
-        
+
         if not full_path.exists():
             return False
-        
+
         # Use git-annex utility to check if it's a pointer file (works on Windows and Unix)
         if is_git_annex_pointer(full_path):
             return False
-        
+
         # Check if it has actual content
         try:
             return full_path.stat().st_size > 100  # Actual data files should be larger than pointers
         except (OSError, IOError):
             return False
-    
+
     def fetch_file(self, file_info: Dict, file_key: str) -> Tuple[bool, str]:
         """Fetch a single global file using datalad get"""
         file_path = file_info['path']
         full_path = self.dataset_path / file_path
-        
+
         print(f"  Fetching {file_key}: {file_path}")
-        
+
         # Check if already downloaded
         if self.is_file_downloaded(Path(file_path)):
             print(f"    {CHECK} Already downloaded")
@@ -133,7 +141,7 @@ class GlobalDataFetcher:
             else:
                 print(f"    {WARNING} {message} (optional file)")
                 return True, message
-        
+
         try:
             # Use datalad get to fetch the file
             cmd = ['datalad', 'get', file_path]
@@ -144,7 +152,7 @@ class GlobalDataFetcher:
                 text=True,
                 timeout=120  # 2 minute timeout per file
             )
-            
+
             if result.returncode == 0:
                 print(f"    {CHECK} Downloaded successfully")
                 return True, "Downloaded successfully"
@@ -161,23 +169,23 @@ class GlobalDataFetcher:
             message = f"Download error for {file_path}: {e}"
             print(f"    {CROSS} {message}")
             return False, message
-    
+
     def validate_fetched_files(self) -> Dict[str, Dict]:
         """Validate that fetched files are readable and contain expected data"""
         print("\nValidating fetched files...")
-        
+
         # Import pandas here where it's needed
         try:
             import pandas as pd
         except ImportError:
             print("Warning: pandas not available for TSV validation")
             pd = None
-        
+
         validation_results = {}
-        
+
         for file_key, file_info in self.global_files.items():
             file_path = self.dataset_path / file_info['path']
-            
+
             validation_result = {
                 'exists': False,
                 'readable': False,
@@ -187,17 +195,17 @@ class GlobalDataFetcher:
                 'columns': [],
                 'error': None
             }
-            
+
             print(f"  Validating {file_key}: {file_info['path']}")
-            
+
             # Check existence
             if not file_path.exists():
                 validation_result['error'] = "File does not exist"
                 validation_results[file_key] = validation_result
                 continue
-            
+
             validation_result['exists'] = True
-            
+
             # Try to read the file
             try:
                 if file_path.suffix == '.tsv':
@@ -208,7 +216,7 @@ class GlobalDataFetcher:
                         validation_result['valid_format'] = True
                         validation_result['column_count'] = len(df.columns)
                         validation_result['columns'] = list(df.columns)
-                        
+
                         # Get full row count
                         full_df = pd.read_csv(file_path, sep='\t')
                         validation_result['row_count'] = len(full_df)
@@ -231,7 +239,7 @@ class GlobalDataFetcher:
                                 print(f"    {CHECK} File exists (encoding issues, but readable)")
                                 validation_results[file_key] = validation_result
                                 continue
-                        
+
                         validation_result['readable'] = True
                         validation_result['valid_format'] = len(lines) > 0
                         validation_result['row_count'] = len(lines) - 1  # minus header
@@ -239,7 +247,7 @@ class GlobalDataFetcher:
                             validation_result['columns'] = lines[0].strip().split('\t')
                             validation_result['column_count'] = len(validation_result['columns'])
                         print(f"    {CHECK} Valid TSV: {validation_result['row_count']} rows, {validation_result['column_count']} columns")
-                    
+
                 elif file_path.suffix == '.json':
                     # Read JSON file
                     with open(file_path, 'r') as f:
@@ -247,7 +255,7 @@ class GlobalDataFetcher:
                     validation_result['readable'] = True
                     validation_result['valid_format'] = True
                     print(f"    {CHECK} Valid JSON file")
-                    
+
                 else:
                     # Read as text file
                     with open(file_path, 'r') as f:
@@ -255,41 +263,41 @@ class GlobalDataFetcher:
                     validation_result['readable'] = True
                     validation_result['valid_format'] = len(content) > 0
                     print(f"    {CHECK} Readable text file")
-                
+
             except Exception as e:
                 validation_result['error'] = str(e)
                 print(f"    {CROSS} Validation failed: {e}")
-            
+
             validation_results[file_key] = validation_result
-        
+
         return validation_results
-    
+
     def fetch_all_files(self) -> Tuple[Dict[str, bool], Dict[str, str]]:
         """Fetch all global files"""
         print("=== Fetching Global Files ===")
-        
+
         if not self.check_datalad_available():
             raise RuntimeError("DataLad is not available. Please install datalad.")
-        
+
         fetch_results = {}
         fetch_messages = {}
-        
+
         for file_key, file_info in self.global_files.items():
             success, message = self.fetch_file(file_info, file_key)
             fetch_results[file_key] = success
             fetch_messages[file_key] = message
-        
+
         return fetch_results, fetch_messages
-    
-    def create_summary_report(self, fetch_results: Dict[str, bool], 
+
+    def create_summary_report(self, fetch_results: Dict[str, bool],
                             fetch_messages: Dict[str, str],
                             validation_results: Dict[str, Dict]) -> Dict:
         """Create summary report of fetching process"""
-        
+
         successful_fetches = sum(1 for success in fetch_results.values() if success)
         required_files = [k for k, v in self.global_files.items() if v['required']]
         required_successful = sum(1 for k in required_files if fetch_results.get(k, False))
-        
+
         report = {
             'timestamp': datetime.now().isoformat(),
             'dataset_path': str(self.dataset_path),
@@ -304,23 +312,23 @@ class GlobalDataFetcher:
             'validation_results': validation_results,
             'files_info': self.global_files
         }
-        
+
         return report
-    
+
     def export_results(self, report: Dict) -> Path:
         """Export fetching results and summary"""
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         print(f"\nExporting results to {self.output_dir}")
-        
+
         # Export main report
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         report_file = self.output_dir / f'global_fetch_report_{timestamp}.json'
-        
+
         with open(report_file, 'w') as f:
             json.dump(report, f, indent=2)
         print(f"  {CHECK} Fetch report: {report_file}")
-        
+
         # Create simple status file for pipeline
         status_file = self.output_dir / 'fetch_status.json'
         status = {
@@ -329,24 +337,24 @@ class GlobalDataFetcher:
             'successful_files': [k for k, v in report['fetch_results'].items() if v],
             'failed_files': [k for k, v in report['fetch_results'].items() if not v]
         }
-        
+
         with open(status_file, 'w') as f:
             json.dump(status, f, indent=2)
         print(f"  {CHECK} Status file: {status_file}")
-        
+
         return self.output_dir
-    
+
     def print_summary(self, report: Dict) -> None:
         """Print summary to console"""
         print(f"\n{'='*60}")
         print(f"GLOBAL DATA FETCH SUMMARY")
         print(f"{'='*60}")
-        
+
         print(f"Total files processed: {report['total_files']}")
         print(f"Successful fetches: {report['successful_fetches']}")
         print(f"Failed fetches: {report['failed_fetches']}")
         print(f"Required files fetched: {report['required_files_successful']}/{report['required_files_total']}")
-        
+
         # Show file-by-file results
         print(f"\nFile-by-file results:")
         for file_key, file_info in self.global_files.items():
@@ -370,7 +378,7 @@ class GlobalDataFetcher:
             print(f"\n{SUCCESS} All required files successfully fetched!")
         else:
             print(f"\n{ERROR} Some required files failed to fetch.")
-            failed_required = [k for k in ['participants', 'phenotype_demos'] 
+            failed_required = [k for k in ['participants', 'phenotype_demos']
                              if not report['fetch_results'].get(k, False)]
             if failed_required:
                 print(f"Failed required files: {failed_required}")
@@ -379,36 +387,36 @@ def main():
     """Main execution function"""
     print("TCP Global Data Fetcher")
     print("=" * 50)
-    
+
     # Initialize fetcher
     fetcher = GlobalDataFetcher()
-    
+
     # Validate dataset
     if not fetcher.validate_dataset():
         print(f"{ERROR} Dataset validation failed. Please run initialize_dataset.py first.")
         return 1
-    
+
     try:
         # Fetch all files
         fetch_results, fetch_messages = fetcher.fetch_all_files()
-        
+
         # Validate fetched files
         validation_results = fetcher.validate_fetched_files()
-        
+
         # Create summary report
         report = fetcher.create_summary_report(fetch_results, fetch_messages, validation_results)
-        
+
         # Export results
         output_dir = fetcher.export_results(report)
-        
+
         # Print summary
         fetcher.print_summary(report)
-        
+
         print(f"\n{'='*60}")
         print(f"FETCH COMPLETE")
         print(f"{'='*60}")
         print(f"Results saved to: {output_dir}")
-        
+
         if report['all_required_files_fetched']:
             print(f"\nNext steps:")
             print(f"  1. Run filter_subjects.py for task data filtering")
