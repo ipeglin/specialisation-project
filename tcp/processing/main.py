@@ -30,13 +30,18 @@ for path in paths_to_remove:
 # Insert project root at the beginning
 sys.path.insert(0, str(project_root))
 
+import logging
 import random
+import warnings
 from itertools import islice
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import pingouin as pg
 from scipy import signal, stats
+from statsmodels.stats.multitest import fdrcorrection
 
 from config.paths import get_analysis_path
 from tcp.processing import DataLoader, SubjectManager
@@ -49,6 +54,7 @@ from tcp.processing.lib.logging import write_analysis_log
 from tcp.processing.lib.mvmd import MVMD
 from tcp.processing.lib.plot import (
     plot_fc_results,
+    plot_interhemispheric_intra_network_violin,
     plot_marginal_spectrum_per_mode,
     plot_multivariate_hilbert_spectrum,
     plot_roi_timeseries_result,
@@ -62,6 +68,8 @@ from tcp.processing.roi import (
     SubCorticalAtlasLookup,
 )
 from tcp.processing.utils.lists import chunks, split_by_sizes
+
+logger = logging.getLogger(__name__)
 
 # ===== SIGNAL ACQUISITION PARAMETERS =====
 TR = 800e-3  # Repetition Time [seconds]
@@ -469,8 +477,8 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
         has_slow_band_fc = False
 
         if fc_type == 'static':
-            fc_data = result.get('static_functional_connectivity')
-            has_static_fc = fc_data and fc_data.get('static_fc_matrix') is not None
+            fc_data = result.get('fc_static')
+            has_static_fc = fc_data and fc_data.get('r_fc') is not None
         else:
             slow_band_data = result.get('slow_band_fc')
             has_slow_band_fc = slow_band_data and band_key and band_key in slow_band_data
@@ -483,11 +491,11 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
 
         # Extract FC data based on type
         if fc_type == 'static':
-            fc_data = result.get('static_functional_connectivity')
-            if fc_data and fc_data.get('static_fc_matrix') is not None:
-                fc_matrix = fc_data['static_fc_matrix']
+            fc_data = result.get('fc_static')
+            if fc_data and fc_data.get('r_fc') is not None:
+                fc_matrix = fc_data['r_fc']
                 if fc_labels is None:
-                    fc_labels = fc_data['static_fc_labels']
+                    fc_labels = fc_data.get('labels')
                 fc_matrices.append(fc_matrix)
                 included_subjects.append(subject_id)
 
@@ -1979,7 +1987,7 @@ def aggregate_group_connectivity(all_subject_results, connectivity_mappings, anh
 
 # ===== HELPER FUNCTIONS FOR STAGE 4 =====
 
-def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network_pairs, network_key, verbose=False):
+def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network_pairs, network_key, subject_channel_labels=None, verbose=False):
     """
     Compute band-specific interhemispheric coherence from mode FC matrices.
 
@@ -1993,6 +2001,7 @@ def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network
         center_freqs: Center frequencies for each mode
         network_pairs: List of interhemispheric pairs for this network
         network_key: Network identifier for logging
+        subject_channel_labels: Dict mapping subject indices to channel labels (for correct indexing)
         verbose: Whether to print detailed output
 
     Returns:
@@ -2023,11 +2032,25 @@ def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network
         # Extract network pairs and compute spatial average
         network_z_values = []
         for pair in network_pairs:
-            lh_idx = pair['lh_idx']
-            rh_idx = pair['rh_idx']
-            z_value = avg_band_z_matrix[lh_idx, rh_idx]
-            if not np.isnan(z_value):
-                network_z_values.append(z_value)
+            if subject_channel_labels:
+                # Convert from standardized indices to channel labels, then to subject indices
+                lh_label = pair['lh_label']
+                rh_label = pair['rh_label']
+                subject_label_to_idx = {label: idx for idx, label in subject_channel_labels.items()}
+
+                if lh_label in subject_label_to_idx and rh_label in subject_label_to_idx:
+                    subj_lh_idx = subject_label_to_idx[lh_label]
+                    subj_rh_idx = subject_label_to_idx[rh_label]
+                    z_value = avg_band_z_matrix[subj_lh_idx, subj_rh_idx]
+                    if not np.isnan(z_value):
+                        network_z_values.append(z_value)
+            else:
+                # Fallback to standardized indices (may be incorrect)
+                lh_idx = pair['lh_idx']
+                rh_idx = pair['rh_idx']
+                z_value = avg_band_z_matrix[lh_idx, rh_idx]
+                if not np.isnan(z_value):
+                    network_z_values.append(z_value)
 
         if network_z_values:
             # Spatial averaging: collapse network nodes into single scalar
@@ -2038,7 +2061,7 @@ def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network
 
     return band_coherence
 
-def get_group_permutations(all_subject_results, groups):
+def get_group_permutations(all_subject_results, groups, verbose=False):
     results = {
         'group_permutations': [],
         'n_permutations': 0,
@@ -2061,14 +2084,18 @@ def get_group_permutations(all_subject_results, groups):
             }
             formatted_permutations.append(iteration_dict)
 
-        print(f"Created {len(grouped_chunks)} permutations:\n{formatted_permutations}")
+        if verbose:
+            logger.info(f"Created {len(grouped_chunks)} permutations:\n{formatted_permutations}")
+        else:
+            logger.info(f"Created {len(grouped_chunks)} permutations")
 
         results['group_permutations'] = formatted_permutations
         results['group_sizes'] = group_subject_counts
         results['n_permutations'] = len(formatted_permutations)
         results['n_groups'] = len(formatted_permutations[0].keys())
     else:
-        print(f"Skipped group permutations. One or more groups have less than {PERMUTATION_GROUP_COUNT} subjects")
+        if verbose:
+            logger.info(f"Skipped group permutations. One or more groups have less than {PERMUTATION_GROUP_COUNT} subjects")
 
     return results
 
@@ -2140,32 +2167,72 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
                     continue
 
                 # ===== STATIC FC ANALYSIS =====
-                z_fc_static = result.get('z_fc_static')
-                if z_fc_static is not None:
+                # Use new structured format
+                fc_static_data = result.get('fc_static', {})
+                z_fc_static = fc_static_data.get('z_fc')
+                subject_channel_labels = result.get('channel_labels', {})
+
+                # DEBUG: Print debug info for first subject and network (only for real anhedonia groups)
+                if verbose and (subject_id == subject_ids[0] and network_key == list(intra_network_pairs.keys())[0] and
+                    any(name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic'] for name in groups.keys())):
+                    logger.info(f"DEBUG - Subject {subject_id}, Network {network_key}:")
+                    logger.info(f"  fc_static_data keys: {list(fc_static_data.keys()) if fc_static_data else 'None'}")
+                    logger.info(f"  z_fc_static shape: {z_fc_static.shape if z_fc_static is not None else 'None'}")
+                    logger.info(f"  subject_channel_labels count: {len(subject_channel_labels)}")
+                    logger.info(f"  pairs count: {len(pairs)}")
+                    if pairs:
+                        sample_pair = pairs[0]
+                        logger.info(f"  sample pair: {sample_pair}")
+
+                if z_fc_static is not None and subject_channel_labels:
+                    # Create mapping from subject indices to channel labels
+                    subject_idx_to_label = {idx: label for idx, label in subject_channel_labels.items()}
+                    subject_label_to_idx = {label: idx for idx, label in subject_channel_labels.items()}
+
                     # Get Fisher-Z values for all pairs in this network
                     network_z_values = []
                     for pair in pairs:
-                        lh_idx = pair['lh_idx']
-                        rh_idx = pair['rh_idx']
-                        # Extract correlation from Fisher-Z matrix
-                        z_value = z_fc_static[lh_idx, rh_idx]
-                        if not np.isnan(z_value):
-                            network_z_values.append(z_value)
+                        # Convert from standardized indices to channel labels, then to subject indices
+                        lh_label = pair['lh_label']  # Use labels instead of standardized indices
+                        rh_label = pair['rh_label']
+
+                        # Get subject-specific indices for these labels
+                        if lh_label in subject_label_to_idx and rh_label in subject_label_to_idx:
+                            subj_lh_idx = subject_label_to_idx[lh_label]
+                            subj_rh_idx = subject_label_to_idx[rh_label]
+
+                            # Extract correlation from Fisher-Z matrix using subject indices
+                            z_value = z_fc_static[subj_lh_idx, subj_rh_idx]
+                            if not np.isnan(z_value):
+                                network_z_values.append(z_value)
+                        elif verbose and (subject_id == subject_ids[0] and network_key == list(intra_network_pairs.keys())[0] and
+                              any(name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic'] for name in groups.keys())):
+                            logger.info(f"  DEBUG - Missing labels: {lh_label} in subject: {lh_label in subject_label_to_idx}, {rh_label} in subject: {rh_label in subject_label_to_idx}")
+                            if lh_label not in subject_label_to_idx:
+                                logger.info(f"    Available labels sample: {list(subject_label_to_idx.keys())[:5]}")
 
                     if network_z_values:
                         # Spatial averaging: collapse network nodes into single scalar
                         mean_network_coherence = np.mean(network_z_values)
                         static_coherence_values.append(mean_network_coherence)
+                else:
+                    # DEBUG: Why is static FC missing?
+                    if verbose and (subject_id == subject_ids[0] and network_key == list(intra_network_pairs.keys())[0] and
+                        any(name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic'] for name in groups.keys())):
+                        logger.info(f"DEBUG - Static FC missing: z_fc_static={z_fc_static is not None}, channel_labels={len(subject_channel_labels)}")
 
                 # ===== SLOW-BAND FC ANALYSIS =====
-                z_fc_modes = result.get('z_fc_modes')
-                mvmd_metadata = result.get('mvmd_metadata', {})
+                # Use new structured format
+                fc_modes_data = result.get('fc_modes', {})
+                z_fc_modes = fc_modes_data.get('z_fc')
+                mvmd_data = result.get('mvmd', {})
+                mvmd_metadata = mvmd_data.get('metadata', {})
                 center_freqs = mvmd_metadata.get('center_freqs')
 
                 if z_fc_modes is not None and center_freqs is not None:
                     # Compute band-specific coherence for this subject
                     subject_band_coherence = compute_band_specific_coherence_from_modes(
-                        z_fc_modes, center_freqs, pairs, network_key, verbose=False
+                        z_fc_modes, center_freqs, pairs, network_key, subject_channel_labels, verbose=False
                     )
 
                     # Store coherence values by band
@@ -2217,28 +2284,641 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
 
     return stats_results
 
-def coherence_anova_test(stat_results):
-    """
-    Stage 4: One-way ANOVA analysis across groups for all interhemispheric intra-network correlations
-    
-    """
-    results = {}
+# ===== HELPER FUNCTIONS FOR STATISTICAL TESTING =====
 
-    static_groups = stat_results.get('static_coherence_by_group')
-    slow_band_groups = stat_results.get('slow_band_coherence_by_group')
+def _extract_group_data_for_anova(stat_results_by_group, network_key, band_name=None):
+    """
+    Extract group data for ANOVA testing from prepared statistics structure.
 
+    Args:
+        stat_results_by_group: Group statistics from prepare_statistics_data()
+        network_key: Network identifier (e.g., "PFCm_DefaultA")
+        band_name: Optional frequency band name for slow-band analysis
+
+    Returns:
+        tuple: (group_data_dict, all_values_list)
+            - group_data_dict: {group_name: [observed_values]}
+            - all_values_list: flattened list of all values for overall tests
+    """
+    group_data = {}
+    all_values = []
+
+    for group_name, group_networks in stat_results_by_group.items():
+        if network_key not in group_networks:
+            continue
+
+        if band_name is None:
+            # Static FC analysis
+            network_data = group_networks[network_key]
+            values = network_data.get('observed_values', [])
+        else:
+            # Slow-band FC analysis
+            if band_name not in group_networks[network_key]:
+                continue
+            band_data = group_networks[network_key][band_name]
+            values = band_data.get('observed_values', [])
+
+        if values:
+            group_data[group_name] = values
+            all_values.extend(values)
+
+    return group_data, all_values
+
+
+def _perform_levene_test(group_data, verbose=False):
+    """
+    Perform Levene test for homogeneity of variance across groups.
+
+    Args:
+        group_data: Dict of {group_name: [values]} from _extract_group_data_for_anova()
+        verbose: Whether to print test details
+
+    Returns:
+        dict: Levene test results with statistic, p-value, and assumption met flag
+    """
+    if len(group_data) < 2:
+        return {
+            'statistic': np.nan,
+            'p_value': np.nan,
+            'homogeneity_assumption_met': False,
+            'note': 'Insufficient groups for variance testing'
+        }
+
+    group_values = list(group_data.values())
+
+    # Check if all groups have sufficient data
+    min_group_size = min(len(vals) for vals in group_values)
+    if min_group_size < 2:
+        return {
+            'statistic': np.nan,
+            'p_value': np.nan,
+            'homogeneity_assumption_met': False,
+            'note': 'Insufficient subjects in one or more groups'
+        }
+
+    try:
+        # Perform Levene test (using median, more robust than mean)
+        levene_stat, levene_p = stats.levene(*group_values, center='median')
+
+        # Conventional alpha = 0.05 for variance homogeneity
+        assumption_met = levene_p > 0.05
+
+        if verbose:
+            print(f"      Levene test: W = {levene_stat:.4f}, p = {levene_p:.4f} "
+                  f"({'assumption met' if assumption_met else 'assumption violated'})")
+
+        return {
+            'statistic': levene_stat,
+            'p_value': levene_p,
+            'homogeneity_assumption_met': assumption_met,
+            'note': 'Test completed successfully'
+        }
+
+    except Exception as e:
+        return {
+            'statistic': np.nan,
+            'p_value': np.nan,
+            'homogeneity_assumption_met': False,
+            'note': f'Levene test failed: {str(e)}'
+        }
+
+
+def _perform_anova_or_welch(group_data, homogeneity_met, verbose=False):
+    """
+    Perform appropriate ANOVA test based on variance homogeneity.
+
+    Args:
+        group_data: Dict of {group_name: [values]} from _extract_group_data_for_anova()
+        homogeneity_met: Boolean from Levene test results
+        verbose: Whether to print test details
+
+    Returns:
+        dict: ANOVA test results with test type, statistics, and degrees of freedom
+    """
+    if len(group_data) < 2:
+        return {
+            'test_type': 'none',
+            'F_statistic': np.nan,
+            'p_value': np.nan,
+            'df_between': np.nan,
+            'df_within': np.nan,
+            'note': 'Insufficient groups for ANOVA'
+        }
+
+    group_values = list(group_data.values())
+    group_names = list(group_data.keys())
+
+    # Calculate degrees of freedom
+    n_groups = len(group_values)
+    group_sizes = [len(vals) for vals in group_values]
+    total_n = sum(group_sizes)
+    df_between = n_groups - 1
+    df_within = total_n - n_groups
+
+    if df_within <= 0:
+        return {
+            'test_type': 'none',
+            'F_statistic': np.nan,
+            'p_value': np.nan,
+            'df_between': df_between,
+            'df_within': df_within,
+            'note': 'Insufficient degrees of freedom'
+        }
+
+    try:
+        if homogeneity_met:
+            # Standard one-way ANOVA (assumes equal variances)
+            f_stat, p_value = stats.f_oneway(*group_values)
+            test_type = 'standard_anova'
+
+            if verbose:
+                print(f"      Standard ANOVA: F({df_between},{df_within}) = {f_stat:.4f}, p = {p_value:.4f}")
+
+        else:
+            # Welch ANOVA (does not assume equal variances)
+            # NOTE: scipy doesn't have built-in Welch ANOVA, so we implement it
+            f_stat, p_value = _welch_anova_new(group_values)
+            test_type = 'welch_anova'
+
+            if verbose:
+                print(f"      Welch ANOVA: F = {f_stat:.4f}, p = {p_value:.4f} (unequal variances)")
+
+        return {
+            'test_type': test_type,
+            'F_statistic': f_stat,
+            'p_value': p_value,
+            'df_between': df_between,
+            'df_within': df_within,
+            'note': 'Test completed successfully'
+        }
+
+    except Exception as e:
+        return {
+            'test_type': 'failed',
+            'F_statistic': np.nan,
+            'p_value': np.nan,
+            'df_between': df_between,
+            'df_within': df_within,
+            'note': f'ANOVA failed: {str(e)}'
+        }
+
+
+def _welch_anova(group_values):
+    """
+    Perform Welch ANOVA (one-way ANOVA without equal variance assumption).
+
+    Args:
+        group_values: List of arrays, one per group
+
+    Returns:
+        tuple: (F_statistic, p_value)
+    """
+    # Calculate group statistics
+    group_means = [np.mean(vals) for vals in group_values]
+    # Calculate sample variance with warning suppression for edge cases
+    import warnings
+    group_vars = []
+    for vals in group_values:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            var = np.var(vals, ddof=1)
+            group_vars.append(var if not np.isnan(var) else 0.0)
+    group_ns = [len(vals) for vals in group_values]
+
+    # Check for zero or near-zero variances (problematic for Welch ANOVA)
+    min_var_threshold = 1e-10
+    zero_var_groups = [i for i, var in enumerate(group_vars) if var < min_var_threshold]
+    if zero_var_groups:
+        # If any group has zero variance, Welch ANOVA is not appropriate
+        return np.nan, np.nan
+
+    # Check for sufficient sample sizes
+    if any(n <= 1 for n in group_ns):
+        return np.nan, np.nan
+
+    # Weighted mean
+    try:
+        weights = [n/var for n, var in zip(group_ns, group_vars)]
+        total_weight = sum(weights)
+        if total_weight == 0:
+            return np.nan, np.nan
+        weighted_mean = sum(w*mean for w, mean in zip(weights, group_means)) / total_weight
+    except (ZeroDivisionError, ValueError):
+        return np.nan, np.nan
+
+    # Welch F-statistic
+    numerator = sum(w * (mean - weighted_mean)**2 for w, mean in zip(weights, group_means))
+    k = len(group_values)  # number of groups
+
+    # Denominator correction factor
+    denominator = 2 * (k - 2) / (k**2 - 1) * sum((1 - w/sum(weights))**2 / (n - 1)
+                                                  for w, n in zip(weights, group_ns))
+
+    if denominator == 0:
+        return np.nan, np.nan
+
+    f_statistic = numerator / (k - 1) / (1 + denominator)
+
+    # Approximate degrees of freedom for p-value calculation
+    df1 = k - 1
+    df2 = (k**2 - 1) / (3 * sum((1 - w/sum(weights))**2 / (n - 1)
+                                for w, n in zip(weights, group_ns)))
+
+    # Calculate p-value
+    p_value = 1 - stats.f.cdf(f_statistic, df1, df2)
+
+    return f_statistic, p_value
+
+def _welch_anova_new(group_values):
+    """
+    Perform Welch ANOVA, gracefully handling empty groups or groups with n=1.
+    """
+    # 1. Filter out invalid groups (must have at least 2 points for variance)
+    # This prevents the RuntimeWarning entirely
+    valid_groups = [np.asarray(g) for g in group_values if g is not None and len(g) > 1]
+
+    # 2. Check if we have enough groups left to compare (k >= 2)
+    k = len(valid_groups)
+    if k < 2:
+        return np.nan, np.nan
+
+    # 3. Calculate group statistics
+    group_ns = np.array([len(g) for g in valid_groups])
+    group_means = np.array([np.mean(g) for g in valid_groups])
+    group_vars = np.array([np.var(g, ddof=1) for g in valid_groups])
+
+    # 4. Check for zero variance across the remaining groups
+    # Welch's ANOVA fails if variance is 0 because it's used in the denominator
+    min_var_threshold = 1e-10
+    if np.any(group_vars < min_var_threshold):
+        return np.nan, np.nan
+
+    # 5. Calculate Weights (w = n / var)
+    weights = group_ns / group_vars
+    sum_w = np.sum(weights)
+
+    # 6. Weighted mean and Welch components
+    weighted_mean = np.sum(weights * group_means) / sum_w
+
+    # Numerator of the F-statistic
+    numerator = np.sum(weights * (group_means - weighted_mean)**2) / (k - 1)
+
+    # Denominator adjustment (Aspin-Welch)
+    lambdas = (1 - weights / sum_w)**2 / (group_ns - 1)
+    sum_lambdas = np.sum(lambdas)
+
+    v_adj = (2 * (k - 2) / (k**2 - 1)) * sum_lambdas
+    f_statistic = numerator / (1 + v_adj)
+
+    # 7. Degrees of Freedom
+    df1 = k - 1
+    df2 = (k**2 - 1) / (3 * sum_lambdas)
+
+    # 8. P-value using the survival function (sf)
+    p_value = stats.f.sf(f_statistic, df1, df2)
+
+    return f_statistic, p_value
+
+def _compute_group_summary_stats(group_data):
+    """
+    Compute summary statistics for each group.
+
+    Args:
+        group_data: Dict of {group_name: [values]}
+
+    Returns:
+        dict: Summary statistics by group
+    """
+    summary = {
+        'group_sizes': {},
+        'group_means': {},
+        'group_stds': {},
+        'group_counts': {}
+    }
+
+    for group_name, values in group_data.items():
+        if values:
+            summary['group_sizes'][group_name] = len(values)
+            summary['group_means'][group_name] = np.mean(values)
+            summary['group_stds'][group_name] = np.std(values, ddof=1)  # Sample std
+            summary['group_counts'][group_name] = len(values)
+        else:
+            summary['group_sizes'][group_name] = 0
+            summary['group_means'][group_name] = np.nan
+            summary['group_stds'][group_name] = np.nan
+            summary['group_counts'][group_name] = 0
+
+    return summary
+
+
+# ===== WELCH ANOVA AND GAMES-HOWELL HELPER FUNCTIONS =====
+#
+# STATISTICAL TESTING APPROACH IMPLEMENTED:
+# - Welch one-way ANOVA as default omnibus test (robust to unequal group sizes/heteroscedasticity)
+# - Games-Howell post-hoc tests for significant omnibus results (uncorrected p < 0.05)
+# - FDR correction applied to omnibus ANOVA p-values per band (not to post-hoc p-values)
+# - Fisher-Z transformed FC values used for all statistical inference
+# - Post-hoc results saved to CSV files for interpretation
+# - TODO: Covariate analysis (age, sex, education, motion/FD) via GLM/ANCOVA framework
+#
+
+def run_welch_anova(z_values_by_group):
+    """
+    Perform Welch one-way ANOVA on Fisher-Z transformed FC values.
+
+    Args:
+        z_values_by_group: Dict mapping group_name -> list[float] for a single ROI-ROI connection
+
+    Returns:
+        float: Omnibus p-value from Welch ANOVA (uncorrected)
+    """
+    # Build DataFrame for pingouin
+    data_rows = []
+    for group_name, z_values in z_values_by_group.items():
+        for z_val in z_values:
+            data_rows.append({'fc': z_val, 'group': group_name})
+
+    if len(data_rows) == 0:
+        return np.nan
+
+    df = pd.DataFrame(data_rows)
+
+    # Perform Welch ANOVA
+    try:
+        anova_result = pg.welch_anova(dv='fc', between='group', data=df)
+        return anova_result['p-unc'].iloc[0]
+    except Exception as e:
+        logging.warning(f"Welch ANOVA failed: {e}")
+        return np.nan
+
+
+def run_games_howell(z_values_by_group):
+    """
+    Perform Games-Howell post-hoc test on Fisher-Z transformed FC values.
+
+    Args:
+        z_values_by_group: Dict mapping group_name -> list[float] for a single ROI-ROI connection
+
+    Returns:
+        pandas.DataFrame: Games-Howell post-hoc results
+    """
+    # Build DataFrame for pingouin
+    data_rows = []
+    for group_name, z_values in z_values_by_group.items():
+        for z_val in z_values:
+            data_rows.append({'fc': z_val, 'group': group_name})
+
+    if len(data_rows) == 0:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data_rows)
+
+    # Perform Games-Howell post-hoc test
+    try:
+        posthoc_result = pg.pairwise_gameshowell(dv='fc', between='group', data=df)
+        return posthoc_result
+    except Exception as e:
+        logging.warning(f"Games-Howell post-hoc failed: {e}")
+        return pd.DataFrame()
+
+
+# ===== MAIN STATISTICAL TESTING FUNCTION =====
+
+def coherence_anova_test(stat_results, verbose=True):
+    """
+    Stage 4: Welch one-way ANOVA analysis with Games-Howell post-hoc for interhemispheric
+    intra-network connectivity.
+
+    Statistical Logic (applied per network AND per connection):
+    1. Extract Fisher z-transformed FC values per subject by group
+    2. Perform Welch one-way ANOVA (robust to unequal group sizes and heteroscedasticity)
+    3. Apply FDR correction to omnibus ANOVA p-values per band
+    4. Run Games-Howell post-hoc tests for significant omnibus results (uncorrected p < 0.05)
+
+    TODO: Load covariates (age, sex, education, motion/FD) and include them in a GLM/ANCOVA framework.
+    TODO: If covariates are added, switch from Welch ANOVA to an appropriate regression/GLM with
+          robust (HC3) standard errors or permutation tests.
+
+    Args:
+        stat_results: Output from prepare_statistics_data() containing:
+            - static_coherence_by_group: Static FC statistics by group
+            - slow_band_coherence_by_group: Slow-band FC statistics by group
+        verbose: Whether to print detailed progress information
+
+    Returns:
+        dict: Complete statistical results structure:
+            - static_results: {network_key: {omnibus_p, fdr_corrected_p, post_hoc_results}}
+            - slow_band_results: {network_key: {band_name: {omnibus_p, fdr_corrected_p, post_hoc_results}}}
+            - post_hoc_collection: List of all Games-Howell results for significant tests
+    """
+
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 4: WELCH ANOVA + GAMES-HOWELL TESTING")
+        print(f"{'='*80}")
+
+    results = {
+        'static_results': {},
+        'slow_band_results': {},
+        'post_hoc_collection': []
+    }
+
+    static_groups = stat_results.get('static_coherence_by_group', {})
+    slow_band_groups = stat_results.get('slow_band_coherence_by_group', {})
+
+    # ===== STATIC FC WELCH ANOVA TESTING =====
     if static_groups:
-        for group in static_groups:
-            group_results = stat_results['static_coherence_by_group'][group]
-            for network_key in group_results.keys():
-                stats = group_results[network_key]
+        if verbose:
+            print(f"\nTesting static FC across {len(static_groups)} groups...")
 
-        pass
+        # Find all network keys across groups
+        all_network_keys = set()
+        for group_data in static_groups.values():
+            all_network_keys.update(group_data.keys())
 
+        # Process each network
+        omnibus_p_values = []
+        network_omnibus_results = {}
+
+        for network_key in all_network_keys:
+            if verbose:
+                print(f"  Processing network: {network_key}")
+
+            # Extract group data for this network
+            group_data, all_values = _extract_group_data_for_anova(
+                static_groups, network_key, band_name=None
+            )
+
+            if len(group_data) < 2:
+                if verbose:
+                    print(f"    Skipping: insufficient groups with data")
+                continue
+
+            # Log group sizes
+            group_sizes = {name: len(values) for name, values in group_data.items()}
+            group_size_str = ", ".join([f"{name}={size}" for name, size in group_sizes.items()])
+            logging.info(f"Network: {network_key}")
+            logging.info(f"Groups: {group_size_str}")
+            logging.info(f"Running Welch ANOVA on static FC connectivity")
+
+            # Perform Welch ANOVA
+            omnibus_p = run_welch_anova(group_data)
+            omnibus_p_values.append(omnibus_p)
+
+            # Store omnibus result
+            network_omnibus_results[network_key] = {
+                'omnibus_p': omnibus_p,
+                'group_sizes': group_sizes,
+                'post_hoc_results': None
+            }
+
+            # Run post-hoc if omnibus is significant (uncorrected)
+            if not np.isnan(omnibus_p) and omnibus_p < 0.05:
+                post_hoc_df = run_games_howell(group_data)
+                if not post_hoc_df.empty:
+                    network_omnibus_results[network_key]['post_hoc_results'] = post_hoc_df
+                    results['post_hoc_collection'].append({
+                        'network': network_key,
+                        'band': 'static',
+                        'post_hoc': post_hoc_df
+                    })
+
+            if verbose:
+                total_subjects = sum(group_sizes.values())
+                significant = omnibus_p < 0.05 if not np.isnan(omnibus_p) else False
+                print(f"    Result: {total_subjects} subjects, "
+                      f"p = {omnibus_p:.4f} "
+                      f"{'***' if omnibus_p < 0.001 else '**' if omnibus_p < 0.01 else '*' if significant else 'ns'}")
+
+        # Apply FDR correction to static FC omnibus p-values
+        if omnibus_p_values:
+            valid_p_mask = ~np.isnan(omnibus_p_values)
+            if valid_p_mask.sum() > 0:
+                fdr_rejected, fdr_corrected_p = fdrcorrection(
+                    np.array(omnibus_p_values)[valid_p_mask]
+                )
+
+                # Map corrected p-values back to networks
+                fdr_idx = 0
+                for network_key in network_omnibus_results:
+                    if not np.isnan(network_omnibus_results[network_key]['omnibus_p']):
+                        network_omnibus_results[network_key]['fdr_corrected_p'] = fdr_corrected_p[fdr_idx]
+                        network_omnibus_results[network_key]['fdr_significant'] = fdr_rejected[fdr_idx]
+                        fdr_idx += 1
+                    else:
+                        network_omnibus_results[network_key]['fdr_corrected_p'] = np.nan
+                        network_omnibus_results[network_key]['fdr_significant'] = False
+
+        results['static_results'] = network_omnibus_results
+
+    # ===== SLOW-BAND FC WELCH ANOVA TESTING =====
     if slow_band_groups:
-        pass
+        if verbose:
+            print(f"\nTesting slow-band FC across {len(slow_band_groups)} groups...")
 
-    pass
+        # Find all network keys and band combinations
+        all_network_keys = set()
+        all_band_names = set()
+        for group_data in slow_band_groups.values():
+            for network_key, network_bands in group_data.items():
+                all_network_keys.add(network_key)
+                all_band_names.update(network_bands.keys())
+
+        # Process each band separately for FDR correction
+        for band_name in all_band_names:
+            if verbose:
+                print(f"\n  Processing band: {band_name}")
+
+            # Log band processing
+            logging.info(f"Band: {band_name}")
+
+            omnibus_p_values_band = []
+            band_omnibus_results = {}
+
+            for network_key in all_network_keys:
+                if verbose:
+                    print(f"    Processing network: {network_key}")
+
+                # Extract group data for this network and band
+                group_data, all_values = _extract_group_data_for_anova(
+                    slow_band_groups, network_key, band_name=band_name
+                )
+
+                if len(group_data) < 2:
+                    if verbose:
+                        print(f"      Skipping: insufficient groups with data")
+                    continue
+
+                # Log group sizes
+                group_sizes = {name: len(values) for name, values in group_data.items()}
+                group_size_str = ", ".join([f"{name}={size}" for name, size in group_sizes.items()])
+                logging.info(f"Groups: {group_size_str}")
+                logging.info(f"Running Welch ANOVA on ROI–ROI connectivity")
+
+                # Perform Welch ANOVA
+                omnibus_p = run_welch_anova(group_data)
+                omnibus_p_values_band.append(omnibus_p)
+
+                # Store omnibus result
+                band_omnibus_results[network_key] = {
+                    'omnibus_p': omnibus_p,
+                    'group_sizes': group_sizes,
+                    'post_hoc_results': None
+                }
+
+                # Run post-hoc if omnibus is significant (uncorrected)
+                if not np.isnan(omnibus_p) and omnibus_p < 0.05:
+                    post_hoc_df = run_games_howell(group_data)
+                    if not post_hoc_df.empty:
+                        band_omnibus_results[network_key]['post_hoc_results'] = post_hoc_df
+                        results['post_hoc_collection'].append({
+                            'network': network_key,
+                            'band': band_name,
+                            'post_hoc': post_hoc_df
+                        })
+
+                if verbose:
+                    total_subjects = sum(group_sizes.values())
+                    significant = omnibus_p < 0.05 if not np.isnan(omnibus_p) else False
+                    print(f"      Result: {total_subjects} subjects, "
+                          f"p = {omnibus_p:.4f} "
+                          f"{'***' if omnibus_p < 0.001 else '**' if omnibus_p < 0.01 else '*' if significant else 'ns'}")
+
+            # Apply FDR correction to this band's omnibus p-values
+            if omnibus_p_values_band:
+                valid_p_mask = ~np.isnan(omnibus_p_values_band)
+                if valid_p_mask.sum() > 0:
+                    fdr_rejected, fdr_corrected_p = fdrcorrection(
+                        np.array(omnibus_p_values_band)[valid_p_mask]
+                    )
+
+                    # Map corrected p-values back to networks
+                    fdr_idx = 0
+                    for network_key in band_omnibus_results:
+                        if not np.isnan(band_omnibus_results[network_key]['omnibus_p']):
+                            band_omnibus_results[network_key]['fdr_corrected_p'] = fdr_corrected_p[fdr_idx]
+                            band_omnibus_results[network_key]['fdr_significant'] = fdr_rejected[fdr_idx]
+                            fdr_idx += 1
+                        else:
+                            band_omnibus_results[network_key]['fdr_corrected_p'] = np.nan
+                            band_omnibus_results[network_key]['fdr_significant'] = False
+
+            # Initialize slow_band_results structure if needed
+            if band_name not in results['slow_band_results']:
+                results['slow_band_results'][band_name] = {}
+
+            results['slow_band_results'][band_name] = band_omnibus_results
+
+    if verbose:
+        static_networks = len(results['static_results'])
+        slow_band_tests = sum(len(band_data) for band_data in results['slow_band_results'].values())
+        post_hoc_count = len(results['post_hoc_collection'])
+        print(f"\nWelch ANOVA testing completed:")
+        print(f"  Static FC: {static_networks} networks tested")
+        print(f"  Slow-band FC: {slow_band_tests} network-band combinations tested")
+        print(f"  Games-Howell post-hoc tests: {post_hoc_count} performed")
+
+    return results
 
 
 # ===== STAGE 5: VISUALIZATION HELPERS =====
@@ -2257,11 +2937,6 @@ def prepare_plotting_data(all_subject_results, verbose=True):
     Returns:
         dict: Plotting-ready data with both individual and group results
     """
-    if verbose:
-        print(f"\n{'='*80}")
-        print("STAGE 5: PREPARING VISUALIZATION DATA")
-        print(f"{'='*80}")
-
     plotting_data = {}
 
     for subject_id, result in all_subject_results.items():
@@ -2271,41 +2946,43 @@ def prepare_plotting_data(all_subject_results, verbose=True):
         # Convert individual subject Z-matrices to R-matrices for plotting
         subject_plotting_data = {}
 
-        # Static FC
-        if result.get('z_fc_static') is not None:
-            # Convert Z back to R for display
-            r_fc_static = fisher_z_to_r(result['z_fc_static'])
-            subject_plotting_data['static_fc_matrix'] = r_fc_static
+        # Prepare channel labels once (used across static and mode-level plots)
+        channel_labels = result.get('channel_labels', {})
+        labels_list = []
+        if channel_labels:
+            # Convert index-based labels to list
+            labels_list = [channel_labels.get(i, f'Ch{i+1}') for i in range(len(channel_labels))]
+        subject_plotting_data['static_fc_labels'] = labels_list
 
-            # Extract channel labels for plotting
-            channel_labels = result.get('channel_labels', {})
-            labels_list = []
-            if channel_labels:
-                # Convert index-based labels to list
-                labels_list = [channel_labels.get(i, f'Ch{i+1}') for i in range(len(channel_labels))]
+        # Static FC (new pipeline structure)
+        fc_static = result.get('fc_static')
+        if fc_static and fc_static.get('r_fc') is not None:
+            # Prefer labels from fc_static if available
+            if not labels_list and fc_static.get('labels'):
+                labels_list = list(fc_static['labels'])
                 subject_plotting_data['static_fc_labels'] = labels_list
 
+            r_fc_static = fc_static['r_fc']
+            subject_plotting_data['static_fc_matrix'] = r_fc_static
+
             # Add p-values and compute connectivity patterns for plotting
-            static_fc_pvalues = result.get('static_fc_pvalues')
+            static_fc_pvalues = fc_static.get('p_values')
             subject_plotting_data['static_fc_pvalues'] = static_fc_pvalues
             subject_plotting_data['static_connectivity_patterns'] = analyze_connectivity_patterns(
                 r_fc_static, labels_list, p_values=static_fc_pvalues
             )
 
-        # Mode-wise FC (if available)
-        if result.get('z_fc_modes') is not None:
-            # Convert each mode from Z to R
-            z_fc_modes = result['z_fc_modes']
-            r_fc_modes = np.zeros_like(z_fc_modes)
-            for mode_idx in range(z_fc_modes.shape[0]):
-                r_fc_modes[mode_idx] = fisher_z_to_r(z_fc_modes[mode_idx])
+        # Mode-wise FC (new pipeline structure)
+        fc_modes = result.get('fc_modes')
+        if fc_modes and fc_modes.get('r_fc') is not None:
+            r_fc_modes = fc_modes['r_fc']
             subject_plotting_data['r_fc_modes'] = r_fc_modes
 
             # Aggregate modes into slow-bands for plotting
             if result.get('mvmd_metadata', {}).get('center_freqs') is not None:
                 center_freqs = result['mvmd_metadata']['center_freqs']
                 subject_plotting_data['slow_band_fc_modes'] = aggregate_modes_to_slow_bands_for_plotting(
-                    z_fc_modes, center_freqs, verbose=False
+                    fc_modes.get('z_fc'), center_freqs, verbose=False
                 )
                 subject_plotting_data['center_freqs'] = center_freqs
 
@@ -2448,49 +3125,64 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     """Main function for FC MVP analysis"""
     from datetime import datetime
 
-    print("=== Functional Connectivity MVP ===")
+    print("[Init] Functional Connectivity MVP")
 
     # Create timestamped parent folder for this analysis run only if saving figures
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     if save_figures:
         run_parent_dir = get_analysis_path(f'analysis_runs/run_{run_timestamp}')
         run_parent_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\nAnalysis Run Directory: {run_parent_dir}")
-        print(f"Timestamp: {run_timestamp}")
-        print(f"All outputs for this run will be saved in this directory\n")
+        print(f"[Init] Analysis run directory: {run_parent_dir}")
+        print(f"[Init] Timestamp: {run_timestamp}")
+        print(f"[Init] All outputs for this run will be saved in this directory")
     else:
         run_parent_dir = None
-        print(f"\nRunning in no-save mode - figures will not be saved to disk\n")
+        print(f"[Init] Running in no-save mode - figures will not be saved to disk")
 
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
     LIMIT_SUBJECTS = subjects_per_group is not None  # Enable limiting if subjects_per_group is specified
     MAX_SUBJECTS_PER_GROUP = subjects_per_group if subjects_per_group is not None else 8  # Use specified limit or default
 
-    print(f"Configuration:")
-    print(f"  Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
+    print(f"[Config] Subject limiting: {'ENABLED' if LIMIT_SUBJECTS else 'DISABLED'}")
     if LIMIT_SUBJECTS:
-        print(f"  Max subjects per group: {MAX_SUBJECTS_PER_GROUP}")
-    print(f"  Individual plots: {'ENABLED' if show_plots else 'DISABLED'}")
-    print(f"  Verbose output: {'ENABLED' if verbose else 'DISABLED'}")
+        print(f"[Config] Max subjects per group: {MAX_SUBJECTS_PER_GROUP}")
+    print(f"[Config] Individual plots: {'ENABLED' if show_plots else 'DISABLED'}")
+    print(f"[Config] Verbose output: {'ENABLED' if verbose else 'DISABLED'}")
+
+    # Configure logging for statistical testing and log statistical approach
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format='[STATS] %(message)s'
+    )
+    # Suppress precision-loss warnings from scipy/pingouin when groups have nearly identical values
+    warnings.filterwarnings(
+        'ignore',
+        message='Precision loss occurred in moment calculation due to catastrophic cancellation',
+        category=RuntimeWarning
+    )
+    logging.info("Statistical Analysis Configuration:")
+    logging.info("Omnibus test: Welch one-way ANOVA (default)")
+    logging.info("Post-hoc test: Games–Howell")
+    logging.info("Multiple comparisons: FDR correction applied to omnibus p-values only")
+    logging.info("Rationale: robustness to unequal group sizes and heteroscedasticity")
     print()
 
     # Initialize data infrastructure
     loader = DataLoader()
     manager = SubjectManager(data_loader=loader)
 
-    print(f"[OK] Loaded manifest with {len(loader.get_all_subject_ids())} subjects")
+    print(f"[Init] Loaded manifest with {len(loader.get_all_subject_ids())} subjects")
 
     # Get available analysis groups
     groups = loader.get_analysis_groups()
-    print(f"Available groups: {list(groups.keys())}")
+    print(f"[Init] Available groups: {list(groups.keys())}")
 
     # Show data availability summary
     availability = manager.get_subjects_availability_summary()
-    print(f"\nData Availability Summary:")
-    print(f"  Total subjects in manifest: {availability['total_subjects']}")
-    print(f"  Downloaded locally: {availability['downloaded_subjects']}")
-    print(f"  With timeseries metadata: {availability['with_timeseries_data']}")
-    print(f"  Ready for processing: {availability['breakdown']['ready_for_processing']}")
+    print(f"[Init] Data availability summary: total={availability['total_subjects']}, "
+          f"downloaded={availability['downloaded_subjects']}, "
+          f"with_timeseries={availability['with_timeseries_data']}, "
+          f"ready_for_processing={availability['breakdown']['ready_for_processing']}")
 
     # Decide on processing mode
     use_downloaded_only = availability['downloaded_subjects'] > 0
@@ -2617,9 +3309,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"  Subcortical: {subcortical_ROIs}")
 
     # ===== MULTI-SUBJECT PROCESSING =====
-    print(f"\n{'='*80}")
-    print(f"STARTING MULTI-SUBJECT ANALYSIS")
-    print(f"{'='*80}")
+    print(f"[Stage 1] Processing individual subjects...")
 
     # Apply subject limiting if enabled
     non_anhedonic_to_process = []
@@ -2645,9 +3335,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     # ===== NEW 5-STAGE PIPELINE =====
 
     # STAGE 1: Process all subjects (pure computation)
-    print(f"\n{'='*80}")
-    print(f"STAGE 1: PROCESSING INDIVIDUAL SUBJECTS")
-    print(f"{'='*80}")
+    # (Subject-level progress printed below)
 
     all_subject_results = {}
     total_subjects = len(anhedonic_subjects_to_process) + len(non_anhedonic_to_process)
@@ -2656,7 +3344,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     all_subjects_to_process = anhedonic_subjects_to_process + non_anhedonic_to_process
 
     for i, subject_id in enumerate(all_subjects_to_process, 1):
-        print(f"\n[{i}/{total_subjects}] Processing subject: {subject_id}")
+        print_progress = True  # Always print per-subject status (success/fail)
+        if print_progress:
+            print(f"\n[{i}/{total_subjects}] Processing subject: {subject_id}")
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
@@ -2664,51 +3354,89 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         )
         all_subject_results[subject_id] = subject_result
         if subject_result['success']:
-            print(f"    ✅ Success: {subject_id}")
+            print(f"    ✅ Success")
         else:
             print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
+
+    # Quick Stage 1 summary
+    successful_subjects = sum(1 for r in all_subject_results.values() if r.get('success'))
+    print(f"\n[Stage 1] Completed subject processing: {successful_subjects}/{total_subjects} successful")
 
     # Split results for backward compatibility
     anhedonic_results = {sid: all_subject_results[sid] for sid in anhedonic_subjects_to_process if sid in all_subject_results}
     non_anhedonic_results = {sid: all_subject_results[sid] for sid in non_anhedonic_to_process if sid in all_subject_results}
 
     # STAGE 2: Create connectivity mappings
+    print(f"[Stage 2] Building connectivity mappings...")
     connectivity_mappings = create_connectivity_mappings(all_subject_results, verbose=verbose)
 
     # STAGE 3: Group aggregation
+    print(f"[Stage 3] Aggregating group connectivity...")
     anhedonia_groups = {
         'non-anhedonic': non_anhedonic_to_process,
         'low-anhedonic': low_anhedonic_to_process,
         'high-anhedonic': high_anhedonic_to_process
     }
 
-    # group_aggregations = aggregate_group_connectivity(
-    #     all_subject_results, connectivity_mappings, anhedonia_groups, verbose=verbose
-    # )
+    group_aggregations = aggregate_group_connectivity(
+        all_subject_results, connectivity_mappings, anhedonia_groups, verbose=verbose
+    )
 
     # STAGE 4: Statistics preparation
+    print(f"[Stage 4] Preparing statistics data...")
     anhedonic_stat_data = prepare_statistics_data(
         all_subject_results, connectivity_mappings, anhedonia_groups, verbose=verbose
     )
 
-    permutation_result = get_group_permutations(all_subject_results, anhedonia_groups)
+    print(f"[Stage 4] Creating group permutations...")
+    permutation_result = get_group_permutations(all_subject_results, anhedonia_groups, verbose=verbose)
     permutation_count = permutation_result.get('n_permutations', 0)
     permutation_stat_data = [None] * permutation_count
     for perm_idx in range(permutation_count):
         group_permutation = permutation_result['group_permutations'][perm_idx]
         group_perm_stat_data = prepare_statistics_data(
-            all_subject_results, connectivity_mappings, group_permutation, verbose=verbose
+            all_subject_results, connectivity_mappings, group_permutation, verbose=False
         )
         permutation_stat_data.append(group_perm_stat_data)
 
-    # 1-way ANOVA
-    anhedonic_anova_results = coherence_anova_test(permutation_result)
+    # Stage 4: Statistical testing - perform Welch ANOVA analysis on prepared statistics
+    # Tests each interhemispheric intra-network connection for group differences
+    # using Welch ANOVA + Games-Howell post-hoc approach
+    print(f"[Stage 4] Running Welch ANOVA + Games-Howell tests...")
+    anhedonic_anova_results = coherence_anova_test(anhedonic_stat_data, verbose=verbose)
+
+    # Save Games-Howell post-hoc results to CSV files
+    if anhedonic_anova_results.get('post_hoc_collection') and save_figures:
+        post_hoc_dir = run_parent_dir / 'post_hoc_results'
+        post_hoc_dir.mkdir(parents=True, exist_ok=True)
+
+        for idx, post_hoc_data in enumerate(anhedonic_anova_results['post_hoc_collection']):
+            network = post_hoc_data['network']
+            band = post_hoc_data['band']
+            post_hoc_df = post_hoc_data['post_hoc']
+
+            # Clean network and band names for filename
+            safe_network = network.replace('/', '_').replace(' ', '_')
+            safe_band = band.replace('/', '_').replace(' ', '_')
+
+            filename = f"games_howell_{safe_network}_{safe_band}.csv"
+            filepath = post_hoc_dir / filename
+
+            # Save with additional metadata
+            with open(filepath, 'w') as f:
+                f.write(f"# Games-Howell Post-hoc Test Results\n")
+                f.write(f"# Network: {network}\n")
+                f.write(f"# Band: {band}\n")
+                f.write(f"# Test performed only because omnibus Welch ANOVA p < 0.05 (uncorrected)\n")
+                f.write(f"# Post-hoc p-values are NOT corrected for multiple comparisons\n")
+                f.write(f"#\n")
+                post_hoc_df.to_csv(f, index=False)
+
+            if verbose:
+                print(f"Saved Games-Howell results to: {filepath}")
 
     # STAGE 5: Compute group-averaged FC
-    if verbose:
-        print(f"\n{'='*80}")
-        print(f"STAGE 5: GROUP-AVERAGED FC COMPUTATION")
-        print(f"{'='*80}")
+    print(f"[Stage 5] Computing group-averaged FC...")
 
     group_averaged_fc = {
         'static': {},
@@ -2736,30 +3464,26 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 group_averaged_fc['slow_bands'][band_key][group_name] = band_avg
 
     # STAGE 6: Prepare visualization data (Z->R conversion)
+    print(f"[Stage 6] Preparing plotting data (Z->R conversions)...")
     plotting_data = prepare_plotting_data(all_subject_results, verbose=verbose)
 
     # STAGE 6b: Prepare cross-subject slow-band aggregated FC matrices
-    if verbose:
-        print(f"\n{'='*80}")
-        print("STAGE 6B: PREPARING CROSS-SUBJECT SLOW-BAND FC MATRICES")
-        print(f"{'='*80}")
+    print(f"[Stage 6B] Preparing cross-subject slow-band FC matrices...")
 
     # Use the slow-band aggregations from the main group aggregation (already organized by groups)
     cross_subject_slow_bands = group_aggregations['slow_band_fc_by_group']
 
     # ===== RESULTS SUMMARY =====
-    print(f"\n{'='*80}")
-    print(f"PROCESSING SUMMARY")
-    print(f"{'='*80}")
+    print(f"\n[Summary] Processing results")
 
     anhedonic_success = sum(1 for r in anhedonic_results.values() if r['success'])
     non_anhedonic_success = sum(1 for r in non_anhedonic_results.values() if r['success'])
     total_success = anhedonic_success + non_anhedonic_success
     total_processed = len(anhedonic_results) + len(non_anhedonic_results)
 
-    print(f"Successfully processed: {total_success}/{total_processed} subjects")
-    print(f"  Anhedonic: {anhedonic_success}/{len(anhedonic_results)}")
-    print(f"  Non-anhedonic: {non_anhedonic_success}/{len(non_anhedonic_results)}")
+    print(f"[Summary] Successfully processed: {total_success}/{total_processed} subjects "
+          f"(anhedonic={anhedonic_success}/{len(anhedonic_results)}, "
+          f"non-anhedonic={non_anhedonic_success}/{len(non_anhedonic_results)})")
 
     # Note: STAGE 5 (Visualization) is handled by the existing plotting code below
     # The plotting functions are now updated to work with new data structures
@@ -2862,6 +3586,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     figures_base_dir = run_parent_dir / 'figures' if save_figures and create_plots else None
     fc_subject_dir = None
     fc_group_dir = None
+    welch_interhemi_dir = None
     mvmd_figures_dir = None
     hsa_figures_dir = None
     marginal_hsa_figures_dir = None
@@ -2871,6 +3596,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # FC directories
         fc_subject_dir = figures_base_dir / 'fc_subject'
         fc_group_dir = figures_base_dir / 'fc_group'
+
+        # Welch ANOVA interhemispheric intra-network directory
+        welch_interhemi_dir = figures_base_dir / 'welch_interhemispheric_violin'
 
         # MVMD decomposition directory
         mvmd_figures_dir = figures_base_dir / 'mvmd_analysis'
@@ -2885,6 +3613,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Create base directories
         fc_subject_dir.mkdir(parents=True, exist_ok=True)
         fc_group_dir.mkdir(parents=True, exist_ok=True)
+        welch_interhemi_dir.mkdir(parents=True, exist_ok=True)
         mvmd_figures_dir.mkdir(parents=True, exist_ok=True)
         hsa_figures_dir.mkdir(parents=True, exist_ok=True)
         marginal_hsa_figures_dir.mkdir(parents=True, exist_ok=True)
@@ -2893,6 +3622,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"\n[INFO] Figures will be saved to:")
         print(f"  FC (subject-level): {fc_subject_dir}")
         print(f"  FC (group-level): {fc_group_dir}")
+        print(f"  Welch Interhemispheric Violin: {welch_interhemi_dir}")
         print(f"  MVMD decomposition: {mvmd_figures_dir}")
         print(f"  Hilbert Spectral Analysis: {hsa_figures_dir}")
         print(f"  Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
@@ -2918,6 +3648,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'fc_slow_bands': [],
             'fc_slow_bands_cross_subject': [],
             'fc_group_avg': [],
+            'interhemispheric_violin': [],
             'mvmd_modes': [],
             'hsa_multivariate': [],
             'hsa_marginal': [],
@@ -2927,30 +3658,31 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # ===== INDIVIDUAL SUBJECT PLOTS =====
         print(f"\nPreparing individual subject plots...")
         individual_plots_created = 0
+        debug_print = print if verbose else (lambda *args, **kwargs: None)
 
         # Debug: Check subject success status
         total_subjects = len(all_subject_results)
         successful_subjects = sum(1 for r in all_subject_results.values() if r.get('success', False))
-        print(f"  Debug: {successful_subjects}/{total_subjects} subjects marked as successful")
+        debug_print(f"  Debug: {successful_subjects}/{total_subjects} subjects marked as successful")
 
         # Debug group membership
-        print(f"  Debug group lists:")
-        print(f"    low_anhedonic_to_process: {low_anhedonic_to_process}")
-        print(f"    high_anhedonic_to_process: {high_anhedonic_to_process}")
-        print(f"    non_anhedonic_subjects_to_process: {non_anhedonic_to_process}")
+        debug_print(f"  Debug group lists:")
+        debug_print(f"    low_anhedonic_to_process: {low_anhedonic_to_process}")
+        debug_print(f"    high_anhedonic_to_process: {high_anhedonic_to_process}")
+        debug_print(f"    non_anhedonic_subjects_to_process: {non_anhedonic_to_process}")
 
         if successful_subjects == 0:
-            print(f"  Debug: No successful subjects found. Checking first few subjects:")
+            debug_print(f"  Debug: No successful subjects found. Checking first few subjects:")
             for i, (subject_id, result) in enumerate(list(all_subject_results.items())[:3]):
                 success_status = result.get('success', False)
                 error_msg = result.get('error', 'No error')
-                print(f"    {subject_id}: success={success_status}, error='{error_msg}'")
+                debug_print(f"    {subject_id}: success={success_status}, error='{error_msg}'")
 
         # Use new pipeline results instead of legacy all_results
         subjects_entered_loop = 0
         for subject_id, result in all_subject_results.items():
             subjects_entered_loop += 1
-            print(f"    Checking {subject_id}: success={result.get('success', False)}")
+            debug_print(f"    Checking {subject_id}: success={result.get('success', False)}")
             if not result.get('success', False):
                 print(f"      Skipping {subject_id} - not successful")
                 continue
@@ -2965,27 +3697,26 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             else:
                 subject_group = None
 
-            print(f"      Processing {subject_id} for plot preparation...")
-            print(f"        plotting_data keys: {list(plotting_data.keys())}")
-            print(f"        {subject_id} in plotting_data: {subject_id in plotting_data}")
+            debug_print(f"      Processing {subject_id} for plot preparation...")
+            debug_print(f"        plotting_data keys: {list(plotting_data.keys())}")
+            debug_print(f"        {subject_id} in plotting_data: {subject_id in plotting_data}")
             plots_for_subject = 0
 
             # 1. Prepare cortical ROI timeseries plot
             roi_results = result.get('roi_extraction_results', {})
-            print(f"        ROI results present: {roi_results is not None}")
-            print(f"        Cortical data present: {roi_results.get('cortical') is not None}")
+            debug_print(f"        ROI results present: {roi_results is not None}")
+            debug_print(f"        Cortical data present: {roi_results.get('cortical') is not None}")
             if roi_results.get('cortical'):
                 cortical_data = roi_results['cortical']
-                print(f"        Cortical extraction successful: {cortical_data.get('extraction_successful')}")
+                debug_print(f"        Cortical extraction successful: {cortical_data.get('extraction_successful')}")
                 if cortical_data.get('extraction_successful'):
-                    print(f"          Adding cortical ROI plot for {subject_id}")
+                    debug_print(f"          Adding cortical ROI plot for {subject_id}")
                     plot_batches['roi_cortical'].append({
                         'subject_id': subject_id,
                         'data': cortical_data,
                         'save_dir': roi_figures_dir if save_figures and roi_figures_dir else None
                     })
                     plots_for_subject += 1
-                    print(f"          plots_for_subject now: {plots_for_subject}")
 
             # 2. Prepare subcortical ROI timeseries plot
             if roi_results.get('subcortical'):
@@ -3002,10 +3733,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             # 3. Prepare static functional connectivity analysis plot - UPDATED FOR NEW PIPELINE
             if subject_id in plotting_data:
                 static_fc_data = plotting_data[subject_id]
-                print(f"        Static FC data keys: {list(static_fc_data.keys())}")
-                print(f"        Has static_fc_matrix: {'static_fc_matrix' in static_fc_data}")
+                debug_print(f"        Static FC data keys: {list(static_fc_data.keys())}")
+                debug_print(f"        Has static_fc_matrix: {'static_fc_matrix' in static_fc_data}")
                 if static_fc_data.get('static_fc_matrix') is not None:
-                    print(f"          Adding static FC plot for {subject_id}")
+                    debug_print(f"          Adding static FC plot for {subject_id}")
                     plot_batches['fc_static'].append({
                         'subject_id': subject_id,
                         'subject_group': subject_group,
@@ -3015,7 +3746,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
                     })
                     plots_for_subject += 1
-                    print(f"          plots_for_subject now: {plots_for_subject}")
+                    debug_print(f"          plots_for_subject now: {plots_for_subject}")
 
             # 3a. Prepare per-mode FC plots (individual modes)
             if subject_id in plotting_data:
@@ -3091,7 +3822,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         })
                         plots_for_subject += 1
 
-            print(f"        About to check slow-band FC plots...")
+            debug_print(f"        About to check slow-band FC plots...")
             # 3c. Prepare slow-band FC plots (legacy)
             if result.get('slow_band_fc'):
                 slow_band_fc_data = result['slow_band_fc']
@@ -3169,14 +3900,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     })
                     plots_for_subject += 1
 
-                print(f"        Final plots_for_subject count: {plots_for_subject}")
+                debug_print(f"        Final plots_for_subject count: {plots_for_subject}")
                 if plots_for_subject > 0:
                     individual_plots_created += 1
-                    print(f"      ✓ Prepared {plots_for_subject} plots for {subject_id}")
+                    debug_print(f"      ✓ Prepared {plots_for_subject} plots for {subject_id}")
                 else:
-                    print(f"      ✗ No plots prepared for {subject_id}")
+                    debug_print(f"      ✗ No plots prepared for {subject_id}")
         else:
-            print(f"  No successful subjects found for individual plots (checked {subjects_entered_loop} subjects total)")
+            debug_print(f"  No successful subjects found for individual plots (checked {subjects_entered_loop} subjects total)")
 
         print(f"\nPrepared plots for {individual_plots_created} subjects")
 
@@ -3251,7 +3982,30 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         print(f"  ✓ Prepared {len(plot_batches['fc_group_avg'])} group-averaged FC plots")
 
+        # Prepare interhemispheric intra-network violin plots
+        print(f"\nPreparing interhemispheric intra-network violin plots...")
+        from tcp.processing.lib.plot import plot_interhemispheric_intra_network_violin
+
+        interhemi_figures = plot_interhemispheric_intra_network_violin(
+            stat_data=anhedonic_stat_data,
+            anova_results=anhedonic_anova_results
+        )
+
+        if interhemi_figures:
+            for fig, metadata in interhemi_figures:
+                plot_batches['interhemispheric_violin'].append({
+                    'figure': fig,
+                    'metadata': metadata,
+                    'save_dir': welch_interhemi_dir
+                })
+
+        print(f"  ✓ Prepared {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots")
+
         # Now create and display plots in batches by type
+        # Recompute batch count based on non-empty queues
+        non_empty_batches = [name for name, items in plot_batches.items() if items]
+        plot_batch_count = len(non_empty_batches) if non_empty_batches else 0
+
         print(f"\n{'='*80}")
         print(f"CREATING AND DISPLAYING PLOTS BY TYPE")
         print(f"{'='*80}")
@@ -3261,7 +4015,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 1: ROI Cortical Timeseries
         if plot_batches['roi_cortical']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
                 # Handle both single figure and list of figures return types
@@ -3294,7 +4048,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 2: ROI Subcortical Timeseries
         if plot_batches['roi_subcortical']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
                 # Handle both single figure and list of figures return types
@@ -3322,78 +4076,78 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
                 plt.show()
 
-        # # Batch 3: Multivariate Hilbert Spectrum
-        # if plot_batches['hsa_multivariate']:
-        #     current_plot_batch += 1
-        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
+        # Batch 3: Multivariate Hilbert Spectrum
+        if plot_batches['hsa_multivariate']:
+            current_plot_batch += 1
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
 
-        #     for plot_info in plot_batches['hsa_multivariate']:
-        #         # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
-        #         hs_results = plot_multivariate_hilbert_spectrum(
-        #             hsa_data=plot_info['hsa_data'],
-        #             subject_id=plot_info['subject_id'],
-        #             center_freqs=plot_info['center_freqs'],
-        #             channel_labels=plot_info['channel_labels']
-        #         )
+            for plot_info in plot_batches['hsa_multivariate']:
+                # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
+                hs_results = plot_multivariate_hilbert_spectrum(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
 
-        #         # Save figures if enabled
-        #         if plot_info['save_dir']:
-        #             # Create subject/composite/ directory structure
-        #             subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-        #             subject_composite_dir.mkdir(parents=True, exist_ok=True)
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
 
-        #             for hs_fig, region_network_key in hs_results:
-        #                 # Use region+network+hemisphere info in filename
-        #                 fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
-        #                 hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-        #                 figures_saved_count += 1
+                    for hs_fig, region_network_key in hs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
+                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
 
-        #         if not show_plots:
-        #             for hs_fig, _ in hs_results:
-        #                 plt.close(hs_fig)
+                if not show_plots:
+                    for hs_fig, _ in hs_results:
+                        plt.close(hs_fig)
 
-        #     if show_plots:
-        #         print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
-        #         plt.show()
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
+                plt.show()
 
-        # # Batch 4: Marginal Spectrum per Mode
-        # if plot_batches['hsa_marginal']:
-        #     current_plot_batch += 1
-        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
+        # Batch 4: Marginal Spectrum per Mode
+        if plot_batches['hsa_marginal']:
+            current_plot_batch += 1
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
 
-        #     for plot_info in plot_batches['hsa_marginal']:
-        #         # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
-        #         mhs_results = plot_marginal_spectrum_per_mode(
-        #             hsa_data=plot_info['hsa_data'],
-        #             subject_id=plot_info['subject_id'],
-        #             center_freqs=plot_info['center_freqs'],
-        #             channel_labels=plot_info['channel_labels']
-        #         )
+            for plot_info in plot_batches['hsa_marginal']:
+                # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
+                mhs_results = plot_marginal_spectrum_per_mode(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
 
-        #         # Save figures if enabled
-        #         if plot_info['save_dir']:
-        #             # Create subject/composite/ directory structure
-        #             subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-        #             subject_composite_dir.mkdir(parents=True, exist_ok=True)
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
 
-        #             for mhs_fig, region_network_key in mhs_results:
-        #                 # Use region+network+hemisphere info in filename
-        #                 fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
-        #                 mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-        #                 figures_saved_count += 1
+                    for mhs_fig, region_network_key in mhs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
+                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
 
-        #         if not show_plots:
-        #             for mhs_fig, _ in mhs_results:
-        #                 plt.close(mhs_fig)
+                if not show_plots:
+                    for mhs_fig, _ in mhs_results:
+                        plt.close(mhs_fig)
 
-        #     if show_plots:
-        #         print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
-        #         plt.show()
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
+                plt.show()
 
         # Batch 5: Static FC Analysis
         if plot_batches['fc_static']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_static'])} static FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_static'])} static FC plots...")
             for plot_info in plot_batches['fc_static']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -3411,6 +4165,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     output_dir=csv_output_dir,
                     verbose=verbose
                 )
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping static FC plot for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                    continue
                 fc_fig_inter.suptitle(f'FC Analysis (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
                 fc_fig_ipsi.suptitle(f'FC Analysis (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
 
@@ -3441,7 +4198,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 6: Slow-Band FC Analysis
         if plot_batches['fc_slow_bands']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -3466,6 +4223,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     frequency_range=plot_info['data'].get('frequency_range'),
                     n_available_channels=plot_info['data'].get('n_available_channels')
                 )
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping slow-band FC plot (Slow-{band_number}) for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                    continue
                 fc_fig_inter.suptitle(f'Slow-{band_number} FC (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
                 fc_fig_ipsi.suptitle(f'Slow-{band_number} FC (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
 
@@ -3496,7 +4256,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 6a: Per-Mode FC Analysis
         if plot_batches['fc_per_mode']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_per_mode'])} per-mode FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_per_mode'])} per-mode FC plots...")
             for plot_info in plot_batches['fc_per_mode']:
                 csv_output_dir = fc_output_dir if save_figures else None
 
@@ -3513,6 +4273,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     output_dir=csv_output_dir,
                     verbose=verbose
                 )
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping per-mode FC plot (mode {plot_info['mode_idx']}) for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                    continue
 
                 mode_idx = plot_info['mode_idx']
                 frequency = plot_info['frequency']
@@ -3543,7 +4306,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 6b: Individual Subject Slow-Band FC Analysis
         if plot_batches['fc_slow_bands_individual']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands_individual']:
                 csv_output_dir = fc_output_dir if save_figures else None
 
@@ -3561,6 +4324,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     verbose=verbose,
                     band_name=plot_info['band_name']
                 )
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping individual slow-band FC plot ({plot_info['band_name']}) for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                    continue
 
                 band_name = plot_info['band_name']
                 n_modes = plot_info['data']['n_modes']
@@ -3591,7 +4357,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 6c: Cross-Subject Slow-Band FC Analysis
         if plot_batches['fc_slow_bands_cross_subject']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands_cross_subject']:
 
                 fc_fig_inter, fc_fig_ipsi = plot_fc_results(
@@ -3608,6 +4374,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     verbose=verbose,
                     band_name=plot_info['band_name']
                 )
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping cross-subject slow-band FC plot ({plot_info['band_name']}) due to missing data (empty matrix/labels)")
+                    continue
 
                 band_name = plot_info['band_name']
                 description = plot_info['data']['description']
@@ -3636,7 +4405,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 7: Group-Averaged FC Analysis
         if plot_batches['fc_group_avg']:
             current_plot_batch += 1
-            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
             for plot_info in plot_batches['fc_group_avg']:
                 # Compute connectivity patterns for group-averaged matrix
                 # Use computed p-values from statistical testing
@@ -3669,6 +4438,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         frequency_range=get_frequency_range(band_number),
                         n_available_channels=None
                     )
+                    plot_desc = f"Group {plot_info['group_name']} Slow-{band_number}"
                     title_inter = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (Interhemispheric, n={plot_info['data']['n_subjects']})"
                     title_ipsi = f"Group Average: {plot_info['group_name']} - Slow-{band_number} FC (Ipsilateral, n={plot_info['data']['n_subjects']})"
                 else:
@@ -3688,8 +4458,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         output_dir=None,
                         verbose=verbose
                     )
+                    plot_desc = f"Group {plot_info['group_name']} Static"
                     title_inter = f"Group Average: {plot_info['group_name']} - Static FC (Interhemispheric, n={plot_info['data']['n_subjects']})"
                     title_ipsi = f"Group Average: {plot_info['group_name']} - Static FC (Ipsilateral, n={plot_info['data']['n_subjects']})"
+
+                if fc_fig_inter is None or fc_fig_ipsi is None:
+                    print(f"  Skipping group-averaged FC plot for {plot_desc} due to missing data (empty matrix/labels)")
+                    continue
 
                 fc_fig_inter.suptitle(title_inter, fontsize=16, fontweight='bold')
                 fc_fig_ipsi.suptitle(title_ipsi, fontsize=16, fontweight='bold')
@@ -3712,11 +4487,46 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
                 plt.show()
 
-        # # Batch 8: MVMD Mode Decomposition
+        # Batch 8: Interhemispheric Intra-Network Violin Plots
+        if plot_batches['interhemispheric_violin']:
+            current_plot_batch += 1
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['interhemispheric_violin'])} interhemispheric intra-network violin plots...")
+
+            # Suppress seaborn warnings about identical ylims
+            warnings.filterwarnings('ignore', message='Attempting to set identical low and high ylims')
+
+            for plot_info in plot_batches['interhemispheric_violin']:
+                fig = plot_info['figure']
+                metadata = plot_info['metadata']
+                save_dir = plot_info['save_dir']
+
+                if save_dir:
+                    band_name = metadata['band_name']
+                    safe_network = metadata['safe_network']
+
+                    # Create band-specific directory
+                    band_dir = save_dir / band_name
+                    band_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Save figure
+                    filename = f'{safe_network}_violin.png'
+                    filepath = band_dir / filename
+                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
+                    figures_saved_count += 1
+
+                # Close figure if not showing
+                if not show_plots:
+                    plt.close(fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots. Close all figures to continue...")
+                plt.show()
+
+        # # Batch 9: MVMD Mode Decomposition
         # if plot_batches['mvmd_modes']:
         #     total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
         #     current_plot_batch += 1
-        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+        #     print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
 
         #     # Process in sub-batches of 28 figures to avoid memory issues
         #     MAX_FIGS_PER_BATCH = 28
@@ -4153,8 +4963,12 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     anhedonic_fc_results = [result for result in anhedonic_results.values() if result.get('success', False)]
     non_anhedonic_fc_results = [result for result in non_anhedonic_results.values() if result.get('success', False)]
 
-    # Placeholder for group comparison (not implemented yet)
-    group_comparison_results = {}
+    # Group comparison results using ANOVA testing
+    group_comparison_results = {
+        'anova_testing': anhedonic_anova_results,
+        'statistics_data': anhedonic_stat_data,
+        'group_averaged_fc': group_averaged_fc
+    }
 
     # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {

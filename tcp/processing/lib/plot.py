@@ -1,9 +1,15 @@
 import csv
+import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
+plt.rcParams['figure.max_open_warning'] = 0  # Disable matplotlib warning for >20 open figures
+
+# Global flag to avoid repeating the open-figure warning
+_open_fig_warning_shown = False
+logger = logging.getLogger(__name__)
 
 def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_type=''):
     """
@@ -264,6 +270,44 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     Returns:
         tuple: (fig_interhemispheric, fig_ipsilateral) - Two separate figures
     """
+    # Guard against empty or invalid matrices to avoid seaborn y-lim warnings
+    matrix_shape = getattr(corr_matrix, 'shape', ())
+    invalid_matrix = (
+        corr_matrix is None
+        or not hasattr(corr_matrix, 'size')
+        or corr_matrix.size == 0
+        or (len(matrix_shape) == 2 and min(matrix_shape) == 0)
+    )
+
+    if invalid_matrix:
+        reason = f"empty correlation matrix (shape={matrix_shape})"
+        msg = f"[plot_fc_results] Skipping FC plot for subject_id={subject_id or 'unknown'}: {reason}"
+        if verbose:
+            print(msg)
+        logger.warning(msg)
+        return None, None
+
+    # Ensure labels are present and aligned with the matrix
+    if roi_labels is None:
+        roi_labels = []
+
+    if len(roi_labels) == 0:
+        roi_labels = [f'ROI{i+1}' for i in range(corr_matrix.shape[0])]
+        msg = f"[plot_fc_results] Missing ROI labels; generated {len(roi_labels)} placeholder labels for subject_id={subject_id or 'unknown'}"
+        if verbose:
+            print(msg)
+        logger.warning(msg)
+    elif len(roi_labels) != corr_matrix.shape[0]:
+        msg = (f"[plot_fc_results] ROI label count ({len(roi_labels)}) does not match matrix dimension "
+               f"({corr_matrix.shape[0]}). Adjusting labels for subject_id={subject_id or 'unknown'}.")
+        if verbose:
+            print(msg)
+        logger.warning(msg)
+        # Trim or pad labels to match matrix size
+        if len(roi_labels) > corr_matrix.shape[0]:
+            roi_labels = roi_labels[:corr_matrix.shape[0]]
+        else:
+            roi_labels = roi_labels + [f'ROI{i+1+len(roi_labels)}' for i in range(corr_matrix.shape[0] - len(roi_labels))]
 
     # ===== FIGURE 1: FC Matrix + Interhemispheric Connectivity =====
     fig_inter = plt.figure(figsize=(16, 8))
@@ -2301,5 +2345,177 @@ def plot_band_marginal_spectrum(hsa_band_data, subject_id=None, channel_labels=N
         plt.tight_layout(pad=2.0, h_pad=2.5, rect=[0, 0, 1, 0.99])
 
         figures.append((fig, region_network_key))
+
+    return figures
+
+
+def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
+    """
+    Create violin plots for interhemispheric intra-network connectivity results.
+
+    Includes BOTH static FC (whole-signal) and slow-band FC, with Welch ANOVA statistics
+    and Games-Howell post-hoc annotations.
+    """
+    import pandas as pd
+    import seaborn as sns
+    from matplotlib.patches import Patch
+
+    static_groups = stat_data.get('static_coherence_by_group', {})
+    static_anova = anova_results.get('static_results', {})
+    slow_band_groups = stat_data.get('slow_band_coherence_by_group', {})
+    slow_band_anova = anova_results.get('slow_band_results', {})
+    post_hoc_collection = anova_results.get('post_hoc_collection', [])
+
+    if not static_groups and not slow_band_groups:
+        return []
+
+    # Build post-hoc lookup for easy access
+    post_hoc_lookup = {}
+    for ph_data in post_hoc_collection:
+        network = ph_data['network']
+        band = ph_data['band']
+        key = (band, network)
+        post_hoc_lookup[key] = ph_data['post_hoc']
+
+    def _make_violin(df, band_name, network_key, anova_lookup):
+        network_anova = anova_lookup.get(network_key, {})
+        omnibus_p = network_anova.get('omnibus_p', np.nan)
+        fdr_p = network_anova.get('fdr_corrected_p', np.nan)
+        group_sizes = network_anova.get('group_sizes', {})
+        post_hoc_df = post_hoc_lookup.get((band_name, network_key))
+
+        global _open_fig_warning_shown
+        if not _open_fig_warning_shown and len(plt.get_fignums()) >= 20:
+            print("[WARN] More than 20 figures are open; consider closing figures to conserve memory.")
+            _open_fig_warning_shown = True
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        group_order = ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']
+        colors = ['#2ecc71', '#f39c12', '#e74c3c']
+        color_map = dict(zip(group_order, colors))
+
+        sns.violinplot(
+            data=df,
+            x='group',
+            y='fisher_z',
+            order=group_order,
+            hue='group',
+            palette=color_map,
+            dodge=False,
+            inner=None,
+            ax=ax,
+            alpha=0.6,
+            legend=False,
+        )
+
+        sns.boxplot(
+            data=df, x='group', y='fisher_z', order=group_order,
+            width=0.3, showfliers=False, ax=ax,
+            boxprops=dict(alpha=0.7),
+            whiskerprops=dict(alpha=0.7),
+            capprops=dict(alpha=0.7)
+        )
+
+        sns.stripplot(
+            data=df, x='group', y='fisher_z', order=group_order,
+            color='black', size=4, alpha=0.4, ax=ax, jitter=True
+        )
+
+        ax.set_xlabel('Group', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Fisher-Z Coherence', fontsize=12, fontweight='bold')
+        ax.set_xticks(range(len(group_order)))
+        ax.set_xticklabels(['Non-anhedonic', 'Low anhedonic', 'High anhedonic'], fontsize=11, rotation=0)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+        title = f'{network_key} - {band_name}'
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
+        stats_text = []
+        n_text = 'N: ' + ', '.join([
+            f"{g.split('-')[0].capitalize()}={group_sizes.get(g, 0)}"
+            for g in group_order
+            if g in group_sizes
+        ])
+        stats_text.append(n_text)
+
+        if not np.isnan(omnibus_p):
+            stats_text.append(f'Welch ANOVA p = {omnibus_p:.4f}')
+        if not np.isnan(fdr_p):
+            fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
+            stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
+
+        if post_hoc_df is not None:
+            stats_text.append('Games-Howell post-hoc:')
+            for _, row in post_hoc_df.iterrows():
+                a = row['A']
+                b = row['B']
+                p_val = row['pval']
+                sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
+                a_short = a.split('-')[0].capitalize()
+                b_short = b.split('-')[0].capitalize()
+                stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
+
+        if stats_text:
+            ax.text(0.02, 0.98, '\n'.join(stats_text),
+                    transform=ax.transAxes, fontsize=9, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                    family='monospace')
+
+        fig.tight_layout()
+        return fig
+
+    figures = []
+
+    # Static FC violins
+    if static_groups:
+        all_static_networks = set()
+        for group_data in static_groups.values():
+            all_static_networks.update(group_data.keys())
+        for network_key in sorted(all_static_networks):
+            plot_data = []
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                network_data = static_groups.get(group_name, {}).get(network_key, {})
+                for val in network_data.get('observed_values', []):
+                    plot_data.append({'group': group_name, 'fisher_z': val})
+            if not plot_data:
+                continue
+            df = pd.DataFrame(plot_data)
+            fig = _make_violin(df, 'static', network_key, static_anova)
+            figures.append((fig, {
+                'band_name': 'static',
+                'network_key': network_key,
+                'safe_network': network_key.replace('/', '_').replace(' ', '_')
+            }))
+
+    # Slow-band violins
+    all_bands = set()
+    all_networks = set()
+    for group_data in slow_band_groups.values():
+        for network_key, network_bands in group_data.items():
+            all_networks.add(network_key)
+            all_bands.update(network_bands.keys())
+
+    sorted_bands = sorted(all_bands, key=lambda x: int(x.split('-')[1]), reverse=True)
+
+    for band_name in sorted_bands:
+        band_anova_results = slow_band_anova.get(band_name, {})
+        if not band_anova_results:
+            continue
+        for network_key in sorted(all_networks):
+            plot_data = []
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                band_data = slow_band_groups.get(group_name, {}).get(network_key, {}).get(band_name, {})
+                for val in band_data.get('observed_values', []):
+                    plot_data.append({'group': group_name, 'fisher_z': val})
+            if not plot_data:
+                continue
+            df = pd.DataFrame(plot_data)
+            fig = _make_violin(df, band_name, network_key, band_anova_results)
+            figures.append((fig, {
+                'band_name': band_name,
+                'network_key': network_key,
+                'safe_network': network_key.replace('/', '_').replace(' ', '_')
+            }))
 
     return figures
