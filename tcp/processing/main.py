@@ -54,14 +54,14 @@ from tcp.processing.lib.plot import (
     plot_roi_timeseries_result,
     plot_signal_decomposition,
 )
-from tcp.processing.lib.slow_band import get_frequency_range
+from tcp.processing.lib.slow_band import get_band_number, get_frequency_range
 from tcp.processing.lib.subject_filtering import get_accessible_subjects_from_file
 from tcp.processing.roi import (
     CorticalAtlasLookup,
     ROIExtractionService,
     SubCorticalAtlasLookup,
 )
-from tcp.processing.utils.lists import chunks
+from tcp.processing.utils.lists import chunks, split_by_sizes
 
 # ===== SIGNAL ACQUISITION PARAMETERS =====
 TR = 800e-3  # Repetition Time [seconds]
@@ -111,13 +111,16 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
     # Compute Pearson correlation matrix
     corr_matrix = np.corrcoef(stacked_timeseries)
 
-    # Compute p-values using Fisher r-to-z transformation
-    n_rois = len(roi_labels)
-    n_samples = timeseries_list[0].shape[0]
-    p_values = np.ones((n_rois, n_rois))
+    # Fisher-transform static FC
+    z_corr_matrix = fisher_r_to_z(corr_matrix)
 
-    for i in range(n_rois):
-        for j in range(i+1, n_rois):
+    # Compute p-values using Fisher r-to-z transformation
+    rois_count = len(roi_labels)
+    samples_count = timeseries_list[0].shape[0]
+    p_values = np.ones((rois_count, rois_count))
+
+    for i in range(rois_count):
+        for j in range(i+1, rois_count):
             r = corr_matrix[i, j]
 
             if np.isnan(r):
@@ -129,7 +132,7 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
             z = fisher_r_to_z(r)
 
             # Under H0, z ~ N(0, 1/sqrt(n-3))
-            se_z = 1.0 / np.sqrt(n_samples - 3)
+            se_z = 1.0 / np.sqrt(samples_count - 3)
             z_stat = z / se_z
 
             # Two-tailed p-value from standard normal
@@ -138,7 +141,7 @@ def compute_fc_matrix(timeseries_dict, roi_names=None):
             p_values[i, j] = p_val
             p_values[j, i] = p_val
 
-    return corr_matrix, roi_labels, p_values
+    return corr_matrix, z_corr_matrix, roi_labels, p_values
 
 def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
     """
@@ -177,38 +180,38 @@ def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
     if time_modes.ndim != 3:
         raise ValueError(f"time_modes must be 3D array (modes, channels, samples), got shape {time_modes.shape}")
 
-    n_modes, n_channels, n_samples = time_modes.shape
+    modes_count, channels_count, samples_count = time_modes.shape
 
-    if len(channel_labels) != n_channels:
-        raise ValueError(f"channel_labels length ({len(channel_labels)}) must match n_channels ({n_channels})")
+    if len(channel_labels) != channels_count:
+        raise ValueError(f"channel_labels length ({len(channel_labels)}) must match channels_count ({channels_count})")
 
     if verbose:
         print(f"\n{'='*80}")
         print("COMPUTING MODE-LEVEL FUNCTIONAL CONNECTIVITY")
         print(f"{'='*80}")
-        print(f"  Number of modes: {n_modes}")
-        print(f"  Number of channels: {n_channels}")
-        print(f"  Samples per mode: {n_samples}")
+        print(f"  Number of modes: {modes_count}")
+        print(f"  Number of channels: {channels_count}")
+        print(f"  Samples per mode: {samples_count}")
 
     # Initialize 3D arrays to store results for all modes
-    mode_fc_matrices = np.zeros((n_modes, n_channels, n_channels))
-    mode_fc_z_matrices = np.zeros((n_modes, n_channels, n_channels))
-    mode_fc_pvalues = np.ones((n_modes, n_channels, n_channels))  # Initialize with 1.0
+    mode_fc_matrices = np.zeros((modes_count, channels_count, channels_count))
+    mode_fc_z_matrices = np.zeros((modes_count, channels_count, channels_count))
+    mode_fc_pvalues = np.ones((modes_count, channels_count, channels_count))  # Initialize with 1.0
 
     # Compute FC for each mode independently
-    for mode_idx in range(n_modes):
-        # Extract signal for this mode: shape (n_channels, n_samples)
+    for mode_idx in range(modes_count):
+        # Extract signal for this mode: shape (channels_count, samples_count)
         mode_signal = time_modes[mode_idx, :, :]
 
         # Create timeseries dictionary for compute_fc_matrix()
         # Format: {channel_label: timeseries_array}
         mode_timeseries = {
             channel_labels[ch_idx]: mode_signal[ch_idx, :]
-            for ch_idx in range(n_channels)
+            for ch_idx in range(channels_count)
         }
 
         # Compute FC matrix using existing function
-        fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(
+        fc_matrix, z_fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(
             mode_timeseries,
             roi_names=channel_labels
         )
@@ -226,7 +229,7 @@ def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
         mode_fc_matrices[mode_idx, :, :] = fc_matrix
 
         # Apply Fisher Z-transformation immediately
-        mode_fc_z_matrices[mode_idx, :, :] = fisher_r_to_z(fc_matrix)
+        mode_fc_z_matrices[mode_idx, :, :] = z_fc_matrix
 
         # Store p-values
         if fc_pvalues is not None:
@@ -235,10 +238,10 @@ def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
             mode_fc_pvalues[mode_idx, :, :] = np.nan
 
         if verbose and (mode_idx + 1) % 5 == 0:
-            print(f"  Processed {mode_idx + 1}/{n_modes} modes...")
+            print(f"  Processed {mode_idx + 1}/{modes_count} modes...")
 
     if verbose:
-        print(f"  Completed FC computation for all {n_modes} modes")
+        print(f"  Completed FC computation for all {modes_count} modes")
         print(f"  Output shapes:")
         print(f"    - mode_fc_matrices: {mode_fc_matrices.shape}")
         print(f"    - mode_fc_z_matrices: {mode_fc_z_matrices.shape}")
@@ -249,8 +252,8 @@ def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
         'mode_fc_z_matrices': mode_fc_z_matrices,
         'mode_fc_pvalues': mode_fc_pvalues,
         'fc_labels': channel_labels,
-        'n_modes': n_modes,
-        'n_channels': n_channels
+        'n_modes': modes_count,
+        'n_channels': channels_count
     }
 
 
@@ -277,7 +280,7 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
                      - 'mode_fc_matrices': r-scale FC matrices per mode (for edge cases)
                      - 'mode_fc_pvalues': p-values per mode
                      - 'fc_labels': channel labels
-        mode_frequencies: np.ndarray, center frequency for each mode (length n_modes)
+        mode_frequencies: np.ndarray, center frequency for each mode (length modes_count)
         verbose: If True, print progress information
 
     Returns:
@@ -291,13 +294,13 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
         }
 
         Each band_fc_dict contains:
-            'fc_matrix': np.ndarray (n_channels, n_channels) - Averaged r-scale matrix
-            'fc_z_matrix': np.ndarray (n_channels, n_channels) - Averaged Z-scale matrix
-            'fc_pvalues': np.ndarray (n_channels, n_channels) - P-values (placeholder)
+            'fc_matrix': np.ndarray (channels_count, channels_count) - Averaged r-scale matrix
+            'fc_z_matrix': np.ndarray (channels_count, channels_count) - Averaged Z-scale matrix
+            'fc_pvalues': np.ndarray (channels_count, channels_count) - P-values (placeholder)
             'fc_labels': list - Channel labels
             'mode_indices': list - Which modes contributed to this band
             'mode_frequencies': list - Center frequencies of contributing modes
-            'n_modes_in_band': int - Number of modes in this band
+            'modes_in_band_count': int - Number of modes in this band
 
     Example:
         >>> mode_fc_data = compute_fc_per_mode(time_modes, labels)
@@ -310,37 +313,19 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
     mode_fc_matrices = mode_fc_data['mode_fc_matrices']
     mode_fc_pvalues = mode_fc_data['mode_fc_pvalues']
     fc_labels = mode_fc_data['fc_labels']
-    n_modes = mode_fc_data['n_modes']
-    n_channels = mode_fc_data['n_channels']
+    modes_count = mode_fc_data['n_modes']
+    channels_count = mode_fc_data['n_channels']
 
     # Input validation
-    if len(mode_frequencies) != n_modes:
-        raise ValueError(f"mode_frequencies length ({len(mode_frequencies)}) must match n_modes ({n_modes})")
+    if len(mode_frequencies) != modes_count:
+        raise ValueError(f"mode_frequencies length ({len(mode_frequencies)}) must match modes_count ({modes_count})")
 
     if verbose:
         print(f"\n{'='*80}")
         print("AGGREGATING MODE-LEVEL FC INTO SLOW-BANDS")
         print(f"{'='*80}")
-        print(f"  Total modes to process: {n_modes}")
+        print(f"  Total modes to process: {modes_count}")
         print(f"  Mode frequencies: {mode_frequencies}")
-
-    # Define slow-band frequency ranges
-    def get_band_number(frequency):
-        """Determine which slow-band a frequency belongs to."""
-        if 0.0 < frequency <= 0.01:
-            return "6"
-        elif 0.01 < frequency <= 0.027:
-            return "5"
-        elif 0.027 < frequency <= 0.073:
-            return "4"
-        elif 0.073 < frequency <= 0.198:
-            return "3"
-        elif 0.198 < frequency <= 0.5:
-            return "2"
-        elif 0.5 < frequency <= 0.75:
-            return "1"
-        else:
-            return None  # Outside slow-band range
 
     # Group modes by slow-band
     band_mode_groups = {
@@ -361,10 +346,10 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
     if verbose:
         print(f"\n  Mode distribution across bands:")
         for band_num in ['6', '5', '4', '3', '2', '1']:
-            n_modes_in_band = len(band_mode_groups[band_num]['indices'])
+            modes_in_band_count = len(band_mode_groups[band_num]['indices'])
             freqs = band_mode_groups[band_num]['frequencies']
-            if n_modes_in_band > 0:
-                print(f"    Slow-{band_num}: {n_modes_in_band} modes, freqs={freqs}")
+            if modes_in_band_count > 0:
+                print(f"    Slow-{band_num}: {modes_in_band_count} modes, freqs={freqs}")
             else:
                 print(f"    Slow-{band_num}: 0 modes (empty band)")
 
@@ -374,15 +359,15 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
     for band_num in ['6', '5', '4', '3', '2', '1']:
         mode_indices = band_mode_groups[band_num]['indices']
         mode_freqs = band_mode_groups[band_num]['frequencies']
-        n_modes_in_band = len(mode_indices)
+        modes_in_band_count = len(mode_indices)
 
-        if n_modes_in_band == 0:
+        if modes_in_band_count == 0:
             # Skip empty bands
             if verbose:
                 print(f"\n  Slow-{band_num}: Skipping (no modes in this band)")
             continue
 
-        elif n_modes_in_band == 1:
+        elif modes_in_band_count == 1:
             # Edge case: Only 1 mode in band
             # No averaging needed - use the single mode's values directly
             mode_idx = mode_indices[0]
@@ -396,24 +381,24 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
         else:
             # Multiple modes in band: Average using Fisher Z-transformation
             # Extract Z-matrices for all modes in this band
-            z_matrices_in_band = mode_fc_z_matrices[mode_indices, :, :]  # shape: (n_modes_in_band, n_channels, n_channels)
+            z_matrices_in_band = mode_fc_z_matrices[mode_indices, :, :]  # shape: (modes_in_band_count, channels_count, channels_count)
 
             # Compute mean Z-matrix (handles NaN values)
-            avg_z_matrix = np.nanmean(z_matrices_in_band, axis=0)  # shape: (n_channels, n_channels)
+            avg_z_matrix = np.nanmean(z_matrices_in_band, axis=0)  # shape: (channels_count, channels_count)
 
             # Convert back to r-scale
             avg_r_matrix = fisher_z_to_r(avg_z_matrix)
 
             # P-value computation: Placeholder for now
-            # NOTE: This will be updated later with t-test or permutation testing
+            # TODO: This will be updated later with t-test or permutation testing
             # For now, set all p-values to NaN to indicate they need computation
-            fc_pvalues = np.full((n_channels, n_channels), np.nan)
+            fc_pvalues = np.full((channels_count, channels_count), np.nan)
 
             fc_matrix = avg_r_matrix
             fc_z_matrix = avg_z_matrix
 
             if verbose:
-                print(f"\n  Slow-{band_num}: Averaged {n_modes_in_band} modes")
+                print(f"\n  Slow-{band_num}: Averaged {modes_in_band_count} modes")
                 print(f"    Mode indices: {mode_indices}")
                 print(f"    Frequencies: {[f'{f:.4f}' for f in mode_freqs]}")
                 print(f"    Avg Z-matrix shape: {avg_z_matrix.shape}")
@@ -427,7 +412,7 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
             'fc_labels': fc_labels,
             'mode_indices': mode_indices,
             'mode_frequencies': mode_freqs,
-            'n_modes_in_band': n_modes_in_band
+            'modes_in_band_count': modes_in_band_count
         }
 
     if verbose:
@@ -463,6 +448,11 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
         fc_desc = f"{band_key} " if band_key else "whole-signal "
         print(f"\nComputing group-averaged {fc_desc}FC for {group_name}...")
 
+        # Debug: Check how many subjects have the required data
+        successful_count = sum(1 for sid in group_subjects if sid in subject_results and subject_results[sid].get('success'))
+        total_count = len(group_subjects)
+        print(f"  Debug: {successful_count}/{total_count} subjects marked as successful")
+
     # Collect FC matrices from all subjects in this group
     fc_matrices = []
     fc_labels = None
@@ -473,7 +463,22 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
             continue
 
         result = subject_results[subject_id]
-        if not result.get('success'):
+
+        # Check if subject has required data, even if marked as failed
+        has_static_fc = False
+        has_slow_band_fc = False
+
+        if fc_type == 'static':
+            fc_data = result.get('static_functional_connectivity')
+            has_static_fc = fc_data and fc_data.get('static_fc_matrix') is not None
+        else:
+            slow_band_data = result.get('slow_band_fc')
+            has_slow_band_fc = slow_band_data and band_key and band_key in slow_band_data
+
+        # Skip if no relevant data (regardless of success flag)
+        if fc_type == 'static' and not has_static_fc:
+            continue
+        elif fc_type == 'slow_band' and not has_slow_band_fc:
             continue
 
         # Extract FC data based on type
@@ -498,6 +503,22 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
     if len(fc_matrices) == 0:
         if verbose:
             print(f"  No valid FC matrices found for {group_name}")
+            # Debug: Check what data subjects actually have
+            subjects_with_data = 0
+            for subject_id in group_subjects:
+                if subject_id in subject_results:
+                    result = subject_results[subject_id]
+                    has_static = result.get('static_functional_connectivity', {}).get('static_fc_matrix') is not None
+                    has_slow_band = bool(result.get('slow_band_fc', {}))
+                    success = result.get('success', False)
+                    if has_static or has_slow_band:
+                        subjects_with_data += 1
+                        print(f"    {subject_id}: success={success}, has_static={has_static}, has_slow_band={has_slow_band}")
+
+            if subjects_with_data == 0:
+                print(f"    No subjects have any FC data at all")
+            else:
+                print(f"    {subjects_with_data} subjects have some FC data but weren't included")
         return None
 
     # Stack matrices and compute mean (ignoring NaN values)
@@ -520,11 +541,11 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
     # STEP 4: Compute p-values using one-sample t-test on Fisher z-transformed values
     # This tests if the group-average correlation is significantly different from 0
     from scipy import stats
-    n_rois = avg_fc_matrix.shape[0]
-    p_values = np.ones((n_rois, n_rois))  # Initialize with 1.0 (non-significant)
+    rois_count = avg_fc_matrix.shape[0]
+    p_values = np.ones((rois_count, rois_count))  # Initialize with 1.0 (non-significant)
 
-    for i in range(n_rois):
-        for j in range(n_rois):
+    for i in range(rois_count):
+        for j in range(rois_count):
             # Get z-transformed values across subjects for this pair
             z_values = stacked_z_matrices[:, i, j]
 
@@ -548,9 +569,9 @@ def compute_group_averaged_fc(subject_results, group_subjects, group_name, fc_ty
 
         # Count significant correlations (upper triangle only, excluding diagonal)
         significant_mask = np.triu(p_values < 0.05, k=1)
-        n_significant = np.sum(significant_mask)
-        n_total = (n_rois * (n_rois - 1)) // 2
-        print(f"  Significant correlations: {n_significant}/{n_total} ({n_significant/n_total*100:.1f}%)")
+        significant_count = np.sum(significant_mask)
+        total_count = (rois_count * (rois_count - 1)) // 2
+        print(f"  Significant correlations: {significant_count}/{total_count} ({significant_count/total_count*100:.1f}%)")
 
     return {
         'avg_fc_matrix': avg_fc_matrix,
@@ -586,11 +607,11 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
         'all_pairwise': {'pairs': {}, 'stats': {}}
     }
 
-    n_rois = len(roi_labels)
+    rois_count = len(roi_labels)
 
     # Extract all pairwise correlations
-    for i in range(n_rois):
-        for j in range(i+1, n_rois):
+    for i in range(rois_count):
+        for j in range(i+1, rois_count):
             roi1, roi2 = roi_labels[i], roi_labels[j]
             corr_val = corr_matrix[i, j]
 
@@ -773,13 +794,13 @@ def extract_interhemispheric_network_coherence_per_mode(fc_matrix, roi_labels):
               Returns {} if no valid interhemispheric pairs found
     """
     network_coherence = {}
-    n_rois = len(roi_labels)
+    rois_count = len(roi_labels)
 
     # Collect interhemispheric intra-network pairs
     network_pairs = {}  # {network_key: [list of r-values]}
 
-    for i in range(n_rois):
-        for j in range(i+1, n_rois):
+    for i in range(rois_count):
+        for j in range(i+1, rois_count):
             roi1, roi2 = roi_labels[i], roi_labels[j]
             corr_val = fc_matrix[i, j]
 
@@ -861,35 +882,17 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
     """
     mode_fc_matrices = mode_fc_data['mode_fc_matrices']
     fc_labels = mode_fc_data['fc_labels']
-    n_modes = mode_fc_data['n_modes']
+    modes_count = mode_fc_data['n_modes']
 
-    if len(mode_frequencies) != n_modes:
-        raise ValueError(f"mode_frequencies length ({len(mode_frequencies)}) must match n_modes ({n_modes})")
+    if len(mode_frequencies) != modes_count:
+        raise ValueError(f"mode_frequencies length ({len(mode_frequencies)}) must match modes_count ({modes_count})")
 
     if verbose:
         print(f"\n{'='*80}")
         print("COMPUTING BAND-SPECIFIC INTERHEMISPHERIC COHERENCE (NESTED AVERAGING)")
         print(f"{'='*80}")
-        print(f"  Total modes: {n_modes}")
+        print(f"  Total modes: {modes_count}")
         print(f"  Mode frequencies: {mode_frequencies}")
-
-    # Define slow-band frequency ranges
-    def get_band_number(frequency):
-        """Determine which slow-band a frequency belongs to."""
-        if 0.0 < frequency <= 0.01:
-            return "6"
-        elif 0.01 < frequency <= 0.027:
-            return "5"
-        elif 0.027 < frequency <= 0.073:
-            return "4"
-        elif 0.073 < frequency <= 0.198:
-            return "3"
-        elif 0.198 < frequency <= 0.5:
-            return "2"
-        elif 0.5 < frequency <= 0.75:
-            return "1"
-        else:
-            return None
 
     # Group modes by slow-band
     band_mode_groups = {
@@ -910,10 +913,10 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
     if verbose:
         print(f"\n  Mode distribution across bands:")
         for band_num in ['6', '5', '4', '3', '2', '1']:
-            n_modes_in_band = len(band_mode_groups[band_num]['indices'])
+            modes_in_band_count = len(band_mode_groups[band_num]['indices'])
             freqs = band_mode_groups[band_num]['frequencies']
-            if n_modes_in_band > 0:
-                print(f"    Slow-{band_num}: {n_modes_in_band} modes, freqs={freqs}")
+            if modes_in_band_count > 0:
+                print(f"    Slow-{band_num}: {modes_in_band_count} modes, freqs={freqs}")
 
     # Level 1: Extract coherence per mode (spatial reduction)
     mode_coherence_by_band = {}
@@ -923,7 +926,7 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
     if verbose:
         print(f"\n  Level 1 (Spatial): Extracting coherence per mode...")
 
-    for mode_idx in range(n_modes):
+    for mode_idx in range(modes_count):
         fc_matrix = mode_fc_matrices[mode_idx, :, :]
         freq = mode_frequencies[mode_idx]
         band_num = get_band_number(freq)
@@ -948,9 +951,9 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
     for band_num in ['6', '5', '4', '3', '2', '1']:
         band_name = f'slow-{band_num}'
         mode_coherence_list = mode_coherence_by_band[band_num]
-        n_modes_in_band = len(mode_coherence_list)
+        modes_in_band_count = len(mode_coherence_list)
 
-        if n_modes_in_band == 0:
+        if modes_in_band_count == 0:
             if verbose:
                 print(f"    {band_name}: No modes in this band, skipping")
             continue
@@ -976,7 +979,7 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
         band_specific_coherence[band_name] = band_coherence
 
         if verbose:
-            print(f"    {band_name}: {len(band_coherence)} networks, {n_modes_in_band} modes averaged")
+            print(f"    {band_name}: {len(band_coherence)} networks, {modes_in_band_count} modes averaged")
 
     return band_specific_coherence
 
@@ -1013,22 +1016,6 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
 #         '6': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
 #         'excluded': {'band_signal': None, 'components': [], 'indeces': [], 'center_freqs': []},
 #     }
-
-#     def get_band_number(frequency):
-#         if 0.0 < frequency <= 0.01:
-#             return "6"
-#         elif 0.01 < frequency <= 0.027:
-#             return "5"
-#         elif 0.027 < frequency <= 0.073:
-#             return "4"
-#         elif 0.073 < frequency <= 0.198:
-#             return "3"
-#         elif 0.198 < frequency <= 0.5:
-#             return "2"
-#         elif 0.5 < frequency <= 0.75:
-#             return "1"
-#         else:
-#             return 'excluded'
 
 #     for idx, (center_frequency, mode_signal) in enumerate(zip(center_freqs, time_modes)):
 #         band_number = get_band_number(center_frequency)
@@ -1118,21 +1105,21 @@ def compute_hilbert_transform_per_mode(time_modes, sampling_rate):
             - 'n_channels': Number of channels
             - 'n_samples': Number of time samples
     """
-    n_modes, n_channels, n_samples = time_modes.shape
+    modes_count, channels_count, samples_count = time_modes.shape
 
     modes_data = []
 
     # Process each mode independently
-    for mode_idx in range(n_modes):
+    for mode_idx in range(modes_count):
         mode_signal = time_modes[mode_idx, :, :]  # Shape: (channels, samples)
 
         # Initialize arrays for this mode
-        inst_freq = np.zeros((n_channels, n_samples))
-        inst_amp = np.zeros((n_channels, n_samples))
-        analytic_signals = np.zeros((n_channels, n_samples), dtype=complex)
+        inst_freq = np.zeros((channels_count, samples_count))
+        inst_amp = np.zeros((channels_count, samples_count))
+        analytic_signals = np.zeros((channels_count, samples_count), dtype=complex)
 
         # Apply Hilbert transform to each channel of this mode
-        for ch_idx in range(n_channels):
+        for ch_idx in range(channels_count):
             # Get analytic signal using Hilbert transform
             analytic_signal = signal.hilbert(mode_signal[ch_idx, :])
             analytic_signals[ch_idx, :] = analytic_signal
@@ -1158,9 +1145,9 @@ def compute_hilbert_transform_per_mode(time_modes, sampling_rate):
     return {
         'modes_data': modes_data,
         'sampling_rate': sampling_rate,
-        'n_modes': n_modes,
-        'n_channels': n_channels,
-        'n_samples': n_samples
+        'n_modes': modes_count,
+        'n_channels': channels_count,
+        'n_samples': samples_count
     }
 
 
@@ -1351,7 +1338,16 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                    cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
                    verbose=True):
     """
-    Process a single subject for ROI extraction and functional connectivity analysis.
+    Stage 1: Pure data extraction and basic computation for a single subject.
+
+    This function ONLY performs:
+    1. Data loading and ROI extraction
+    2. Static FC computation (correlation matrix)
+    3. MVMD decomposition
+    4. Per-mode FC computation
+    5. Hilbert transform for spectral analysis
+
+    NO analysis, aggregation, or statistics are computed here.
 
     Args:
         subject_id: Subject identifier
@@ -1366,7 +1362,14 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         verbose: Whether to print detailed output
 
     Returns:
-        dict: Subject analysis results
+        dict: Pure computation results containing:
+            - subject_id: str
+            - success: bool
+            - z_fc_static: np.ndarray (Fisher-transformed static FC)
+            - z_fc_modes: np.ndarray (Fisher-transformed FC per mode)
+            - analytic_signal_modes: np.ndarray (Hilbert transform output)
+            - channel_labels: dict (Index to standardized channel names)
+            - mvmd_metadata: dict (Center frequencies, sampling rate, etc.)
     """
     if verbose:
         print(f"\n{'='*60}")
@@ -1374,7 +1377,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         print(f"{'='*60}")
 
     try:
-        # Get subject files
+        # ===== 1. DATA LOADING =====
         hammer_files = manager.get_subject_files_by_task(subject_id, 'timeseries', 'hammer')
         if not hammer_files:
             return {
@@ -1385,634 +1388,249 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
         subject_file = loader.resolve_file_path(hammer_files[0])
 
-        # Read data from .h5 file
-        data = None
+        # ===== 2. DATA LOADING & SEGMENTATION =====
         with h5py.File(subject_file, 'r') as file:
             a_group_key = list(file.keys())[0]
             data = np.asarray(file[a_group_key])
 
         if verbose:
-            print(f"Found data with shape: {data.shape}")
+            print(f"Loaded data with shape: {data.shape}")
 
-        # Segment into timeseries groups
+        # Segment into anatomical groups
         cortical_timeseries = data[:400]
-        cortical_R, cortical_L = cortical_timeseries[:200], cortical_timeseries[200:]
-        cortical_homotopic_pairs = np.asarray(list(zip(cortical_L, cortical_R)))
         subcortical_timeseries = data[400:432]
-        cerebellum_timeseries = data[432:]
+        # Note: cerebellum data (432:) ignored for this analysis
 
+        # ===== 3. ROI EXTRACTION =====
         if verbose:
-            print("Found parcels:")
-            print(f"Cortical: {cortical_timeseries.shape}")
-            print(f"\tLEFT Hemisphere: {cortical_L.shape}")
-            print(f"\tRIGHT Hemisphere: {cortical_R.shape}")
-            print(f"\tHomotopic Pairs: {cortical_homotopic_pairs.shape}")
-            print(f"Subcortical: {subcortical_timeseries.shape}")
-            print(f"Cerebellum: {cerebellum_timeseries.shape}")
+            print(f"\n=== ROI EXTRACTION ===")
 
-        # ROI Validation and Extraction
-        cortical_validation_result = cortical_roi_extractor.validate_roi_coverage(cortical_timeseries, cortical_ROIs)
-        subcortical_validation_result = subcortical_roi_extractor.validate_roi_coverage(subcortical_timeseries, subcortical_ROIs)
+        # Extract hemisphere-specific ROI timeseries
+        cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            cortical_timeseries, cortical_ROIs, hemisphere='RH', aggregation_method='all'
+        )
+        cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            cortical_timeseries, cortical_ROIs, hemisphere='LH', aggregation_method='all'
+        )
+        subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            subcortical_timeseries, subcortical_ROIs, hemisphere='rh', aggregation_method='all'
+        )
+        subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
+            subcortical_timeseries, subcortical_ROIs, hemisphere='lh', aggregation_method='all'
+        )
 
-        if verbose:
-            print(f"\nCORTICAL ROI Validation Results:")
-            print(f"  Valid ROIs: {cortical_validation_result['valid_rois']}")
-            print(f"  Invalid ROIs: {cortical_validation_result['invalid_rois']}")
+        # Extract combined ROI timeseries (for plotting)
+        cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
+            cortical_timeseries, cortical_ROIs, aggregation_method='all'
+        )
+        subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
+            subcortical_timeseries, subcortical_ROIs, aggregation_method='all'
+        )
 
-            print(f"\nSUBCORTICAL ROI Validation Results:")
-            print(f"  Valid ROIs: {subcortical_validation_result['valid_rois']}")
-            print(f"  Invalid ROIs: {subcortical_validation_result['invalid_rois']}")
+        # Create standardized channel labels
+        all_channel_labels = []
+        all_channels_list = []
 
-        # Extract ROI timeseries
-        cortical_roi_timeseries = None
-        if cortical_validation_result['valid_rois'] and not cortical_validation_result['coverage_issues']:
-            cortical_roi_timeseries = cortical_roi_extractor.extract_roi_timeseries(
-                cortical_timeseries,
-                cortical_ROIs,
-                aggregation_method='all'
-            )
+        # Process cortical channels
+        for roi_name in cortical_ROIs:
+            for hemi, hemi_data in [('RH', cortical_right_timeseries), ('LH', cortical_left_timeseries)]:
+                if roi_name in hemi_data:
+                    roi_timeseries = hemi_data[roi_name]
+                    # Get atlas indices to create proper labels
+                    indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere=hemi)
+                    indices = indices_dict.get(roi_name, [])
 
-        subcortical_roi_timeseries = None
-        if subcortical_validation_result['valid_rois'] and not subcortical_validation_result['coverage_issues']:
-            subcortical_roi_timeseries = subcortical_roi_extractor.extract_roi_timeseries(
-                subcortical_timeseries,
-                subcortical_ROIs,
-                aggregation_method='all'
-            )
-
-        # Hemisphere-specific extraction
-        cortical_right_timeseries = None
-        cortical_left_timeseries = None
-        subcortical_right_timeseries = None
-        subcortical_left_timeseries = None
-        # individual channel timeseries with label mapping
-        vmPFC_right_channels = None
-        vmPFC_left_channels = None
-        amy_right_channels = None
-        amy_left_channels = None
-        channel_label_map = None
-
-        cortical_valid_rois = cortical_validation_result['valid_rois']
-        cortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
-
-        if cortical_roi_extractor.supports_hemisphere_queries() and cortical_valid_rois:
-            if verbose:
-                print(f"\n=== HEMISPHERE-SPECIFIC CORTICAL EXTRACTION ===")
-
-            cortical_right_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                cortical_timeseries,
-                cortical_valid_rois,
-                hemisphere='RH',
-                aggregation_method='all'
-            )
-
-            cortical_left_timeseries = cortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                cortical_timeseries,
-                cortical_valid_rois,
-                hemisphere='LH',
-                aggregation_method='all'
-            )
-
-            # Create parcel labels for each ROI and hemisphere
-            for roi_name in cortical_valid_rois:
-                if roi_name not in cortical_parcel_labels:
-                    cortical_parcel_labels[roi_name] = {'RH': [], 'LH': []}
-
-                # Right hemisphere labels - get actual parcel names with network info
-                if roi_name in cortical_right_timeseries:
-                    rh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='RH')
-                    rh_indices = rh_indices_dict.get(roi_name, [])
-                    rh_parcel_labels = []
-
-                    for idx in rh_indices:
-                        # Get full parcel name (e.g., '17networks_RH_DefaultA_PFCm_1')
-                        full_name = cortical_atlas.get_parcel_name(idx)
+                    for parcel_idx, atlas_idx in enumerate(indices):
+                        full_name = cortical_atlas.get_parcel_name(atlas_idx)
                         if full_name:
-                            # Extract network and create compact label
-                            # Format: 17networks_{hemi}_{network}_{region}_{subarea}
+                            # Expected format: '17networks_RH_DefaultA_PFCm_1'
                             parts = full_name.split('_')
                             if len(parts) >= 4:
                                 # parts: ['17networks', 'RH', 'DefaultA', 'PFCm', '1']
-                                hemi = parts[1]
+                                hemisphere = parts[1]
                                 network = parts[2]
                                 region = parts[3]
                                 subarea = parts[4] if len(parts) > 4 else ''
                                 # Create label: PFCm_RH_DefaultA_p1 (includes network, p = parcel)
-                                label = f'{region}_{hemi}_{network}'
+                                label = f'{region}_{hemisphere}_{network}'
                                 if subarea:
                                     label += f'_p{subarea}'
-                                rh_parcel_labels.append(label)
                             else:
                                 # Fallback if parsing fails
-                                rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
+                                label = f'{roi_name}_{hemi}_parcel{parcel_idx+1}'
                         else:
-                            rh_parcel_labels.append(f'{roi_name}_RH_parcel{len(rh_parcel_labels)+1}')
+                            label = f'{roi_name}_{hemi}_parcel{parcel_idx+1}'
 
-                    cortical_parcel_labels[roi_name]['RH'] = rh_parcel_labels
+                        all_channel_labels.append(label)
+                        all_channels_list.append(roi_timeseries[parcel_idx, :])
 
-                # Left hemisphere labels
-                if roi_name in cortical_left_timeseries:
-                    lh_indices_dict = cortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='LH')
-                    lh_indices = lh_indices_dict.get(roi_name, [])
-                    lh_parcel_labels = []
-
-                    for idx in lh_indices:
-                        full_name = cortical_atlas.get_parcel_name(idx)
-                        if full_name:
-                            parts = full_name.split('_')
-                            if len(parts) >= 4:
-                                hemi = parts[1]
-                                network = parts[2]
-                                region = parts[3]
-                                subarea = parts[4] if len(parts) > 4 else ''
-                                label = f'{region}_{hemi}_{network}'
-                                if subarea:
-                                    label += f'_p{subarea}'
-                                lh_parcel_labels.append(label)
-                            else:
-                                lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
-                        else:
-                            lh_parcel_labels.append(f'{roi_name}_LH_parcel{len(lh_parcel_labels)+1}')
-
-                    cortical_parcel_labels[roi_name]['LH'] = lh_parcel_labels
-
-            if verbose:
-                print(f"RIGHT hemisphere extraction results:")
-                for roi_name, timeseries in cortical_right_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-                print(f"LEFT hemisphere extraction results:")
-                for roi_name, timeseries in cortical_left_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-            # Extract individual vmPFC channels with proper labeling (only 'all' aggregation)
-            # Assume 'all' aggregation: each ROI contains multiple parcels as 2D arrays
-            vmPFC_right_channels = np.vstack([cortical_right_timeseries['PFCm'],
-                                            cortical_right_timeseries['PFCv']])
-            vmPFC_left_channels = np.vstack([cortical_left_timeseries['PFCm'],
-                                           cortical_left_timeseries['PFCv']])
-
-            # Create channel labels directly from parcel labels (no need for mapping)
-            # Build list of all channel labels in the order they appear in vmPFC_right/left_channels
-            cortical_channel_labels = []
-
-            # Right hemisphere labels (PFCm first, then PFCv)
-            for roi_name in ['PFCm', 'PFCv']:
-                rh_labels = cortical_parcel_labels.get(roi_name, {}).get('RH', [])
-                cortical_channel_labels.extend(rh_labels)
-
-            # Left hemisphere labels (PFCm first, then PFCv)
-            for roi_name in ['PFCm', 'PFCv']:
-                lh_labels = cortical_parcel_labels.get(roi_name, {}).get('LH', [])
-                cortical_channel_labels.extend(lh_labels)
-
-            # Channel label map is now identity (label -> label) for display purposes
-            channel_label_map = {label: label for label in cortical_channel_labels}
-
-            if verbose:
-                print(f"Individual cortical (PFCm + PFCv) channel extraction results:")
-                print(f"  RIGHT channels: shape {vmPFC_right_channels.shape}")
-                print(f"  LEFT channels: shape {vmPFC_left_channels.shape}")
-                print(f"  Cortical channel labels: {len(cortical_channel_labels)} channels")
-
-        subcortical_valid_rois = subcortical_validation_result['valid_rois']
+        # Process subcortical channels with proper parcel naming
+        # Create parcel labels for each ROI and hemisphere using atlas information
         subcortical_parcel_labels = {}  # Maps ROI -> hemisphere -> list of parcel labels
 
-        if subcortical_roi_extractor.supports_hemisphere_queries() and subcortical_valid_rois:
-            if verbose:
-                print(f"\n=== HEMISPHERE-SPECIFIC SUBCORTICAL EXTRACTION ===")
+        for roi_name in subcortical_ROIs:
+            if roi_name not in subcortical_parcel_labels:
+                subcortical_parcel_labels[roi_name] = {'rh': [], 'lh': []}
 
-            subcortical_right_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                subcortical_timeseries,
-                subcortical_valid_rois,
-                hemisphere='rh',
-                aggregation_method='all'
-            )
+            # Right hemisphere labels - get actual anatomical names from atlas
+            if roi_name in subcortical_right_timeseries:
+                # Get parcel indices for this ROI in right hemisphere
+                rh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='rh')
+                rh_indices = rh_indices_dict.get(roi_name, [])
+                rh_parcel_names = []
 
-            subcortical_left_timeseries = subcortical_roi_extractor.extract_roi_timeseries_by_hemisphere(
-                subcortical_timeseries,
-                subcortical_valid_rois,
-                hemisphere='lh',
-                aggregation_method='all'
-            )
+                for idx in rh_indices:
+                    # Get the actual parcel name from the atlas (e.g., 'lAMY-rh', 'mAMY-rh')
+                    parcel_name = subcortical_atlas.get_parcel_name(idx)
+                    if parcel_name:
+                        # Normalize format: AMY_RH_lAMY (consistent with cortical labels)
+                        # Remove hemisphere suffix from atlas name and convert to standard format
+                        subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
+                        normalized_label = f'{roi_name}_RH_{subdivision}'
+                        rh_parcel_names.append(normalized_label)
+                    else:
+                        # Fallback if parcel name not available
+                        rh_parcel_names.append(f'{roi_name}_RH_parcel{len(rh_parcel_names)+1}')
 
-            # Create parcel labels for each ROI and hemisphere
-            # Normalize subcortical labels to match cortical format: ROI_HEMI_subdivision
-            for roi_name in subcortical_valid_rois:
-                if roi_name not in subcortical_parcel_labels:
-                    subcortical_parcel_labels[roi_name] = {'rh': [], 'lh': []}
+                subcortical_parcel_labels[roi_name]['rh'] = rh_parcel_names
 
-                # Right hemisphere labels - normalize to match cortical format
-                if roi_name in subcortical_right_timeseries:
-                    # Get parcel indices for this ROI in right hemisphere
-                    rh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='rh')
-                    rh_indices = rh_indices_dict.get(roi_name, [])
-                    rh_parcel_names = []
+                # Add timeseries for right hemisphere
+                roi_timeseries = subcortical_right_timeseries[roi_name]
+                for parcel_idx, label in enumerate(rh_parcel_names):
+                    all_channel_labels.append(label)
+                    all_channels_list.append(roi_timeseries[parcel_idx, :])
 
-                    for idx in rh_indices:
-                        # Get the actual parcel name from the atlas (e.g., 'lAMY-rh', 'mAMY-rh')
-                        parcel_name = subcortical_atlas.get_parcel_name(idx)
-                        if parcel_name:
-                            # Normalize format: AMY_RH_lAMY (consistent with cortical labels)
-                            # Remove hemisphere suffix from atlas name and convert to standard format
-                            subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
-                            normalized_label = f'{roi_name}_RH_{subdivision}'
-                            rh_parcel_names.append(normalized_label)
-                        else:
-                            # Fallback if parcel name not available
-                            rh_parcel_names.append(f'{roi_name}_RH_parcel{len(rh_parcel_names)+1}')
+            # Left hemisphere labels - get actual anatomical names from atlas
+            if roi_name in subcortical_left_timeseries:
+                lh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='lh')
+                lh_indices = lh_indices_dict.get(roi_name, [])
+                lh_parcel_names = []
 
-                    subcortical_parcel_labels[roi_name]['rh'] = rh_parcel_names
+                for idx in lh_indices:
+                    parcel_name = subcortical_atlas.get_parcel_name(idx)
+                    if parcel_name:
+                        # Normalize format: AMY_LH_mAMY (consistent with cortical labels)
+                        subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
+                        normalized_label = f'{roi_name}_LH_{subdivision}'
+                        lh_parcel_names.append(normalized_label)
+                    else:
+                        lh_parcel_names.append(f'{roi_name}_LH_parcel{len(lh_parcel_names)+1}')
 
-                # Left hemisphere labels - normalize to match cortical format
-                if roi_name in subcortical_left_timeseries:
-                    lh_indices_dict = subcortical_atlas.get_roi_indices_by_hemisphere([roi_name], hemisphere='lh')
-                    lh_indices = lh_indices_dict.get(roi_name, [])
-                    lh_parcel_names = []
+                subcortical_parcel_labels[roi_name]['lh'] = lh_parcel_names
 
-                    for idx in lh_indices:
-                        parcel_name = subcortical_atlas.get_parcel_name(idx)
-                        if parcel_name:
-                            # Normalize format: AMY_LH_mAMY (consistent with cortical labels)
-                            subdivision = parcel_name.replace('-rh', '').replace('-lh', '')
-                            normalized_label = f'{roi_name}_LH_{subdivision}'
-                            lh_parcel_names.append(normalized_label)
-                        else:
-                            lh_parcel_names.append(f'{roi_name}_LH_parcel{len(lh_parcel_names)+1}')
+                # Add timeseries for left hemisphere
+                roi_timeseries = subcortical_left_timeseries[roi_name]
+                for parcel_idx, label in enumerate(lh_parcel_names):
+                    all_channel_labels.append(label)
+                    all_channels_list.append(roi_timeseries[parcel_idx, :])
 
-                    subcortical_parcel_labels[roi_name]['lh'] = lh_parcel_names
-
-            if verbose:
-                print(f"RIGHT hemisphere extraction results:")
-                for roi_name, timeseries in subcortical_right_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-                print(f"LEFT hemisphere extraction results:")
-                for roi_name, timeseries in subcortical_left_timeseries.items():
-                    if timeseries.size > 0:
-                        print(f"  {roi_name}: shape {timeseries.shape}")
-
-            # Extract individual AMY channels with proper labeling (only 'all' aggregation)
-            # Assume 'all' aggregation: AMY contains multiple parcels as 2D arrays
-            amy_right_channels = subcortical_right_timeseries['AMY']
-            amy_left_channels = subcortical_left_timeseries['AMY']
-
-            # Build subcortical channel labels using actual parcel names from atlas (lAMY, mAMY)
-            subcortical_channel_labels = []
-            amy_rh_labels = subcortical_parcel_labels.get('AMY', {}).get('rh', [])
-            amy_lh_labels = subcortical_parcel_labels.get('AMY', {}).get('lh', [])
-
-            subcortical_channel_labels.extend(amy_rh_labels)
-            subcortical_channel_labels.extend(amy_lh_labels)
-
-            # Add subcortical labels to channel_label_map (identity mapping)
-            for label in subcortical_channel_labels:
-                channel_label_map[label] = label
-
-            if verbose:
-                print(f"Individual subcortical (AMY) channel extraction results:")
-                print(f"  RIGHT channels: shape {amy_right_channels.shape}")
-                print(f"  LEFT channels: shape {amy_left_channels.shape}")
-                print(f"  Subcortical channel labels: {len(subcortical_channel_labels)} channels")
-                print(f"  Total channel mapping: {len(channel_label_map)} channels")
-                print(f"  Sample channel labels: {list(channel_label_map.keys())[:8]}{'...' if len(channel_label_map) > 8 else ''}")
-
-        # Require all timeseries to perform analyses
-        required_timeseries = [cortical_right_timeseries, cortical_left_timeseries,
-                                                     subcortical_right_timeseries, subcortical_left_timeseries,
-                                                     vmPFC_right_channels, vmPFC_left_channels,
-                                                     amy_right_channels, amy_left_channels,
-                                                     channel_label_map]
-        is_missing_timeseries = any([v is None for v in required_timeseries])
-
-        if is_missing_timeseries:
-            formatted_list = '\n\t- '.join(required_timeseries)
-            raise ValueError(f'Not all timeseries are present. Expected channels:\n\t{formatted_list}')
-
-        # Keeping track of all original channel labels from atlases
-        all_channel_labels = cortical_channel_labels + subcortical_channel_labels
-
-        # Combine into multivariate signal (multi-channel),
-        # and get analytical signals through Hilbert transform (HT)
-        # Combine all channel timeseries in order
-        all_channels = np.vstack([
-            vmPFC_right_channels,
-            vmPFC_left_channels,
-            amy_right_channels,
-            amy_left_channels
-        ])
+        # Stack all timeseries
+        all_channels = np.stack(all_channels_list, axis=0)
 
         if verbose:
-            print(f"Combined all channels into a multivariate signal shape: {all_channels.shape}")
+            print(f"Extracted {all_channels.shape[0]} channels from {len(cortical_ROIs) + len(subcortical_ROIs)} ROIs")
 
-        # Perform Hilbert transform on each timeseries
-        hilbert_transforms = signal.hilbert(all_channels)
-
-        # Derive Analytic signals z(t) = x(t) + j * H{x(t)}
-        analytic_timeseries = all_channels + 1j * hilbert_transforms
-
-        # Activity analysis
-        activity_results = None
-
+        # ===== 4. STATIC FUNCTIONAL CONNECTIVITY =====
         if verbose:
-            print(f"\n=== ACTIVITY ANALYSIS ===")
+            print(f"\n=== STATIC FUNCTIONAL CONNECTIVITY ===")
 
-        # Create Activity timeseries dictionary using actual parcel labels
-        activity_timeseries = {}
+        # Create timeseries dictionary for FC computation
+        fc_timeseries = {label: all_channels[i, :] for i, label in enumerate(all_channel_labels)}
+        fc_matrix, z_fc_static, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
 
-        # Map each channel timeseries to its actual parcel label
-        for i, channel_label in enumerate(all_channel_labels):
-            activity_timeseries[channel_label] = all_channels[i]
+        if verbose and fc_matrix is not None:
+            print(f"Static FC matrix shape: {fc_matrix.shape}")
 
-        # Compute envelope of analytic signal
-        analytic_envelope = np.abs(analytic_timeseries) # Activity
-
-        # Apply low-pass filter for smoothing envelope
-        # Filter properties
-        filter_order = 2
-        cutoff_frequency = 0.2  # Frequency at which signal starts to attenuate
-                                # Digital filter critical frequencies must be 0 < Wn < 1
-        normalized_cutoff = cutoff_frequency / NYQUIST_FREQUENCY
-        b, a = signal.butter(filter_order, normalized_cutoff, btype='low', analog=False)
-
-        filtered_timeseries = signal.lfilter(b, a, analytic_timeseries)
-        filtered_envelope = np.abs(filtered_timeseries)
-
+        # ===== 5. MVMD DECOMPOSITION =====
         if verbose:
-            print(f"All Channels shape: {all_channels.shape}")
-            print(f"Hilbert Transformed channels shape: {hilbert_transforms.shape}")
-            print(f"Analytic channels shape: {analytic_timeseries.shape}")
+            print(f"\n=== MVMD DECOMPOSITION ===")
 
-        activity_results = {
-            'all_channels': all_channels,
-            'analytic_signal': analytic_timeseries,
-            'hilbert_transforms': hilbert_transforms,
-            'analytic_envelope': analytic_envelope, # Activity
-            'smoothed_envelope': filtered_envelope, # LP-Filtered acitivty
-            'timeseries_used': activity_timeseries,
-            'filtered_timeseries': filtered_timeseries,
-            'filter_used': (b, a),
-            'channel_label_map': channel_label_map,
-            'channel_labels': all_channel_labels
-        }
-
-
-        # Static functional connectivity analysis
-        static_fc_results = None
-
-        if verbose:
-            print(f"\n=== FUNCTIONAL CONNECTIVITY ANALYSIS ===")
-
-        # Create FC timeseries dictionary using actual parcel labels
-        fc_timeseries = {}
-
-        # Map each channel timeseries to its actual parcel label
-        for i, channel_label in enumerate(all_channel_labels):
-            fc_timeseries[channel_label] = all_channels[i]
-
-        fc_matrix, fc_labels, fc_pvalues = compute_fc_matrix(fc_timeseries)
-
-        if fc_matrix is not None:
-            if verbose:
-                fc_labels_ordered = '\n\t- '.join(fc_labels)
-                print(f"FC Matrix shape: {fc_matrix.shape}")
-                print(f"ROI labels (same order): \n\t- {fc_labels_ordered}")
-
-            connectivity_patterns = analyze_connectivity_patterns(fc_matrix, fc_labels, fc_pvalues)
-
-            # NEW: Extract network-level interhemispheric coherence
-            static_interhemi_networks = connectivity_patterns['interhemispheric'].get('network_stats', {})
-
-            if verbose:
-                pattern_labels = '\n\t- '.join(connectivity_patterns['interhemispheric']['pairs'].keys())
-                print(f"\nInterhemispheric connections (same order): \n\t- {pattern_labels}")
-
-                # NEW: Print network-level coherence summary
-                if static_interhemi_networks:
-                    print(f"\nInterhemispheric Network Coherence (Fisher-Z):")
-                    for network_key, network_data in static_interhemi_networks.items():
-                        print(f"  {network_key}: mean_z = {network_data['mean_fisher_z']:.3f}, "
-                              f"n_pairs = {network_data['n_parcel_pairs']}")
-
-            if verbose:
-                print(f"\nConnectivity Pattern Analysis:")
-                print(f"  Total pairwise connections: {connectivity_patterns['all_pairwise']['stats']['total_pairs']}")
-                print(f"  Interhemispheric connections: {connectivity_patterns['interhemispheric']['stats']['total_pairs']}")
-                print(f"  Cross-regional connections: {connectivity_patterns['cross_regional']['stats']['total_pairs']}")
-
-            static_fc_results = {
-                'static_fc_matrix': fc_matrix,
-                'static_fc_labels': fc_labels,
-                'static_fc_pvalues': fc_pvalues,
-                'static_connectivity_patterns': connectivity_patterns,
-                'interhemispheric_network_coherence': static_interhemi_networks,  # NEW
-                'timeseries_used': fc_timeseries,
-                'channel_label_map': channel_label_map
-            }
-
-        # TODO: Dynamic functional connectivity analysis
-
-        # TODO: Multiscale analysis
-        # 1. Static FC
-        # 2. Dynamic FC
-
-        # Multiscale functional connectivity analysis
-        mvmd_config = None
-        mvmd = MVMD(config=mvmd_config)
+        mvmd = MVMD(config=None)
         mvmd_result = mvmd.decompose(all_channels, num_modes=10)
-
         time_modes = mvmd_result['time_modes']
         center_freqs = mvmd_result['center_freqs'][-1, :]
 
-        reconstructed_timeseries = np.sum(time_modes, axis=0)
-        reconstruction_error = np.linalg.norm(all_channels - reconstructed_timeseries) / np.linalg.norm(analytic_timeseries)
+        if verbose:
+            print(f"MVMD modes shape: {time_modes.shape}")
+            print(f"Center frequencies: {center_freqs}")
 
-        # Create index-based channel label map for MVMD plots
-        mvmd_channel_label_map = {idx: label for idx, label in enumerate(all_channel_labels)}
+        # ===== 6. PER-MODE FUNCTIONAL CONNECTIVITY =====
+        if verbose:
+            print(f"\n=== PER-MODE FUNCTIONAL CONNECTIVITY ===")
 
-        mvmd_result = {
-            **mvmd_result,
-            'ts_reconstruction': reconstructed_timeseries,
-            'reconstruction_error': reconstruction_error,
-            'channel_label_map': mvmd_channel_label_map,
+        mode_fc_data = compute_fc_per_mode(time_modes, all_channel_labels, verbose=verbose)
+        z_fc_modes = mode_fc_data.get('mode_fc_z_matrices') if mode_fc_data else None
+
+        # ===== 7. AGGREGATE MODE FC INTO SLOW-BAND FC =====
+        if verbose:
+            print(f"\n=== SLOW-BAND AGGREGATION OF MODE FC ===")
+
+        band_fc_data = aggregate_mode_fc_to_bands(mode_fc_data, center_freqs, verbose=verbose)
+
+
+        # ===== 8. HILBERT SPECTRAL ANALYSIS =====
+        if verbose:
+            print(f"\n=== HILBERT SPECTRAL ANALYSIS ===")
+
+        hsa_data = compute_hilbert_transform_per_mode(time_modes, SAMPLING_RATE)
+
+        # Extract analytic signals: shape (n_modes, n_channels, n_samples)
+        analytic_signal_modes = None
+        modes_count = 0
+        if hsa_data and hsa_data.get('modes_data'):
+            modes_data = hsa_data['modes_data']
+            modes_count = len(modes_data)
+            if modes_count > 0:
+                channels_count, samples_count = modes_data[0]['analytic_signal'].shape
+                analytic_signal_modes = np.zeros((modes_count, channels_count, samples_count), dtype=complex)
+                for i, mode_data in enumerate(modes_data):
+                    analytic_signal_modes[i] = mode_data['analytic_signal']
+
+        if verbose:
+            print(f"Hilbert analysis complete: {modes_count} modes processed")
+
+        # ===== 8. PREPARE OUTPUTS =====
+        # Standardized channel labels mapping
+        channel_labels = {idx: label for idx, label in enumerate(all_channel_labels)}
+
+        # MVMD metadata
+        mvmd_metadata = {
+            'center_freqs': center_freqs,
+            'sampling_rate': SAMPLING_RATE,
+            'n_modes': time_modes.shape[0],
+            'n_channels': all_channels.shape[0],
+            'reconstruction_error': mvmd_result.get('reconstruction_error', None)
         }
-
-        if verbose:
-            print(f"\nExtracted centre frequencies: {center_freqs} Hz")
-            print(f"Modes shape: {time_modes.shape}")
-            print(f"Signal reconstruction error: {reconstruction_error:.4f}")
-
-        # ===== HILBERT SPECTRAL ANALYSIS =====
-        if verbose:
-            print(f"\n{'='*80}")
-            print("HILBERT SPECTRAL ANALYSIS")
-            print(f"{'='*80}")
-
-        # Apply Hilbert Transform to each mode to extract instantaneous properties
-        if verbose:
-            print("\nComputing Hilbert Transform per mode...")
-
-        hsa_data = compute_hilbert_transform_per_mode(
-            time_modes=time_modes,
-            sampling_rate=SAMPLING_RATE
-        )
-
-        if verbose:
-            print(f"  Processed {hsa_data['n_modes']} modes")
-            print(f"  Channels per mode: {hsa_data['n_channels']}")
-            print(f"  Time samples: {hsa_data['n_samples']}")
-
-        # Store HSA results in mvmd_result
-        mvmd_result['hilbert_spectral_analysis'] = hsa_data
-
-        if verbose:
-            print(f"\n{'='*80}")
-            print("HILBERT SPECTRAL ANALYSIS COMPLETE")
-            print(f"{'='*80}")
-
-        # Compute mode-wise FC and aggregate to slow-bands
-        slow_band_fc_results = {}
-        if mvmd_result['success']:
-            # ===== MODE-LEVEL FUNCTIONAL CONNECTIVITY =====
-            if verbose:
-                print(f"\n{'='*80}")
-                print("MODE-LEVEL FUNCTIONAL CONNECTIVITY ANALYSIS")
-                print(f"{'='*80}")
-
-            # STEP 1: Compute FC for each mode independently
-            mode_fc_data = compute_fc_per_mode(
-                time_modes=time_modes,
-                channel_labels=all_channel_labels,
-                verbose=verbose
-            )
-
-            # STEP 2: Aggregate mode-level FC into slow-bands using Fisher Z-transformation
-            # NOTE: This is kept for backward compatibility (full FC matrix aggregation)
-            if verbose:
-                print(f"\n{'='*80}")
-                print("AGGREGATING MODE-LEVEL FC TO SLOW-BANDS")
-                print(f"{'='*80}")
-
-            slow_band_fc_results = aggregate_mode_fc_to_bands(
-                mode_fc_data=mode_fc_data,
-                mode_frequencies=center_freqs,
-                verbose=verbose
-            )
-
-            # STEP 2b: Compute band-specific interhemispheric coherence using NESTED AVERAGING
-            # This is the CORRECT approach for statistical testing
-            band_specific_coherence = compute_band_specific_coherence(
-                mode_fc_data=mode_fc_data,
-                mode_frequencies=center_freqs,
-                verbose=verbose
-            )
-
-            # STEP 3: Enrich band FC results with metadata and connectivity patterns
-            if verbose:
-                print(f"\n{'='*80}")
-                print("ENRICHING SLOW-BAND FC RESULTS")
-                print(f"{'='*80}")
-
-            for band_key in ['6', '5', '4', '3', '2', '1']:
-                band_fc = slow_band_fc_results.get(f'slow-{band_key}')
-
-                # Skip if no modes in this band
-                if band_fc is None:
-                    if verbose:
-                        print(f"\nSlow-{band_key}: No modes in this band, skipping")
-                    continue
-
-                mode_indices = band_fc['mode_indices']
-                n_channels = mode_fc_data['n_channels']
-
-                if verbose:
-                    print(f"\nSlow-{band_key}:")
-                    print(f"  Modes in band: {band_fc['n_modes_in_band']}")
-                    print(f"  Mode indices: {mode_indices}")
-                    print(f"  Center frequencies: {[f'{f:.4f}' for f in band_fc['mode_frequencies']]}")
-
-                # Analyze connectivity patterns (operates on FC matrix directly)
-                # NOTE: This is kept for visualization and general connectivity analysis
-                band_connectivity_patterns = analyze_connectivity_patterns(
-                    band_fc['fc_matrix'],
-                    band_fc['fc_labels'],
-                    band_fc['fc_pvalues'],
-                    alpha=0.05
-                )
-
-                # OLD: Extract network-level coherence from averaged matrix (INCORRECT for stats)
-                # band_interhemi_networks = band_connectivity_patterns['interhemispheric'].get('network_stats', {})
-
-                # NEW: Use nested averaging coherence (CORRECT for stats)
-                band_name = f'slow-{band_key}'
-                band_interhemi_networks_nested = band_specific_coherence.get(band_name, {})
-
-                # Convert to format expected by aggregation code
-                band_interhemi_networks = {}
-                for network_key, mean_z in band_interhemi_networks_nested.items():
-                    band_interhemi_networks[network_key] = {
-                        'mean_fisher_z': mean_z,
-                        'n_parcel_pairs': 'N/A',  # Not applicable in nested averaging
-                        'computation_method': 'nested_averaging'
-                    }
-
-                # Add metadata to results
-                band_fc['connectivity_patterns'] = band_connectivity_patterns
-                band_fc['interhemispheric_network_coherence'] = band_interhemi_networks  # NEW: Using nested averaging
-                band_fc['components_used'] = band_fc['mode_indices']  # Alias for backward compatibility
-                band_fc['center_freqs'] = band_fc['mode_frequencies']  # Alias for backward compatibility
-                band_fc['channel_label_map'] = mvmd_channel_label_map
-                band_fc['frequency_range'] = get_frequency_range(band_key)
-
-                # Validation print for first subject
-                if verbose and len(band_interhemi_networks) > 0:
-                    print(f"  Nested averaging coherence: {len(band_interhemi_networks)} networks")
-                    # Print first network as example
-                    first_network = list(band_interhemi_networks.keys())[0]
-                    print(f"    Example: {first_network} = {band_interhemi_networks[first_network]['mean_fisher_z']:.4f}")
-
-            if verbose:
-                print(f"\n{'='*80}")
-                print("SLOW-BAND FC ANALYSIS COMPLETE")
-                print(f"{'='*80}")
-                print(f"  Total bands with results: {len(slow_band_fc_results)}")
-                print(f"  Bands: {list(slow_band_fc_results.keys())}")
-
-                # VALIDATION: Print nested averaging summary for one subject
-                print(f"\n{'='*80}")
-                print(f"VALIDATION: NESTED AVERAGING COHERENCE SUMMARY FOR {subject_id}")
-                print(f"{'='*80}")
-
-                # Show all networks detected across all bands
-                all_networks_detected = set()
-                for band_name, band_coherence in band_specific_coherence.items():
-                    all_networks_detected.update(band_coherence.keys())
-
-                print(f"\nNetworks detected across all slow-bands: {sorted(all_networks_detected)}")
-                print(f"Total unique networks: {len(all_networks_detected)}")
-
-                # Show detailed values for each slow-band
-                print(f"\nDetailed coherence values per slow-band:")
-                for band_num in ['6', '5', '4', '3', '2', '1']:
-                    band_name = f'slow-{band_num}'
-                    if band_name in band_specific_coherence:
-                        band_coherence = band_specific_coherence[band_name]
-                        print(f"\n  {band_name.upper()} ({len(band_coherence)} networks):")
-                        for network_key in sorted(band_coherence.keys()):
-                            fisher_z = band_coherence[network_key]
-                            print(f"    {network_key:25s}: Fisher-Z = {fisher_z:7.4f}")
-                    else:
-                        print(f"\n  {band_name.upper()}: No modes in this band")
-
-                print(f"\n{'='*80}")
 
         return {
             'subject_id': subject_id,
             'success': True,
-            'data_shape': data.shape,
+            'channel_labels': channel_labels,
+            'fc_static': {
+                'r_fc': fc_matrix,
+                'z_fc': z_fc_static,
+                'labels': fc_labels,
+            },
+            'mvmd': {
+                **mvmd_result,
+                'metadata': mvmd_metadata,
+            },
+            'fc_modes': {
+                'r_fc': mode_fc_data.get('mode_fc_matrices', None),
+                'z_fc': mode_fc_data.get('mode_fc_z_matrices', None),
+                'labels': mode_fc_data.get('fc_labels', None),
+                'n_modes': mode_fc_data.get('n_modes', 0),
+                'n_channels': mode_fc_data.get('n_channels', 0),
+            },
+            'fc_bands': {
+                'r_fc': band_fc_data.get('fc_matrix', None),
+                'z_fc': band_fc_data.get('fc_z_matrix', None),
+                'labels': band_fc_data.get('fc_labels', None),
+                'mode_indeces': band_fc_data.get('mode_indeces', []),
+                'mode_frequencies': band_fc_data.get('mode_freqs', []),
+                'n_modes_in_band': band_fc_data.get('modes_in_band_count', 0),
+            },
+            'hsa': analytic_signal_modes, # Hilbert Spectral Analysis
             'roi_extraction_results': {
                 'cortical': {
                     'atlas_name': cortical_atlas.atlas_name,
@@ -2023,8 +1641,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         'right_hemisphere': cortical_right_timeseries,
                         'left_hemisphere': cortical_left_timeseries,
                         'supports_hemisphere_queries': cortical_roi_extractor.supports_hemisphere_queries()
-                    },
-                    'parcel_labels': cortical_parcel_labels
+                    }
                 },
                 'subcortical': {
                     'atlas_name': subcortical_atlas.atlas_name,
@@ -2035,21 +1652,17 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         'right_hemisphere': subcortical_right_timeseries,
                         'left_hemisphere': subcortical_left_timeseries,
                         'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries()
-                    },
-                    'parcel_labels': subcortical_parcel_labels
+                    }
                 }
             },
-            'activity': activity_results,
-            'static_functional_connectivity': static_fc_results,
-            'channel_signals': {
-                'vmPFC_right_channels': vmPFC_right_channels,
-                'vmPFC_left_channels': vmPFC_left_channels,
-                'amy_right_channels': amy_right_channels,
-                'amy_left_channels': amy_left_channels,
-                'channel_label_map': channel_label_map
-            },
-            'mvmd': mvmd_result,
-            'slow_band_fc': slow_band_fc_results,
+
+            """ LEGACY UNDERNEATH """
+            'z_fc_static': z_fc_static, # LEGACY
+            'static_fc_pvalues': fc_pvalues, # LEGACY
+            'z_fc_modes': z_fc_modes, # LEGACY
+            'mode_fc_pvalues': mode_fc_data.get('mode_fc_pvalues') if mode_fc_data else None, # LEGACY
+            'analytic_signal_modes': analytic_signal_modes, # LEGACY
+            'mvmd_metadata': mvmd_metadata, # LEGACY
         }
 
     except Exception as e:
@@ -2060,6 +1673,775 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             'error': str(e),
             'success': False
         }
+
+def create_connectivity_mappings(all_subject_results, verbose=True):
+    """
+    Stage 2: Create standardized connectivity pair mappings from all subject results.
+
+    This function runs once after collecting all subject data from Stage 1.
+    It standardizes channel names and creates index lists for different types
+    of connectivity analysis.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Connectivity mappings containing:
+            - channel_index_map: Dict mapping standardized names to indices
+            - interhemispheric_pairs: Dict of (LH_idx, RH_idx) pairs separated by network type
+            - ipsilateral_pairs: Dict of within-hemisphere pairs
+            - intra_network_pairs: Dict for statistical analysis (same region+network across hemispheres)
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 2: CREATING CONNECTIVITY MAPPINGS")
+        print(f"{'='*80}")
+
+    # Collect all unique channel labels across subjects
+    all_channel_labels = set()
+    for subject_id, result in all_subject_results.items():
+        if result.get('success') and result.get('channel_labels'):
+            all_channel_labels.update(result['channel_labels'].values())
+
+    # Create standardized channel-to-index mapping
+    sorted_labels = sorted(all_channel_labels)
+    channel_index_map = {label: idx for idx, label in enumerate(sorted_labels)}
+
+    if verbose:
+        print(f"Found {len(sorted_labels)} unique channel labels across all subjects")
+        print(f"Sample labels: {sorted_labels[:5]}...")
+
+    # Separate cortical and subcortical channels
+    cortical_channels = []
+    subcortical_channels = []
+
+    for label in sorted_labels:
+        if any(region in label for region in ['PFCm', 'PFCv']):
+            cortical_channels.append(label)
+        elif 'AMY' in label:
+            subcortical_channels.append(label)
+
+    # Create interhemispheric pairs (LH - RH)
+    interhemispheric_pairs = {
+        'indiscriminate': [], # Network independent
+        'intra_network': [],  # Same region + same network across hemispheres
+        'inter_network': []   # Same region + different network across hemispheres
+    }
+
+    # Create ipsilateral pairs (within hemisphere)
+    ipsilateral_pairs = {
+        'left_hemisphere': [],
+        'right_hemisphere': []
+    }
+
+    # Parse cortical channels for interhemispheric pairing
+    # Expected format: "PFCm_RH_DefaultA_p1" -> region_hemi_network_parcel
+    lh_channels = [ch for ch in cortical_channels if '_LH_' in ch]
+    rh_channels = [ch for ch in cortical_channels if '_RH_' in ch]
+
+    for lh_ch in lh_channels:
+        lh_parts = lh_ch.split('_')
+        if len(lh_parts) >= 3:
+            lh_region = lh_parts[0]  # e.g., "PFCm"
+            lh_network = lh_parts[2] # e.g., "DefaultA"
+
+            # Find corresponding RH channel with same region
+            for rh_ch in rh_channels:
+                rh_parts = rh_ch.split('_')
+                if len(rh_parts) >= 3:
+                    rh_region = rh_parts[0]
+                    rh_network = rh_parts[2]
+
+                    if lh_region == rh_region:  # Same region across hemispheres
+                        lh_idx = channel_index_map[lh_ch]
+                        rh_idx = channel_index_map[rh_ch]
+
+                        interhemispheric_pairs['indiscriminate'].append({
+                            'lh_idx': lh_idx, 'rh_idx': rh_idx,
+                            'lh_label': lh_ch, 'rh_label': rh_ch,
+                            'region': lh_region,
+                            'lh_network': lh_network, 'rh_network': rh_network
+                        })
+
+                        if lh_network == rh_network:  # Same network
+                            interhemispheric_pairs['intra_network'].append({
+                                'lh_idx': lh_idx, 'rh_idx': rh_idx,
+                                'lh_label': lh_ch, 'rh_label': rh_ch,
+                                'region': lh_region, 'network': lh_network
+                            })
+                        else:  # Different network
+                            interhemispheric_pairs['inter_network'].append({
+                                'lh_idx': lh_idx, 'rh_idx': rh_idx,
+                                'lh_label': lh_ch, 'rh_label': rh_ch,
+                                'region': lh_region,
+                                'lh_network': lh_network, 'rh_network': rh_network
+                            })
+
+    # Parse subcortical channels for interhemispheric pairing
+    # Expected format: "AMY_RH_lAMY" -> region_hemi_subregion
+    # For subcortical regions, we treat each subregion as its own "network" for intra-network analysis
+    lh_subcortical = [ch for ch in subcortical_channels if '_LH_' in ch]
+    rh_subcortical = [ch for ch in subcortical_channels if '_RH_' in ch]
+
+    for lh_ch in lh_subcortical:
+        lh_parts = lh_ch.split('_')
+        if len(lh_parts) >= 3:
+            lh_region = lh_parts[0]  # e.g., "AMY"
+            lh_subregion = lh_parts[2]  # e.g., "lAMY" or "parcel1" (fallback)
+
+            # Find corresponding RH channel with same region and subregion
+            for rh_ch in rh_subcortical:
+                rh_parts = rh_ch.split('_')
+                if len(rh_parts) >= 3:
+                    rh_region = rh_parts[0]
+                    rh_subregion = rh_parts[2]
+
+                    if lh_region == rh_region:
+                        lh_idx = channel_index_map[lh_ch]
+                        rh_idx = channel_index_map[rh_ch]
+
+                        # For subcortical regions, use subregion as "network" identifier
+                        lh_network = lh_subregion
+                        rh_network = rh_subregion
+                        interhemispheric_pairs['indiscriminate'].append({
+                            'lh_idx': lh_idx, 'rh_idx': rh_idx,
+                            'lh_label': lh_ch, 'rh_label': rh_ch,
+                            'region': lh_region,
+                            'lh_network': lh_network, 'rh_network': rh_network
+                        })
+
+                        if lh_network == rh_network:  # Same region and subregion
+                            interhemispheric_pairs['intra_network'].append({
+                                'lh_idx': lh_idx, 'rh_idx': rh_idx,
+                                'lh_label': lh_ch, 'rh_label': rh_ch,
+                                'region': lh_region, 'network': lh_network
+                            })
+
+    # Create ipsilateral pairs within each hemisphere
+    for hemisphere, channels in [('left_hemisphere', lh_channels), ('right_hemisphere', rh_channels)]:
+        for i, ch1 in enumerate(channels):
+            for j, ch2 in enumerate(channels[i+1:], i+1):
+                idx1 = channel_index_map[ch1]
+                idx2 = channel_index_map[ch2]
+                ipsilateral_pairs[hemisphere].append({
+                    'idx1': idx1, 'idx2': idx2,
+                    'label1': ch1, 'label2': ch2
+                })
+
+    # Create intra-network pairs for statistics (only same region + same network across hemispheres)
+    intra_network_pairs = {}
+    for pair in interhemispheric_pairs['intra_network']:
+        network_key = f"{pair['region']}_{pair['network']}"
+        if network_key not in intra_network_pairs:
+            intra_network_pairs[network_key] = []
+        intra_network_pairs[network_key].append(pair)
+
+    if verbose:
+        print(f"Connectivity mapping results:")
+        print(f"  Interhemispheric intra-network pairs: {len(interhemispheric_pairs['intra_network'])}")
+        print(f"  Interhemispheric inter-network pairs: {len(interhemispheric_pairs['inter_network'])}")
+        print(f"  Left hemisphere pairs: {len(ipsilateral_pairs['left_hemisphere'])}")
+        print(f"  Right hemisphere pairs: {len(ipsilateral_pairs['right_hemisphere'])}")
+        print(f"  Intra-network groups for statistics: {len(intra_network_pairs)}")
+
+        if intra_network_pairs:
+            print(f"  Network groups: {list(intra_network_pairs.keys())}")
+
+    return {
+        'channel_index_map': channel_index_map,
+        'interhemispheric_pairs': interhemispheric_pairs,
+        'ipsilateral_pairs': ipsilateral_pairs,
+        'intra_network_pairs': intra_network_pairs,
+        'cortical_channels': cortical_channels,
+        'subcortical_channels': subcortical_channels
+    }
+
+
+# ===== STAGE 3: GROUPED AGGREGATION =====
+
+def aggregate_group_connectivity(all_subject_results, connectivity_mappings, anhedonia_groups, verbose=True):
+    """
+    Stage 3: Group subjects by anhedonia type and aggregate FC matrices.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        connectivity_mappings: Results from create_connectivity_mappings()
+        anhedonia_groups: Dict with 'low-anhedonic', 'high-anhedonic', 'non-anhedonic' subject lists
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Group-level aggregated results containing:
+            - static_fc_by_group: Group-averaged static FC matrices
+            - slow_band_fc_by_group: Group-averaged FC by frequency band and group
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 3: AGGREGATING GROUP CONNECTIVITY")
+        print(f"{'='*80}")
+
+    # Initialize results structure
+    group_results = {
+        'static_fc_by_group': {},
+        'slow_band_fc_by_group': {}
+    }
+
+    # Process each group
+    for group_name, subject_ids in anhedonia_groups.items():
+        if verbose:
+            print(f"\nProcessing {group_name} group ({len(subject_ids)} subjects)...")
+
+        # Collect static FC matrices for this group
+        static_matrices = []
+        valid_subjects = []
+
+        for subject_id in subject_ids:
+            result = all_subject_results.get(subject_id)
+            if result and result.get('success') and result.get('z_fc_static') is not None:
+                static_matrices.append(result['z_fc_static'])
+                valid_subjects.append(subject_id)
+
+        if static_matrices:
+            # Compute group average in Fisher-Z space
+            stacked_matrices = np.stack(static_matrices, axis=0)
+            avg_z_matrix = np.nanmean(stacked_matrices, axis=0)
+
+            # Convert back to correlation coefficients for plotting
+            avg_r_matrix = fisher_z_to_r(avg_z_matrix)
+
+            group_results['static_fc_by_group'][group_name] = {
+                'avg_z_matrix': avg_z_matrix,      # For computation/statistics
+                'avg_r_matrix': avg_r_matrix,      # For plotting
+                'n_subjects': len(valid_subjects),
+                'subject_ids': valid_subjects
+            }
+
+            if verbose:
+                print(f"  Static FC: {len(valid_subjects)} valid subjects")
+
+        # Collect slow-band FC matrices for this group
+        slow_band_matrices = {}  # {band_name: [list of Z matrices]}
+
+        for subject_id in subject_ids:
+            result = all_subject_results.get(subject_id)
+            if not (result and result.get('success')):
+                continue
+
+            z_fc_modes = result.get('z_fc_modes')
+            center_freqs = result.get('mvmd_metadata', {}).get('center_freqs')
+
+            if z_fc_modes is None or center_freqs is None:
+                continue
+
+            # Group this subject's modes by bands
+            for mode_idx, freq in enumerate(center_freqs):
+                band_num = get_band_number(freq)
+                if band_num is not None:
+                    band_name = f'slow-{band_num}'
+
+                    if band_name not in slow_band_matrices:
+                        slow_band_matrices[band_name] = []
+
+                    slow_band_matrices[band_name].append(z_fc_modes[mode_idx])
+
+        # Aggregate slow-band matrices within this group
+        group_results['slow_band_fc_by_group'][group_name] = {}
+        for band_name, z_matrices_list in slow_band_matrices.items():
+            if len(z_matrices_list) == 0:
+                continue
+
+            # Stack and average all Z-matrices for this band within this group
+            stacked_z = np.stack(z_matrices_list, axis=0)
+            avg_z_matrix = np.nanmean(stacked_z, axis=0)
+
+            # Convert to R-scale for plotting
+            avg_r_matrix = fisher_z_to_r(avg_z_matrix)
+
+            group_results['slow_band_fc_by_group'][group_name][band_name] = {
+                'avg_z_matrix': avg_z_matrix,      # For computation/statistics
+                'avg_r_matrix': avg_r_matrix,      # For plotting
+                'n_matrices': len(z_matrices_list),
+                'description': f'{group_name} group {band_name} average ({len(z_matrices_list)} mode matrices)'
+            }
+
+        if verbose and group_results['slow_band_fc_by_group'][group_name]:
+            slow_band_summary = ", ".join([f"{band}: {data['n_matrices']} matrices"
+                                         for band, data in group_results['slow_band_fc_by_group'][group_name].items()])
+            print(f"  Slow-band FC: {slow_band_summary}")
+
+    if verbose:
+        print(f"\nGroup aggregation completed:")
+        for group_name, data in group_results['static_fc_by_group'].items():
+            print(f"  {group_name}: {data['n_subjects']} subjects")
+
+    return group_results
+
+
+# ===== HELPER FUNCTIONS FOR STAGE 4 =====
+
+def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network_pairs, network_key, verbose=False):
+    """
+    Compute band-specific interhemispheric coherence from mode FC matrices.
+
+    This function implements the nested averaging approach:
+    1. Bin modes by frequency band
+    2. Average Z-transformed FC matrices within each band
+    3. Extract network pairs and compute spatial average
+
+    Args:
+        z_fc_modes: Fisher-transformed FC matrices per mode (n_modes, n_channels, n_channels)
+        center_freqs: Center frequencies for each mode
+        network_pairs: List of interhemispheric pairs for this network
+        network_key: Network identifier for logging
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Band-specific coherence values {band_name: coherence_value}
+    """
+    from tcp.processing.lib.slow_band import get_frequency_range
+
+    # Group modes by slow-band
+    band_modes = {}
+    for mode_idx, freq in enumerate(center_freqs):
+        band_num = get_band_number(freq)
+        if band_num is not None:
+            band_name = f'slow-{band_num}'
+            if band_name not in band_modes:
+                band_modes[band_name] = []
+            band_modes[band_name].append(mode_idx)
+
+    # Compute coherence for each band
+    band_coherence = {}
+    for band_name, mode_indices in band_modes.items():
+        if not mode_indices:
+            continue
+
+        # Average Z-matrices across modes in this band
+        band_z_matrices = z_fc_modes[mode_indices]  # Shape: (modes_in_band_count, channels_count, channels_count)
+        avg_band_z_matrix = np.nanmean(band_z_matrices, axis=0)  # Shape: (channels_count, channels_count)
+
+        # Extract network pairs and compute spatial average
+        network_z_values = []
+        for pair in network_pairs:
+            lh_idx = pair['lh_idx']
+            rh_idx = pair['rh_idx']
+            z_value = avg_band_z_matrix[lh_idx, rh_idx]
+            if not np.isnan(z_value):
+                network_z_values.append(z_value)
+
+        if network_z_values:
+            # Spatial averaging: collapse network nodes into single scalar
+            band_coherence[band_name] = np.mean(network_z_values)
+
+            if verbose:
+                print(f"    {band_name}: {len(mode_indices)} modes, coherence = {band_coherence[band_name]:.4f}")
+
+    return band_coherence
+
+def get_group_permutations(all_subject_results, groups):
+    results = {
+        'group_permutations': [],
+        'n_permutations': 0,
+        'n_groups': 0,
+        'group_sizes': []
+    }
+
+    # Make group permutations for permutation tests
+    group_subject_counts = [len(subjects) for subjects in groups.values()]
+    if all(counts >= PERMUTATION_GROUP_COUNT for counts in group_subject_counts):
+        all_ids = [sid for sid in all_subject_results.keys()]
+        subject_permutations = np.array([np.random.permutation(all_ids) for _ in range(PERMUTATION_COUNT)])
+        grouped_chunks = split_by_sizes(subject_permutations, group_subject_counts, axis=1)
+        formatted_permutations = []
+        for i in range(PERMUTATION_COUNT):
+            # Create a dictionary for generating "Group_1", "Group_2", etc.
+            iteration_dict = {
+                f"Group_{idx + 1}": chunk[i]
+                for idx, chunk in enumerate(grouped_chunks)
+            }
+            formatted_permutations.append(iteration_dict)
+
+        print(f"Created {len(grouped_chunks)} permutations:\n{formatted_permutations}")
+
+        results['group_permutations'] = formatted_permutations
+        results['group_sizes'] = group_subject_counts
+        results['n_permutations'] = len(formatted_permutations)
+        results['n_groups'] = len(formatted_permutations[0].keys())
+    else:
+        print(f"Skipped group permutations. One or more groups have less than {PERMUTATION_GROUP_COUNT} subjects")
+
+    return results
+
+
+# ===== STAGE 4: STATISTICS PREPARATION =====
+
+def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, verbose=True):
+    """
+    Stage 4: Prepare intra-network interhemispheric coherence data for statistical testing.
+
+    Filters for interhemispheric pairs that share the same region AND network,
+    computes spatial and spectral averaging to prepare data for PERMANOVA.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        connectivity_mappings: Results from create_connectivity_mappings()
+        anhedonia_groups: Dict with 'low-anhedonic', 'high-anhedonic', 'non-anhedonic' subject lists
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Statistical test data containing:
+            - static_coherence_by_group: Observed test statistics per group (static FC)
+            - slow_band_coherence_by_group: Observed test statistics per group per frequency band
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 4: PREPARING STATISTICS DATA")
+        print(f"{'='*80}")
+
+    # Get intra-network pairs for statistics (same region + same network across hemispheres)
+    intra_network_pairs = connectivity_mappings['intra_network_pairs']
+
+    if not intra_network_pairs:
+        if verbose:
+            print("No intra-network pairs found for statistical analysis")
+        return {'static_coherence_by_group': {}, 'slow_band_coherence_by_group': {}}
+
+    if verbose:
+        print(f"Found {len(intra_network_pairs)} intra-network groups:")
+        for network_key, pairs in intra_network_pairs.items():
+            print(f"  {network_key}: {len(pairs)} pairs")
+
+    # Initialize results
+    stats_results = {
+        'static_coherence_by_group': {},
+        'slow_band_coherence_by_group': {},
+    }
+
+    # Process each anhedonia group
+    for group_name, subject_ids in groups.items():
+        if verbose:
+            print(f"\nProcessing {group_name} group for statistics...")
+
+        # Initialize group data
+        stats_results['static_coherence_by_group'][group_name] = {}
+        stats_results['slow_band_coherence_by_group'][group_name] = {}
+
+        valid_subjects = 0
+
+        # For each network group, collect coherence values across subjects
+        for network_key, pairs in intra_network_pairs.items():
+            static_coherence_values = []
+            slow_band_coherence_values = {}  # Dict by band
+            slow_band_coherence_subjects = {}  # Dict by band
+
+            for subject_id in subject_ids:
+                result = all_subject_results.get(subject_id)
+                if not (result and result.get('success')):
+                    continue
+
+                # ===== STATIC FC ANALYSIS =====
+                z_fc_static = result.get('z_fc_static')
+                if z_fc_static is not None:
+                    # Get Fisher-Z values for all pairs in this network
+                    network_z_values = []
+                    for pair in pairs:
+                        lh_idx = pair['lh_idx']
+                        rh_idx = pair['rh_idx']
+                        # Extract correlation from Fisher-Z matrix
+                        z_value = z_fc_static[lh_idx, rh_idx]
+                        if not np.isnan(z_value):
+                            network_z_values.append(z_value)
+
+                    if network_z_values:
+                        # Spatial averaging: collapse network nodes into single scalar
+                        mean_network_coherence = np.mean(network_z_values)
+                        static_coherence_values.append(mean_network_coherence)
+
+                # ===== SLOW-BAND FC ANALYSIS =====
+                z_fc_modes = result.get('z_fc_modes')
+                mvmd_metadata = result.get('mvmd_metadata', {})
+                center_freqs = mvmd_metadata.get('center_freqs')
+
+                if z_fc_modes is not None and center_freqs is not None:
+                    # Compute band-specific coherence for this subject
+                    subject_band_coherence = compute_band_specific_coherence_from_modes(
+                        z_fc_modes, center_freqs, pairs, network_key, verbose=False
+                    )
+
+                    # Store coherence values by band
+                    for band_name, coherence_value in subject_band_coherence.items():
+                        if band_name not in slow_band_coherence_values:
+                            slow_band_coherence_values[band_name] = []
+                            slow_band_coherence_subjects[band_name] = []
+                        slow_band_coherence_values[band_name].append(coherence_value)
+                        slow_band_coherence_subjects[band_name].append(subject_id)
+
+
+                if len(static_coherence_values) > 0 or slow_band_coherence_values:
+                    valid_subjects += 1
+
+            # Store observed test statistics for this network - STATIC
+            if static_coherence_values:
+                stats_results['static_coherence_by_group'][group_name][network_key] = {
+                    'observed_values': static_coherence_values,
+                    'n_subjects': len(static_coherence_values),
+                    'mean_coherence': np.mean(static_coherence_values),
+                    'std_coherence': np.std(static_coherence_values),
+                }
+
+            # Store observed test statistics for this network - SLOW-BANDS
+            if slow_band_coherence_values:
+                stats_results['slow_band_coherence_by_group'][group_name][network_key] = {}
+                for band_name, coherence_values in slow_band_coherence_values.items():
+                    if coherence_values:
+                        stats_results['slow_band_coherence_by_group'][group_name][network_key][band_name] = {
+                            'observed_values': coherence_values,
+                            'n_subjects': len(coherence_values),
+                            'mean_coherence': np.mean(coherence_values),
+                            'std_coherence': np.std(coherence_values),
+                            'subject_ids': slow_band_coherence_subjects[band_name]
+                        }
+
+        if verbose:
+            print(f"  Processed {valid_subjects} valid subjects")
+            static_networks_count = len(stats_results['static_coherence_by_group'][group_name])
+            slow_band_networks_count = len(stats_results['slow_band_coherence_by_group'][group_name])
+            print(f"  Generated static statistics for {static_networks_count} network groups")
+            print(f"  Generated slow-band statistics for {slow_band_networks_count} network groups")
+
+    if verbose:
+        print(f"\nStatistics preparation completed:")
+        for group_name in groups.keys():
+            networks_count = len(stats_results['static_coherence_by_group'].get(group_name, {}))
+            print(f"  {group_name}: {networks_count} network groups prepared")
+
+    return stats_results
+
+def coherence_anova_test(stat_results):
+    """
+    Stage 4: One-way ANOVA analysis across groups for all interhemispheric intra-network correlations
+    
+    """
+    results = {}
+
+    static_groups = stat_results.get('static_coherence_by_group')
+    slow_band_groups = stat_results.get('slow_band_coherence_by_group')
+
+    if static_groups:
+        for group in static_groups:
+            group_results = stat_results['static_coherence_by_group'][group]
+            for network_key in group_results.keys():
+                stats = group_results[network_key]
+
+        pass
+
+    if slow_band_groups:
+        pass
+
+    pass
+
+
+# ===== STAGE 5: VISUALIZATION HELPERS =====
+
+def prepare_plotting_data(all_subject_results, verbose=True):
+    """
+    Stage 5: Prepare data structures for plotting by converting Z-values to R-values.
+
+    Takes the pure computation results from the pipeline and converts them into
+    the format expected by the existing plotting functions.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Plotting-ready data with both individual and group results
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 5: PREPARING VISUALIZATION DATA")
+        print(f"{'='*80}")
+
+    plotting_data = {}
+
+    for subject_id, result in all_subject_results.items():
+        if not result.get('success'):
+            continue
+
+        # Convert individual subject Z-matrices to R-matrices for plotting
+        subject_plotting_data = {}
+
+        # Static FC
+        if result.get('z_fc_static') is not None:
+            # Convert Z back to R for display
+            r_fc_static = fisher_z_to_r(result['z_fc_static'])
+            subject_plotting_data['static_fc_matrix'] = r_fc_static
+
+            # Extract channel labels for plotting
+            channel_labels = result.get('channel_labels', {})
+            labels_list = []
+            if channel_labels:
+                # Convert index-based labels to list
+                labels_list = [channel_labels.get(i, f'Ch{i+1}') for i in range(len(channel_labels))]
+                subject_plotting_data['static_fc_labels'] = labels_list
+
+            # Add p-values and compute connectivity patterns for plotting
+            static_fc_pvalues = result.get('static_fc_pvalues')
+            subject_plotting_data['static_fc_pvalues'] = static_fc_pvalues
+            subject_plotting_data['static_connectivity_patterns'] = analyze_connectivity_patterns(
+                r_fc_static, labels_list, p_values=static_fc_pvalues
+            )
+
+        # Mode-wise FC (if available)
+        if result.get('z_fc_modes') is not None:
+            # Convert each mode from Z to R
+            z_fc_modes = result['z_fc_modes']
+            r_fc_modes = np.zeros_like(z_fc_modes)
+            for mode_idx in range(z_fc_modes.shape[0]):
+                r_fc_modes[mode_idx] = fisher_z_to_r(z_fc_modes[mode_idx])
+            subject_plotting_data['r_fc_modes'] = r_fc_modes
+
+            # Aggregate modes into slow-bands for plotting
+            if result.get('mvmd_metadata', {}).get('center_freqs') is not None:
+                center_freqs = result['mvmd_metadata']['center_freqs']
+                subject_plotting_data['slow_band_fc_modes'] = aggregate_modes_to_slow_bands_for_plotting(
+                    z_fc_modes, center_freqs, verbose=False
+                )
+                subject_plotting_data['center_freqs'] = center_freqs
+
+        plotting_data[subject_id] = subject_plotting_data
+
+        if verbose and subject_plotting_data:
+            print(f"  Prepared plotting data for {subject_id}")
+
+    if verbose:
+        subjects_count = len([p for p in plotting_data.values() if 'static_fc_matrix' in p])
+        print(f"\nVisualization data prepared for {subjects_count} subjects")
+
+    return plotting_data
+
+
+def aggregate_modes_to_slow_bands_for_plotting(z_fc_modes, center_freqs, verbose=False):
+    """
+    Aggregate mode-level Z-transformed FC matrices into slow-band FC matrices for individual subject plotting.
+
+    Args:
+        z_fc_modes: Z-transformed FC matrices per mode (n_modes, n_channels, n_channels)
+        center_freqs: Center frequencies for each mode
+        verbose: Whether to print verbose output
+
+    Returns:
+        dict: {band_name: r_fc_matrix} - R-transformed matrices for plotting
+    """
+
+    # Group modes by frequency bands
+    band_mode_groups = {}
+    for mode_idx, freq in enumerate(center_freqs):
+        band_num = get_band_number(freq)
+        band_name = f'slow-{band_num}'
+
+        if band_name not in band_mode_groups:
+            band_mode_groups[band_name] = {'indices': [], 'frequencies': []}
+
+        band_mode_groups[band_name]['indices'].append(mode_idx)
+        band_mode_groups[band_name]['frequencies'].append(freq)
+
+    # Aggregate modes within each band
+    slow_band_fc = {}
+    for band_name, band_data in band_mode_groups.items():
+        mode_indices = band_data['indices']
+
+        if len(mode_indices) == 0:
+            continue
+
+        # Average Z-matrices across modes in this band
+        band_z_matrices = z_fc_modes[mode_indices]
+        avg_band_z_matrix = np.nanmean(band_z_matrices, axis=0)
+
+        # Convert to R-scale for plotting
+        avg_band_r_matrix = fisher_z_to_r(avg_band_z_matrix)
+
+        slow_band_fc[band_name] = {
+            'fc_matrix': avg_band_r_matrix,
+            'n_modes': len(mode_indices),
+            'frequencies': band_data['frequencies']
+        }
+
+        if verbose:
+            print(f"  {band_name}: {len(mode_indices)} modes aggregated")
+
+    return slow_band_fc
+
+
+# def aggregate_cross_subject_slow_bands_by_groups(all_subject_results, anhedonia_groups, verbose=False):
+#     """
+#     Aggregate Z-transformed FC matrices across subjects within each anhedonia group for modes within same slow-band frequency ranges.
+
+#     Args:
+#         all_subject_results: Dict of subject results containing z_fc_modes and center_freqs
+#         anhedonia_groups: Dict with 'low-anhedonic', 'high-anhedonic', 'non-anhedonic' subject lists
+#         verbose: Whether to print verbose output
+
+#     Returns:
+#         dict: {group_name: {band_name: data}} - Group-specific aggregated R-matrices for plotting
+#     """
+#     if verbose:
+#         print(f"\nAggregating FC matrices by slow-bands within anhedonia groups...")
+
+#     group_slow_bands = {}
+
+#     # Process each anhedonia group separately
+#     for group_name, subject_ids in anhedonia_groups.items():
+#         if verbose:
+#             print(f"\nProcessing {group_name} group ({len(subject_ids)} subjects)...")
+
+#         # Collect all Z-matrices by slow-band for this group
+#         band_z_matrices = {}  # {band_name: [list of Z matrices]}
+
+#         for subject_id in subject_ids:
+#             result = all_subject_results.get(subject_id)
+#             if not (result and result.get('success')):
+#                 continue
+
+#             z_fc_modes = result.get('z_fc_modes')
+#             center_freqs = result.get('mvmd_metadata', {}).get('center_freqs')
+
+#             if z_fc_modes is None or center_freqs is None:
+#                 continue
+
+#             # Group this subject's modes by bands
+#             for mode_idx, freq in enumerate(center_freqs):
+#                 band_num = get_band_number(freq)
+#                 band_name = f'slow-{band_num}'
+
+#                 if band_name not in band_z_matrices:
+#                     band_z_matrices[band_name] = []
+
+#                 band_z_matrices[band_name].append(z_fc_modes[mode_idx])
+
+#         # Aggregate within this group and convert to R-scale
+#         group_slow_bands[group_name] = {}
+#         for band_name, z_matrices_list in band_z_matrices.items():
+#             if len(z_matrices_list) == 0:
+#                 continue
+
+#             # Stack and average all Z-matrices for this band within this group
+#             stacked_z = np.stack(z_matrices_list, axis=0)
+#             avg_z_matrix = np.nanmean(stacked_z, axis=0)
+
+#             # Convert to R-scale for plotting
+#             avg_r_matrix = fisher_z_to_r(avg_z_matrix)
+
+#             group_slow_bands[group_name][band_name] = {
+#                 'fc_matrix': avg_r_matrix,
+#                 'n_matrices': len(z_matrices_list),
+#                 'description': f'{group_name} group average ({len(z_matrices_list)} mode matrices)'
+#             }
+
+#             if verbose:
+#                 print(f"  {band_name}: {len(z_matrices_list)} mode matrices aggregated for {group_name}")
+
+#     return group_slow_bands
 
 
 def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
@@ -2240,7 +2622,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*80}")
 
     # Apply subject limiting if enabled
-    non_anhedonic_subjects_to_process = []
+    non_anhedonic_to_process = []
     low_anhedonic_to_process = []
     high_anhedonic_to_process = []
 
@@ -2248,63 +2630,122 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Separate low-anhedonic and high-anhedonic subjects for proper sampling
         low_anhedonic_to_process = low_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
         high_anhedonic_to_process = high_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
-        non_anhedonic_subjects_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
+        non_anhedonic_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
 
         # Combine anhedonic subjects after sampling
         anhedonic_subjects_to_process = low_anhedonic_to_process + high_anhedonic_to_process
 
-        print(f"LIMITING ENABLED: Processing {len(low_anhedonic_to_process)} low-anhedonic + {len(high_anhedonic_to_process)} high-anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
-        print(f"  Total: {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic = {len(anhedonic_subjects_to_process) + len(non_anhedonic_subjects_to_process)} subjects")
+        print(f"LIMITING ENABLED: Processing {len(low_anhedonic_to_process)} low-anhedonic + {len(high_anhedonic_to_process)} high-anhedonic + {len(non_anhedonic_to_process)} non-anhedonic subjects")
+        print(f"  Total: {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_to_process)} non-anhedonic = {len(anhedonic_subjects_to_process) + len(non_anhedonic_to_process)} subjects")
     else:
         anhedonic_subjects_to_process = accessible_anhedonic
-        non_anhedonic_subjects_to_process = accessible_non_anhedonic
-        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_subjects_to_process)} non-anhedonic subjects")
+        non_anhedonic_to_process = accessible_non_anhedonic
+        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_to_process)} non-anhedonic subjects")
 
-    # Process all subjects
-    anhedonic_results = {}
-    non_anhedonic_results = {}
+    # ===== NEW 5-STAGE PIPELINE =====
 
-    # Process anhedonic subjects
-    print(f"\n{'='*50}")
-    print(f"PROCESSING ANHEDONIC SUBJECTS ({len(anhedonic_subjects_to_process)})")
-    print(f"{'='*50}")
+    # STAGE 1: Process all subjects (pure computation)
+    print(f"\n{'='*80}")
+    print(f"STAGE 1: PROCESSING INDIVIDUAL SUBJECTS")
+    print(f"{'='*80}")
 
-    for i, subject_id in enumerate(anhedonic_subjects_to_process, 1):
-        print(f"\n[{i}/{len(anhedonic_subjects_to_process)}] Processing anhedonic subject: {subject_id}")
+    all_subject_results = {}
+    total_subjects = len(anhedonic_subjects_to_process) + len(non_anhedonic_to_process)
 
+    # Process all subjects (anhedonic + non-anhedonic)
+    all_subjects_to_process = anhedonic_subjects_to_process + non_anhedonic_to_process
+
+    for i, subject_id in enumerate(all_subjects_to_process, 1):
+        print(f"\n[{i}/{total_subjects}] Processing subject: {subject_id}")
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
             verbose=verbose
         )
-
-        anhedonic_results[subject_id] = subject_result
-
+        all_subject_results[subject_id] = subject_result
         if subject_result['success']:
             print(f"    ✅ Success: {subject_id}")
         else:
             print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
 
-    # Process non-anhedonic subjects
-    print(f"\n{'='*50}")
-    print(f"PROCESSING NON-ANHEDONIC SUBJECTS ({len(non_anhedonic_subjects_to_process)})")
-    print(f"{'='*50}")
+    # Split results for backward compatibility
+    anhedonic_results = {sid: all_subject_results[sid] for sid in anhedonic_subjects_to_process if sid in all_subject_results}
+    non_anhedonic_results = {sid: all_subject_results[sid] for sid in non_anhedonic_to_process if sid in all_subject_results}
 
-    for i, subject_id in enumerate(non_anhedonic_subjects_to_process, 1):
-        print(f"\n[{i}/{len(non_anhedonic_subjects_to_process)}] Processing non-anhedonic subject: {subject_id}")
+    # STAGE 2: Create connectivity mappings
+    connectivity_mappings = create_connectivity_mappings(all_subject_results, verbose=verbose)
 
-        subject_result = process_subject(
-            subject_id, manager, loader, cortical_atlas, subcortical_atlas,
-            cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
-            verbose=verbose
+    # STAGE 3: Group aggregation
+    anhedonia_groups = {
+        'non-anhedonic': non_anhedonic_to_process,
+        'low-anhedonic': low_anhedonic_to_process,
+        'high-anhedonic': high_anhedonic_to_process
+    }
+
+    # group_aggregations = aggregate_group_connectivity(
+    #     all_subject_results, connectivity_mappings, anhedonia_groups, verbose=verbose
+    # )
+
+    # STAGE 4: Statistics preparation
+    anhedonic_stat_data = prepare_statistics_data(
+        all_subject_results, connectivity_mappings, anhedonia_groups, verbose=verbose
+    )
+
+    permutation_result = get_group_permutations(all_subject_results, anhedonia_groups)
+    permutation_count = permutation_result.get('n_permutations', 0)
+    permutation_stat_data = [None] * permutation_count
+    for perm_idx in range(permutation_count):
+        group_permutation = permutation_result['group_permutations'][perm_idx]
+        group_perm_stat_data = prepare_statistics_data(
+            all_subject_results, connectivity_mappings, group_permutation, verbose=verbose
         )
+        permutation_stat_data.append(group_perm_stat_data)
 
-        non_anhedonic_results[subject_id] = subject_result
+    # 1-way ANOVA
+    anhedonic_anova_results = coherence_anova_test(permutation_result)
 
-        if subject_result['success']:
-            print(f"    ✅ Success: {subject_id}")
-        else:
-            print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
+    # STAGE 5: Compute group-averaged FC
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"STAGE 5: GROUP-AVERAGED FC COMPUTATION")
+        print(f"{'='*80}")
+
+    group_averaged_fc = {
+        'static': {},
+        'slow_bands': {}
+    }
+
+    for group_name, group_subjects in anhedonia_groups.items():
+        # Compute static FC group average
+        static_avg = compute_group_averaged_fc(
+            all_subject_results, group_subjects, group_name, fc_type='static', verbose=verbose
+        )
+        if static_avg:
+            group_averaged_fc['static'][group_name] = static_avg
+
+    # Compute slow-band FC group averages (organized by band, then group)
+    for band_num in range(1, 7):  # Slow bands 1-6
+        band_key = f'slow-{band_num}'
+        group_averaged_fc['slow_bands'][band_key] = {}
+
+        for group_name, group_subjects in anhedonia_groups.items():
+            band_avg = compute_group_averaged_fc(
+                all_subject_results, group_subjects, group_name, fc_type='slow_band', band_key=band_key, verbose=verbose
+            )
+            if band_avg:
+                group_averaged_fc['slow_bands'][band_key][group_name] = band_avg
+
+    # STAGE 6: Prepare visualization data (Z->R conversion)
+    plotting_data = prepare_plotting_data(all_subject_results, verbose=verbose)
+
+    # STAGE 6b: Prepare cross-subject slow-band aggregated FC matrices
+    if verbose:
+        print(f"\n{'='*80}")
+        print("STAGE 6B: PREPARING CROSS-SUBJECT SLOW-BAND FC MATRICES")
+        print(f"{'='*80}")
+
+    # Use the slow-band aggregations from the main group aggregation (already organized by groups)
+    cross_subject_slow_bands = group_aggregations['slow_band_fc_by_group']
 
     # ===== RESULTS SUMMARY =====
     print(f"\n{'='*80}")
@@ -2320,480 +2761,99 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"  Anhedonic: {anhedonic_success}/{len(anhedonic_results)}")
     print(f"  Non-anhedonic: {non_anhedonic_success}/{len(non_anhedonic_results)}")
 
-    # Collect FC results for group comparison
-    anhedonic_fc_results = []
-    non_anhedonic_fc_results = []
+    # Note: STAGE 5 (Visualization) is handled by the existing plotting code below
+    # The plotting functions are now updated to work with new data structures
 
-    for subject_id, result in anhedonic_results.items():
-        if result['success'] and result.get('static_functional_connectivity'):
-            anhedonic_fc_results.append(result['static_functional_connectivity'])
-
-    for subject_id, result in non_anhedonic_results.items():
-        if result['success'] and result.get('static_functional_connectivity'):
-            non_anhedonic_fc_results.append(result['static_functional_connectivity'])
-
-    print(f"FC analysis available:")
-    print(f"  Anhedonic: {len(anhedonic_fc_results)} subjects")
-    print(f"  Non-anhedonic: {len(non_anhedonic_fc_results)} subjects")
-
-    # ===== NEW: AGGREGATE INTERHEMISPHERIC NETWORK COHERENCE BY GROUP =====
+    # ===== DISPLAY PIPELINE RESULTS =====
     print(f"\n{'='*80}")
-    print(f"AGGREGATING INTERHEMISPHERIC NETWORK COHERENCE")
+    print("PIPELINE RESULTS SUMMARY")
     print(f"{'='*80}")
 
-    # Structure: grouped_interhemi_coherence[fc_type][group][network]
-    # fc_type can be 'static', 'slow-1', 'slow-2', etc.
-    grouped_interhemi_coherence = {
-        'static': {
-            'non-anhedonic': {},
-            'low-anhedonic': {},
-            'high-anhedonic': {}
-        }
-    }
+    # Show connectivity mappings summary
+    interhemi_intra_count = len(connectivity_mappings['interhemispheric_pairs']['intra_network'])
+    interhemi_inter_count = len(connectivity_mappings['interhemispheric_pairs']['inter_network'])
+    intra_network_groups_count = len(connectivity_mappings['intra_network_pairs'])
 
-    # Initialize slow-band structures
-    for band_key in ['1', '2', '3', '4', '5', '6']:
-        grouped_interhemi_coherence[f'slow-{band_key}'] = {
-            'non-anhedonic': {},
-            'low-anhedonic': {},
-            'high-anhedonic': {}
-        }
+    print(f"\nConnectivity Analysis:")
+    print(f"  Interhemispheric intra-network pairs: {interhemi_intra_count}")
+    print(f"  Interhemispheric inter-network pairs: {interhemi_inter_count}")
+    print(f"  Network groups for statistics: {intra_network_groups_count}")
 
-    # Process non-anhedonic (control) group
-    for subject_id, result in non_anhedonic_results.items():
-        if not result.get('success'):
-            continue
+    # Show group aggregation summary
+    print(f"\nGroup Aggregations:")
+    for group_name, data in group_aggregations['static_fc_by_group'].items():
+        print(f"  {group_name}: {data['n_subjects']} subjects with static FC")
 
-        # Process static FC
-        static_fc = result.get('static_functional_connectivity', {})
-        network_coherence = static_fc.get('interhemispheric_network_coherence', {})
+    # Show statistics data summary
+    print(f"\nStatistics Data:")
+    for group_name in anhedonia_groups.keys():
+        static_nets = len(anhedonic_stat_data['static_coherence_by_group'].get(group_name, {}))
+        slow_nets = len(anhedonic_stat_data['slow_band_coherence_by_group'].get(group_name, {}))
+        print(f"  {group_name}: {static_nets} static networks, {slow_nets} slow-band networks")
 
-        for network_key, network_stats in network_coherence.items():
-            if network_key not in grouped_interhemi_coherence['static']['non-anhedonic']:
-                grouped_interhemi_coherence['static']['non-anhedonic'][network_key] = {
-                    'subject_ids': [],
-                    'mean_fisher_z_values': [],
-                    'n_parcel_pairs_per_subject': []
-                }
+    # Show plotting data summary
+    plotting_subjects = sum(1 for p in plotting_data.values() if 'static_fc_matrix' in p)
+    print(f"\nVisualization Data: {plotting_subjects} subjects ready for plotting")
 
-            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
-            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
-                network_stats['mean_fisher_z']
-            )
-            grouped_interhemi_coherence['static']['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
-                network_stats['n_parcel_pairs']
-            )
+    # ===== ANALYSIS USING NEW PIPELINE RESULTS =====
 
-        # Process slow-band FC
-        slow_band_fc = result.get('slow_band_functional_connectivity', {})
-        for band_key in ['1', '2', '3', '4', '5', '6']:
-            band_name = f'slow-{band_key}'
-            if band_name in slow_band_fc:
-                band_network_coherence = slow_band_fc[band_name].get('interhemispheric_network_coherence', {})
-
-                for network_key, network_stats in band_network_coherence.items():
-                    if network_key not in grouped_interhemi_coherence[band_name]['non-anhedonic']:
-                        grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key] = {
-                            'subject_ids': [],
-                            'mean_fisher_z_values': [],
-                            'n_parcel_pairs_per_subject': [],
-                            'computation_method': network_stats.get('computation_method', 'matrix_averaging')
-                        }
-
-                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['subject_ids'].append(subject_id)
-                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['mean_fisher_z_values'].append(
-                        network_stats['mean_fisher_z']
-                    )
-                    # Handle 'N/A' for nested averaging approach
-                    n_pairs = network_stats.get('n_parcel_pairs', 'N/A')
-                    grouped_interhemi_coherence[band_name]['non-anhedonic'][network_key]['n_parcel_pairs_per_subject'].append(
-                        n_pairs if n_pairs != 'N/A' else None
-                    )
-
-    # Process anhedonic subjects (split by low/high)
-    for subject_id, result in anhedonic_results.items():
-        if not result.get('success'):
-            continue
-
-        # Determine if low or high anhedonic
-        if subject_id in low_anhedonic_subjects:
-            group_name = 'low-anhedonic'
-        elif subject_id in high_anhedonic_subjects:
-            group_name = 'high-anhedonic'
-        else:
-            print(f"Warning: {subject_id} in anhedonic_results but not in low/high lists, skipping")
-            continue
-
-        # Process static FC
-        static_fc = result.get('static_functional_connectivity', {})
-        network_coherence = static_fc.get('interhemispheric_network_coherence', {})
-
-        for network_key, network_stats in network_coherence.items():
-            if network_key not in grouped_interhemi_coherence['static'][group_name]:
-                grouped_interhemi_coherence['static'][group_name][network_key] = {
-                    'subject_ids': [],
-                    'mean_fisher_z_values': [],
-                    'n_parcel_pairs_per_subject': []
-                }
-
-            grouped_interhemi_coherence['static'][group_name][network_key]['subject_ids'].append(subject_id)
-            grouped_interhemi_coherence['static'][group_name][network_key]['mean_fisher_z_values'].append(
-                network_stats['mean_fisher_z']
-            )
-            grouped_interhemi_coherence['static'][group_name][network_key]['n_parcel_pairs_per_subject'].append(
-                network_stats['n_parcel_pairs']
-            )
-
-        # Process slow-band FC
-        slow_band_fc = result.get('slow_band_functional_connectivity', {})
-        for band_key in ['1', '2', '3', '4', '5', '6']:
-            band_name = f'slow-{band_key}'
-            if band_name in slow_band_fc:
-                band_network_coherence = slow_band_fc[band_name].get('interhemispheric_network_coherence', {})
-
-                for network_key, network_stats in band_network_coherence.items():
-                    if network_key not in grouped_interhemi_coherence[band_name][group_name]:
-                        grouped_interhemi_coherence[band_name][group_name][network_key] = {
-                            'subject_ids': [],
-                            'mean_fisher_z_values': [],
-                            'n_parcel_pairs_per_subject': [],
-                            'computation_method': network_stats.get('computation_method', 'matrix_averaging')
-                        }
-
-                    grouped_interhemi_coherence[band_name][group_name][network_key]['subject_ids'].append(subject_id)
-                    grouped_interhemi_coherence[band_name][group_name][network_key]['mean_fisher_z_values'].append(
-                        network_stats['mean_fisher_z']
-                    )
-                    # Handle 'N/A' for nested averaging approach
-                    n_pairs = network_stats.get('n_parcel_pairs', 'N/A')
-                    grouped_interhemi_coherence[band_name][group_name][network_key]['n_parcel_pairs_per_subject'].append(
-                        n_pairs if n_pairs != 'N/A' else None
-                    )
-
-    # Filter out NaN values and track excluded subjects
-    for fc_type in grouped_interhemi_coherence.keys():
-        for group_name, networks in grouped_interhemi_coherence[fc_type].items():
-            for network_key, network_data in networks.items():
-                values = np.array(network_data['mean_fisher_z_values'])
-
-                # Remove NaN values (subjects with no valid pairs for this network)
-                valid_mask = ~np.isnan(values)
-
-                network_data['valid_subject_ids'] = [
-                    sid for sid, valid in zip(network_data['subject_ids'], valid_mask) if valid
-                ]
-                network_data['valid_fisher_z_values'] = values[valid_mask].tolist()
-                network_data['n_valid_subjects'] = int(np.sum(valid_mask))
-                network_data['n_excluded_subjects'] = int(np.sum(~valid_mask))
-
-    print(f"Network coherence aggregation complete")
-    print(f"  FC types processed: {list(grouped_interhemi_coherence.keys())}")
-    print(f"  Groups per FC type: {['non-anhedonic', 'low-anhedonic', 'high-anhedonic']}")
-
-    # ===== COMPUTE OBSERVED TEST STATISTICS =====
-    print(f"\n{'='*80}")
-    print(f"COMPUTING OBSERVED TEST STATISTICS")
-    print(f"{'='*80}")
-
-    from scipy import stats as scipy_stats
-
-    # Structure: observed_test_statistics[fc_type][network]
-    observed_test_statistics = {}
-
-    # Process each FC type (static, slow-1, slow-2, etc.)
-    for fc_type in grouped_interhemi_coherence.keys():
-        print(f"\nComputing test statistics for {fc_type}...")
-
-        observed_test_statistics[fc_type] = {}
-
-        # Get all unique networks for this FC type
-        all_networks_for_stats = set()
-        for group_data in grouped_interhemi_coherence[fc_type].values():
-            all_networks_for_stats.update(group_data.keys())
-
-        for network_key in sorted(all_networks_for_stats):
-            # Collect valid data for each group
-            non_anhedonic_values = []
-            low_anhedonic_values = []
-            high_anhedonic_values = []
-
-            if network_key in grouped_interhemi_coherence[fc_type]['non-anhedonic']:
-                non_anhedonic_values = np.array(
-                    grouped_interhemi_coherence[fc_type]['non-anhedonic'][network_key]['valid_fisher_z_values']
-                )
-
-            if network_key in grouped_interhemi_coherence[fc_type]['low-anhedonic']:
-                low_anhedonic_values = np.array(
-                    grouped_interhemi_coherence[fc_type]['low-anhedonic'][network_key]['valid_fisher_z_values']
-                )
-
-            if network_key in grouped_interhemi_coherence[fc_type]['high-anhedonic']:
-                high_anhedonic_values = np.array(
-                    grouped_interhemi_coherence[fc_type]['high-anhedonic'][network_key]['valid_fisher_z_values']
-                )
-
-            # Initialize results for this network
-            observed_test_statistics[fc_type][network_key] = {
-                'group_sizes': {
-                    'non-anhedonic': len(non_anhedonic_values),
-                    'low-anhedonic': len(low_anhedonic_values),
-                    'high-anhedonic': len(high_anhedonic_values)
-                },
-                'group_means': {
-                    'non-anhedonic': float(np.mean(non_anhedonic_values)) if len(non_anhedonic_values) > 0 else np.nan,
-                    'low-anhedonic': float(np.mean(low_anhedonic_values)) if len(low_anhedonic_values) > 0 else np.nan,
-                    'high-anhedonic': float(np.mean(high_anhedonic_values)) if len(high_anhedonic_values) > 0 else np.nan
-                },
-                'group_sds': {
-                    'non-anhedonic': float(np.std(non_anhedonic_values, ddof=1)) if len(non_anhedonic_values) > 1 else np.nan,
-                    'low-anhedonic': float(np.std(low_anhedonic_values, ddof=1)) if len(low_anhedonic_values) > 1 else np.nan,
-                    'high-anhedonic': float(np.std(high_anhedonic_values, ddof=1)) if len(high_anhedonic_values) > 1 else np.nan
-                }
-            }
-
-            # One-way ANOVA across all three groups
-            all_groups = [non_anhedonic_values, low_anhedonic_values, high_anhedonic_values]
-            valid_groups = [g for g in all_groups if len(g) > 0]
-
-            if len(valid_groups) >= 2:
-                # Perform one-way ANOVA
-                f_stat, p_val = scipy_stats.f_oneway(*valid_groups)
-                observed_test_statistics[fc_type][network_key]['anova'] = {
-                    'F_statistic': float(f_stat),
-                    'p_value': float(p_val),
-                    'n_groups_compared': len(valid_groups)
-                }
-            else:
-                observed_test_statistics[fc_type][network_key]['anova'] = {
-                    'F_statistic': np.nan,
-                    'p_value': np.nan,
-                    'n_groups_compared': len(valid_groups),
-                    'note': 'Insufficient groups for ANOVA'
-                }
-
-            # Pairwise comparisons (independent t-tests)
-            pairwise_comparisons = {}
-
-            # non-anhedonic vs low-anhedonic
-            if len(non_anhedonic_values) > 0 and len(low_anhedonic_values) > 0:
-                t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, low_anhedonic_values)
-                pairwise_comparisons['non-anhedonic_vs_low-anhedonic'] = {
-                    't_statistic': float(t_stat),
-                    'p_value': float(p_val),
-                    'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(low_anhedonic_values))
-                }
-
-            # non-anhedonic vs high-anhedonic
-            if len(non_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
-                t_stat, p_val = scipy_stats.ttest_ind(non_anhedonic_values, high_anhedonic_values)
-                pairwise_comparisons['non-anhedonic_vs_high-anhedonic'] = {
-                    't_statistic': float(t_stat),
-                    'p_value': float(p_val),
-                    'mean_diff': float(np.mean(non_anhedonic_values) - np.mean(high_anhedonic_values))
-                }
-
-            # low-anhedonic vs high-anhedonic
-            if len(low_anhedonic_values) > 0 and len(high_anhedonic_values) > 0:
-                t_stat, p_val = scipy_stats.ttest_ind(low_anhedonic_values, high_anhedonic_values)
-                pairwise_comparisons['low-anhedonic_vs_high-anhedonic'] = {
-                    't_statistic': float(t_stat),
-                    'p_value': float(p_val),
-                    'mean_diff': float(np.mean(low_anhedonic_values) - np.mean(high_anhedonic_values))
-                }
-
-            observed_test_statistics[fc_type][network_key]['pairwise'] = pairwise_comparisons
-
-        # Print summary for this FC type
-        print(f"  {fc_type}: Computed statistics for {len(observed_test_statistics[fc_type])} networks")
-
-        # Print summary of significant results (uncorrected) for this FC type
-        significant_networks = []
-        for network_key, stats in observed_test_statistics[fc_type].items():
-            if 'anova' in stats and stats['anova'].get('p_value', 1.0) < 0.05:
-                significant_networks.append((network_key, stats['anova']['p_value']))
-
-        if significant_networks:
-            print(f"  Networks with p < 0.05 (ANOVA, uncorrected) for {fc_type}:")
-            for network_key, p_val in sorted(significant_networks, key=lambda x: x[1]):
-                print(f"    {network_key}: F = {observed_test_statistics[fc_type][network_key]['anova']['F_statistic']:.3f}, p = {p_val:.4f}")
-        else:
-            print(f"  No networks show p < 0.05 for {fc_type}")
-
-    print(f"\nObserved test statistics computation complete")
-    print(f"  Total FC types processed: {len(observed_test_statistics)}")
-
-    # ===== GROUP COMPARISON ANALYSIS =====
-    group_comparison_results = None
-    if len(anhedonic_fc_results) > 0 and len(non_anhedonic_fc_results) > 0:
+    # Display detailed statistics data
+    if verbose and anhedonic_stat_data:
         print(f"\n{'='*80}")
-        print(f"GROUP COMPARISON ANALYSIS")
+        print("DETAILED STATISTICS RESULTS")
         print(f"{'='*80}")
 
-        group_comparison_results = compare_fc_between_groups(
-            anhedonic_fc_results,
-            non_anhedonic_fc_results,
-            group1_name="Anhedonic",
-            group2_name="Non-anhedonic"
-        )
+        for group_name in anhedonia_groups.keys():
+            print(f"\n{group_name.upper()} GROUP:")
 
-        print(f"Statistical Comparisons (Anhedonic vs Non-anhedonic):")
-        for pattern_type, comparison in group_comparison_results['comparisons'].items():
-            if not comparison.get('note'):  # Skip patterns with insufficient data
-                print(f"\n{pattern_type.upper()}:")
-                print(f"  Anhedonic: M={comparison['group1_mean']:.3f}, SD={comparison['group1_std']:.3f}, N={comparison['group1_n']}")
-                print(f"  Non-anhedonic: M={comparison['group2_mean']:.3f}, SD={comparison['group2_std']:.3f}, N={comparison['group2_n']}")
-                print(f"  t({comparison['group1_n']+comparison['group2_n']-2})={comparison['ttest_statistic']:.3f}, p={comparison['ttest_pvalue']:.3f}")
-                print(f"  Cohen's d={comparison['cohens_d']:.3f}, Significant={'Yes' if comparison['significant'] else 'No'}")
+            # Static coherence
+            static_data = anhedonic_stat_data['static_coherence_by_group'].get(group_name, {})
+            if static_data:
+                print(f"  Static FC Networks ({len(static_data)}):")
+                for network, stats in static_data.items():
+                    mean_coh = stats['mean_coherence']
+                    subjects_count = stats['n_subjects']
+                    print(f"    {network}: mean_z={mean_coh:.4f} (n={subjects_count})")
 
-    else:
-        print(f"\n[WARNING] Insufficient FC data for group comparison")
-        print(f"  Need at least 1 subject per group with successful FC analysis")
+            # Slow-band coherence
+            slow_data = anhedonic_stat_data['slow_band_coherence_by_group'].get(group_name, {})
+            if slow_data:
+                print(f"  Slow-Band Networks ({len(slow_data)}):")
+                for network, band_data in slow_data.items():
+                    print(f"    {network}:")
+                    for band, stats in band_data.items():
+                        mean_coh = stats['mean_coherence']
+                        subjects_count = stats['n_subjects']
+                        print(f"      {band}: mean_z={mean_coh:.4f} (n={subjects_count})")
 
-    # ===== EXPORT FC RESULTS TO CSV =====
+    # CSV Export using new pipeline data
     if save_figures:
         print(f"\n{'='*80}")
-        print(f"EXPORTING STATIC FC RESULTS TO CSV")
+        print("EXPORTING CSV DATA FROM NEW PIPELINE")
         print(f"{'='*80}")
 
-        # Create output directory for FC CSV files within run folder
-        fc_output_dir = run_parent_dir / 'static_fc'
+        # Create CSV export directory
+        csv_export_dir = run_parent_dir / 'csv_exports'
+        csv_export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create FC analysis output directory for CSV exports
+        fc_output_dir = csv_export_dir / 'fc_analysis'
         fc_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Output directory: {fc_output_dir}")
 
-        csv_export_count = 0
-        all_results = {**anhedonic_results, **non_anhedonic_results}
-
-        for subject_id, result in all_results.items():
-            if not result['success']:
-                continue
-
-            static_fc_data = result.get('static_functional_connectivity')
-            if static_fc_data:
-                print(f"\nExporting static FC results for {subject_id}...")
-                exported_files = export_static_fc_results_to_csv(static_fc_data, subject_id, fc_output_dir)
-                if exported_files:
-                    csv_export_count += 1
-
-        print(f"\n✓ Exported static FC results for {csv_export_count}/{total_success} subjects")
-        print(f"  Files saved to: {fc_output_dir}")
-
-    # ===== GROUP-AVERAGED FC ANALYSIS =====
-    print(f"\n{'='*80}")
-    print(f"COMPUTING GROUP-AVERAGED FUNCTIONAL CONNECTIVITY")
-    print(f"{'='*80}")
-
-    # Define groups
-    groups_config = [
-        ('non-anhedonic', non_anhedonic_subjects),
-        ('Low Anhedonic', low_anhedonic_subjects),
-        ('High Anhedonic', high_anhedonic_subjects)
-    ]
-
-    # Combine all results for easier access
-    all_results = {**anhedonic_results, **non_anhedonic_results}
-
-    # Storage for group-averaged results
-    group_averaged_fc = {
-        'static': {},
-        'slow_bands': {}
-    }
-
-    # 1. Compute group-averaged whole-signal FC
-    print(f"\n--- Whole-Signal Static FC ---")
-    for group_name, group_subjects in groups_config:
-        avg_fc = compute_group_averaged_fc(
-            all_results,
-            group_subjects,
-            group_name,
-            fc_type='static',
-            verbose=True
-        )
-        if avg_fc:
-            group_averaged_fc['static'][group_name] = avg_fc
-
-    # 2. Compute group-averaged slow-band FC
-    print(f"\n--- Slow-Band FC ---")
-    slow_bands = ['slow-5', 'slow-4', 'slow-3', 'slow-2']
-
-    for band_key in slow_bands:
-        print(f"\n  {band_key.upper()}:")
-        group_averaged_fc['slow_bands'][band_key] = {}
-
-        for group_name, group_subjects in groups_config:
-            avg_fc = compute_group_averaged_fc(
-                all_results,
-                group_subjects,
-                group_name,
-                fc_type='slow_band',
-                band_key=band_key,
-                verbose=True
-            )
-            if avg_fc:
-                group_averaged_fc['slow_bands'][band_key][group_name] = avg_fc
-
-    print(f"\n✓ Group averaging complete")
-    print(f"  Static FC: {len([g for g in group_averaged_fc['static'].values() if g])} groups")
-    total_slow_band_groups = sum(len([g for g in band_groups.values() if g])
-                                  for band_groups in group_averaged_fc['slow_bands'].values())
-    print(f"  Slow-band FC: {total_slow_band_groups} group×band combinations")
-
-    # Export group-averaged FC to CSV within run folder
-    if save_figures:
-        print(f"\n--- Exporting Group-Averaged FC ---")
-        group_avg_output_dir = run_parent_dir / 'group_averages'
+        # Create group averages output directory
+        group_avg_output_dir = csv_export_dir / 'group_averages'
         group_avg_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Output directory: {group_avg_output_dir}")
 
-        exported_count = 0
+        # Export connectivity mappings
+        mappings_file = csv_export_dir / 'connectivity_mappings.csv'
+        print(f"Exporting connectivity mappings to: {mappings_file}")
 
-        # Export static FC
-        print(f"\n  Static FC:")
-        for group_name, avg_data in group_averaged_fc['static'].items():
-            if avg_data:
-                export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
-                exported_count += 1
+        # Export statistics data
+        stats_file = csv_export_dir / 'statistics_data.csv'
+        print(f"Exporting statistics data to: {stats_file}")
 
-        # Export slow-band FC
-        print(f"\n  Slow-Band FC:")
-        for band_key, band_groups in group_averaged_fc['slow_bands'].items():
-            if band_groups:
-                print(f"    {band_key}:")
-                for group_name, avg_data in band_groups.items():
-                    if avg_data:
-                        export_group_averaged_fc_to_csv(avg_data, group_avg_output_dir, verbose=True)
-                        exported_count += 1
-
-        print(f"\n✓ Exported {exported_count} group-averaged FC results")
-        print(f"  Files saved to: {group_avg_output_dir}")
-
-    # ===== PERMUTATION TESTING ANALYSIS =====
-    print(f"\n{'='*50}")
-    print(f"GENERATING {PERMUTATION_COUNT} PERMUTATIONS FOR {PERMUTATION_GROUP_COUNT} GROUPS")
-    print(f"\n{'='*50}")
-
-    all_subjects_to_process = anhedonic_subjects_to_process + non_anhedonic_subjects_to_process
-    subject_ids_shuffled = all_subjects_to_process.copy()
-
-    group_subject_counts = {
-        'non-anhedonic': len(non_anhedonic_subjects_to_process),
-        'low-anhedonic': len(low_anhedonic_to_process),
-        'high-anhedonic': len(high_anhedonic_to_process),
-    }
-
-    print(f"Group Counts: {group_subject_counts.values()}")
-
-    # Preallocate for the number of permutations
-    permutation_groups = [None] * PERMUTATION_COUNT
-
-    for permutation_idx in range(PERMUTATION_COUNT):
-        random.shuffle(subject_ids_shuffled)
-        # Create a fresh iterator for islice to consume
-        it = iter(subject_ids_shuffled)
-        permutation_groups[permutation_idx] = [
-                list(islice(it, size)) for size in group_subject_counts.values()
-            ]
-    print(f"Permutations available: {len(permutation_groups)}:\n{permutation_groups}")
-
+        # TODO: Implement actual CSV export functions for new data structures
+        print(f"[INFO] CSV export functions need to be implemented for new data structures")
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
     figures_saved_count = 0
@@ -2838,16 +2898,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"  Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
         print(f"  ROI extraction: {roi_figures_dir}")
 
-    if create_plots and total_success > 0:
+    if create_plots:
         print(f"\n{'='*80}")
-        print(f"CREATING INDIVIDUAL SUBJECT PLOTS")
+        print(f"CREATING PLOTS")
         print(f"{'='*80}")
 
         if show_plots:
             print(f"[INFO] Figures will be displayed in batches by analysis type")
             print(f"       Close all figures in each batch to proceed to the next batch")
-
-        all_results = {**anhedonic_results, **non_anhedonic_results}
 
         # Organize plotting by type to display in batches
         # This prevents overwhelming the system with 177+ figures at once
@@ -2855,7 +2913,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'roi_cortical': [],
             'roi_subcortical': [],
             'fc_static': [],
+            'fc_per_mode': [],
+            'fc_slow_bands_individual': [],
             'fc_slow_bands': [],
+            'fc_slow_bands_cross_subject': [],
             'fc_group_avg': [],
             'mvmd_modes': [],
             'hsa_multivariate': [],
@@ -2863,36 +2924,71 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         }
         plot_batch_count = len(plot_batches.keys())
 
-        for subject_id, result in all_results.items():
-            if not result['success']:
+        # ===== INDIVIDUAL SUBJECT PLOTS =====
+        print(f"\nPreparing individual subject plots...")
+        individual_plots_created = 0
+
+        # Debug: Check subject success status
+        total_subjects = len(all_subject_results)
+        successful_subjects = sum(1 for r in all_subject_results.values() if r.get('success', False))
+        print(f"  Debug: {successful_subjects}/{total_subjects} subjects marked as successful")
+
+        # Debug group membership
+        print(f"  Debug group lists:")
+        print(f"    low_anhedonic_to_process: {low_anhedonic_to_process}")
+        print(f"    high_anhedonic_to_process: {high_anhedonic_to_process}")
+        print(f"    non_anhedonic_subjects_to_process: {non_anhedonic_to_process}")
+
+        if successful_subjects == 0:
+            print(f"  Debug: No successful subjects found. Checking first few subjects:")
+            for i, (subject_id, result) in enumerate(list(all_subject_results.items())[:3]):
+                success_status = result.get('success', False)
+                error_msg = result.get('error', 'No error')
+                print(f"    {subject_id}: success={success_status}, error='{error_msg}'")
+
+        # Use new pipeline results instead of legacy all_results
+        subjects_entered_loop = 0
+        for subject_id, result in all_subject_results.items():
+            subjects_entered_loop += 1
+            print(f"    Checking {subject_id}: success={result.get('success', False)}")
+            if not result.get('success', False):
+                print(f"      Skipping {subject_id} - not successful")
                 continue
 
             # Determine which group this subject belongs to
-            if subject_id in low_anhedonic_subjects:
+            if subject_id in low_anhedonic_to_process:
                 subject_group = "Low Anhedonic"
-            elif subject_id in high_anhedonic_subjects:
+            elif subject_id in high_anhedonic_to_process:
                 subject_group = "High Anhedonic"
-            elif subject_id in non_anhedonic_subjects:
+            elif subject_id in non_anhedonic_to_process:
                 subject_group = "Non-anhedonic"
             else:
                 subject_group = None
 
+            print(f"      Processing {subject_id} for plot preparation...")
+            print(f"        plotting_data keys: {list(plotting_data.keys())}")
+            print(f"        {subject_id} in plotting_data: {subject_id in plotting_data}")
             plots_for_subject = 0
 
             # 1. Prepare cortical ROI timeseries plot
             roi_results = result.get('roi_extraction_results', {})
-            if roi_results.get('cortical') and plot_batches['roi_cortical']:
+            print(f"        ROI results present: {roi_results is not None}")
+            print(f"        Cortical data present: {roi_results.get('cortical') is not None}")
+            if roi_results.get('cortical'):
                 cortical_data = roi_results['cortical']
+                print(f"        Cortical extraction successful: {cortical_data.get('extraction_successful')}")
                 if cortical_data.get('extraction_successful'):
+                    print(f"          Adding cortical ROI plot for {subject_id}")
                     plot_batches['roi_cortical'].append({
                         'subject_id': subject_id,
                         'data': cortical_data,
                         'save_dir': roi_figures_dir if save_figures and roi_figures_dir else None
                     })
                     plots_for_subject += 1
+                    print(f"          plots_for_subject now: {plots_for_subject}")
 
             # 2. Prepare subcortical ROI timeseries plot
-            if roi_results.get('subcortical') and plot_batches['roi_subcortical']:
+            if roi_results.get('subcortical'):
                 subcortical_data = roi_results['subcortical']
                 if subcortical_data.get('extraction_successful'):
                     plot_batches['roi_subcortical'].append({
@@ -2903,22 +2999,101 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plots_for_subject += 1
 
 
-            # 3. Prepare static functional connectivity analysis plot
-            if result.get('static_functional_connectivity') and plot_batches['fc_static']:
-                static_fc_data = result['static_functional_connectivity']
+            # 3. Prepare static functional connectivity analysis plot - UPDATED FOR NEW PIPELINE
+            if subject_id in plotting_data:
+                static_fc_data = plotting_data[subject_id]
+                print(f"        Static FC data keys: {list(static_fc_data.keys())}")
+                print(f"        Has static_fc_matrix: {'static_fc_matrix' in static_fc_data}")
                 if static_fc_data.get('static_fc_matrix') is not None:
+                    print(f"          Adding static FC plot for {subject_id}")
                     plot_batches['fc_static'].append({
                         'subject_id': subject_id,
                         'subject_group': subject_group,
-                        'data': static_fc_data,
+                        'data': static_fc_data,  # Now contains R-values for proper visualization
                         'mask_diagonal': mask_diagonal,
                         'mask_nonsignificant': mask_nonsignificant,
                         'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
                     })
                     plots_for_subject += 1
+                    print(f"          plots_for_subject now: {plots_for_subject}")
 
-            # 3b. Prepare slow-band FC plots
-            if result.get('slow_band_fc') and plot_batches['fc_slow_bands']:
+            # 3a. Prepare per-mode FC plots (individual modes)
+            if subject_id in plotting_data:
+                subject_data = plotting_data[subject_id]
+                if 'r_fc_modes' in subject_data and 'center_freqs' in subject_data:
+                    r_fc_modes = subject_data['r_fc_modes']
+                    center_freqs = subject_data['center_freqs']
+                    fc_labels = subject_data.get('static_fc_labels', [])
+
+                    # Get mode p-values from result
+                    mode_fc_pvalues = result.get('mode_fc_pvalues')
+
+                    # Create plots for each mode
+                    for mode_idx in range(r_fc_modes.shape[0]):
+                        # Compute connectivity patterns for this mode
+                        mode_pvalues = mode_fc_pvalues[mode_idx] if mode_fc_pvalues is not None else None
+                        mode_connectivity_patterns = analyze_connectivity_patterns(
+                            r_fc_modes[mode_idx],
+                            fc_labels,
+                            p_values=mode_pvalues,
+                            alpha=0.05
+                        )
+
+                        plot_batches['fc_per_mode'].append({
+                            'subject_id': subject_id,
+                            'subject_group': subject_group,
+                            'mode_idx': mode_idx,
+                            'frequency': center_freqs[mode_idx],
+                            'data': {
+                                'fc_matrix': r_fc_modes[mode_idx],
+                                'fc_labels': fc_labels,
+                                'fc_pvalues': mode_pvalues,
+                                'connectivity_patterns': mode_connectivity_patterns
+                            },
+                            'mask_diagonal': mask_diagonal,
+                            'mask_nonsignificant': mask_nonsignificant,
+                            'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
+                        })
+                        plots_for_subject += 1
+
+            # 3b. Prepare individual subject slow-band FC plots (aggregated within-subject)
+            if subject_id in plotting_data:
+                subject_data = plotting_data[subject_id]
+                if 'slow_band_fc_modes' in subject_data:
+                    slow_band_fc_data = subject_data['slow_band_fc_modes']
+                    fc_labels = subject_data.get('static_fc_labels', [])
+
+                    for band_name, band_data in slow_band_fc_data.items():
+                        # Compute connectivity patterns for this slow-band
+                        # Note: No p-values for slow-band aggregations (would need statistical testing)
+                        band_connectivity_patterns = analyze_connectivity_patterns(
+                            band_data['fc_matrix'],
+                            fc_labels,
+                            p_values=None,  # No p-values for aggregated slow-bands
+                            alpha=0.05
+                        )
+
+                        plot_batches['fc_slow_bands_individual'].append({
+                            'subject_id': subject_id,
+                            'subject_group': subject_group,
+                            'band_name': band_name,
+                            'data': {
+                                'fc_matrix': band_data['fc_matrix'],
+                                'fc_labels': fc_labels,
+                                'fc_pvalues': None,  # No p-values for aggregated bands
+                                'connectivity_patterns': band_connectivity_patterns,
+                                'n_modes': band_data['n_modes'],
+                                'frequencies': band_data['frequencies']
+                            },
+                            'mask_diagonal': mask_diagonal,
+                            'mask_nonsignificant': mask_nonsignificant,
+                            'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
+                        })
+                        plots_for_subject += 1
+
+            print(f"        About to check slow-band FC plots...")
+            # 3c. Prepare slow-band FC plots (legacy)
+            if result.get('slow_band_fc'):
                 slow_band_fc_data = result['slow_band_fc']
                 for band_key, band_fc_data in slow_band_fc_data.items():
                     if band_fc_data.get('fc_matrix') is not None:
@@ -2934,7 +3109,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         plots_for_subject += 1
 
             # 4. Prepare MVMD decomposition plots
-            if result.get('mvmd') and plot_batches['mvmd_modes']:
+            if result.get('mvmd'):
                 mvmd_data = result['mvmd']
                 if mvmd_data.get('time_modes') is not None:
                     center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
@@ -2957,7 +3132,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             # We now only work at the mode level and aggregate FC matrices (not time-domain signals).
 
             # 6. Prepare Multivariate Hilbert Spectrum plots
-            if result.get('mvmd') and plot_batches['hsa_multivariate']:
+            if result.get('mvmd'):
                 mvmd_data = result['mvmd']
                 if mvmd_data.get('hilbert_spectral_analysis') is not None:
                     hsa_data = mvmd_data['hilbert_spectral_analysis']
@@ -2976,7 +3151,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plots_for_subject += 1
 
             # 7. Prepare Marginal Spectrum per Mode plots
-            if result.get('mvmd') and plot_batches['hsa_marginal']:
+            if result.get('mvmd'):
                 mvmd_data = result['mvmd']
                 if mvmd_data.get('hilbert_spectral_analysis') is not None:
                     hsa_data = mvmd_data['hilbert_spectral_analysis']
@@ -2994,18 +3169,61 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     })
                     plots_for_subject += 1
 
-            if plots_for_subject > 0:
-                individual_plots_created += 1
-                print(f"  ✓ Prepared {plots_for_subject} plots for {subject_id}")
+                print(f"        Final plots_for_subject count: {plots_for_subject}")
+                if plots_for_subject > 0:
+                    individual_plots_created += 1
+                    print(f"      ✓ Prepared {plots_for_subject} plots for {subject_id}")
+                else:
+                    print(f"      ✗ No plots prepared for {subject_id}")
+        else:
+            print(f"  No successful subjects found for individual plots (checked {subjects_entered_loop} subjects total)")
 
         print(f"\nPrepared plots for {individual_plots_created} subjects")
+
+        # Prepare cross-subject slow-band FC plots (grouped by anhedonia status)
+        print(f"\nPreparing group-specific slow-band FC plots...")
+        total_group_slow_band_plots = 0
+
+        for group_name, group_bands in cross_subject_slow_bands.items():
+            for band_name, band_data in group_bands.items():
+                # Extract channel labels from any successful subject
+                fc_labels = []
+                for subject_data in plotting_data.values():
+                    if 'static_fc_labels' in subject_data:
+                        fc_labels = subject_data['static_fc_labels']
+                        break
+
+                # Compute connectivity patterns for this group slow-band
+                band_connectivity_patterns = analyze_connectivity_patterns(
+                    band_data['avg_r_matrix'],
+                    fc_labels,
+                    p_values=None,  # No p-values for aggregated slow-bands
+                    alpha=0.05
+                )
+
+                plot_batches['fc_slow_bands_cross_subject'].append({
+                    'band_name': f'{group_name}_{band_name}',
+                    'data': {
+                        'fc_matrix': band_data['avg_r_matrix'],
+                        'fc_labels': fc_labels,
+                        'n_matrices': band_data['n_matrices'],
+                        'description': band_data['description'],
+                        'connectivity_patterns': band_connectivity_patterns
+                    },
+                    'mask_diagonal': mask_diagonal,
+                    'mask_nonsignificant': False,  # No p-values for cross-subject averages
+                    'save_path': fc_group_dir / f'{group_name}_{band_name}_fc.svg' if save_figures and fc_group_dir else None
+                })
+                total_group_slow_band_plots += 1
+
+        print(f"✓ Prepared {total_group_slow_band_plots} group-specific slow-band FC plots")
 
         # Prepare group-averaged FC plots
         print(f"\nPreparing group-averaged FC plots...")
 
         # Add static FC group averages
         for group_name, avg_data in group_averaged_fc['static'].items():
-            if avg_data and plot_batches['fc_group_avg']:
+            if avg_data:
                 group_name_clean = group_name.replace(' ', '_').replace('-', '_').lower()
                 plot_batches['fc_group_avg'].append({
                     'group_name': group_name,
@@ -3019,7 +3237,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Add slow-band FC group averages
         for band_key, band_groups in group_averaged_fc['slow_bands'].items():
             for group_name, avg_data in band_groups.items():
-                if avg_data and plot_batches['fc_group_avg']:
+                if avg_data:
                     group_name_clean = group_name.replace(' ', '_').replace('-', '_').lower()
                     plot_batches['fc_group_avg'].append({
                         'group_name': group_name,
@@ -3040,65 +3258,69 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         current_plot_batch = 0
 
-        # # Batch 1: ROI Cortical Timeseries
-        # if plot_batches['roi_cortical']:
-        #     current_plot_batch += 1
-        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
-        #     for plot_info in plot_batches['roi_cortical']:
-        #         figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
-        #         # plot_roi_timeseries_result now returns a list of figures (one per ROI)
-        #         for fig in figures:
-        #             if plot_info['save_dir']:
-        #                 # Create subject directory
-        #                 subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
-        #                 subject_roi_dir.mkdir(parents=True, exist_ok=True)
+        # Batch 1: ROI Cortical Timeseries
+        if plot_batches['roi_cortical']:
+            current_plot_batch += 1
+            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
+            for plot_info in plot_batches['roi_cortical']:
+                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
+                # Handle both single figure and list of figures return types
+                if not isinstance(figures, list):
+                    figures = [figures]
+                for fig in figures:
+                    if plot_info['save_dir']:
+                        # Create subject directory
+                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
 
-        #                 # Extract ROI name from figure title
-        #                 fig_title = fig._suptitle.get_text() if fig._suptitle else ''
-        #                 roi_name = 'unknown'
-        #                 if 'PFCm' in fig_title:
-        #                     roi_name = 'PFCm'
-        #                 elif 'PFCv' in fig_title:
-        #                     roi_name = 'PFCv'
+                        # Extract ROI name from figure title
+                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+                        roi_name = 'unknown'
+                        if 'PFCm' in fig_title:
+                            roi_name = 'PFCm'
+                        elif 'PFCv' in fig_title:
+                            roi_name = 'PFCv'
 
-        #                 # Create ROI-specific filename in subject directory
-        #                 fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_cortical.svg'
-        #                 fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-        #                 figures_saved_count += 1
-        #             if not show_plots:
-        #                 plt.close(fig)
-        #     if show_plots:
-        #         print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
-        #         plt.show()
+                        # Create ROI-specific filename in subject directory
+                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_cortical.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+                    if not show_plots:
+                        plt.close(fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
+                plt.show()
 
-        # # Batch 2: ROI Subcortical Timeseries
-        # if plot_batches['roi_subcortical']:
-        #     current_plot_batch += 1
-        #     print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
-        #     for plot_info in plot_batches['roi_subcortical']:
-        #         figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
-        #         # plot_roi_timeseries_result now returns a list of figures (one per ROI)
-        #         for fig in figures:
-        #             if plot_info['save_dir']:
-        #                 # Create subject directory
-        #                 subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
-        #                 subject_roi_dir.mkdir(parents=True, exist_ok=True)
+        # Batch 2: ROI Subcortical Timeseries
+        if plot_batches['roi_subcortical']:
+            current_plot_batch += 1
+            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
+            for plot_info in plot_batches['roi_subcortical']:
+                figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
+                # Handle both single figure and list of figures return types
+                if not isinstance(figures, list):
+                    figures = [figures]
+                for fig in figures:
+                    if plot_info['save_dir']:
+                        # Create subject directory
+                        subject_roi_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_roi_dir.mkdir(parents=True, exist_ok=True)
 
-        #                 # Extract ROI name from figure title
-        #                 fig_title = fig._suptitle.get_text() if fig._suptitle else ''
-        #                 roi_name = 'unknown'
-        #                 if 'AMY' in fig_title:
-        #                     roi_name = 'AMY'
+                        # Extract ROI name from figure title
+                        fig_title = fig._suptitle.get_text() if fig._suptitle else ''
+                        roi_name = 'unknown'
+                        if 'AMY' in fig_title:
+                            roi_name = 'AMY'
 
-        #                 # Create ROI-specific filename in subject directory
-        #                 fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_subcortical.svg'
-        #                 fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-        #                 figures_saved_count += 1
-        #             if not show_plots:
-        #                 plt.close(fig)
-        #     if show_plots:
-        #         print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
-        #         plt.show()
+                        # Create ROI-specific filename in subject directory
+                        fig_path = subject_roi_dir / f'{roi_name}_roi_timeseries_subcortical.svg'
+                        fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+                    if not show_plots:
+                        plt.close(fig)
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
+                plt.show()
 
         # # Batch 3: Multivariate Hilbert Spectrum
         # if plot_batches['hsa_multivariate']:
@@ -3179,9 +3401,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['static_fc_matrix'],
                     plot_info['data']['static_fc_labels'],
-                    plot_info['data']['static_fc_pvalues'],
-                    plot_info['data']['static_connectivity_patterns'],
-                    plot_info['data'].get('channel_label_map'),
+                    p_values=plot_info['data']['static_fc_pvalues'],
+                    connectivity_patterns=plot_info['data']['static_connectivity_patterns'],
+                    channel_label_map=plot_info['data'].get('channel_label_map'),
                     mask_diagonal=plot_info['mask_diagonal'],
                     mask_nonsignificant=plot_info['mask_nonsignificant'],
                     subject_group=plot_info['subject_group'],
@@ -3210,7 +3432,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 if not show_plots:
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
-            if show_plots:
+            if show_plots and len(plot_batches['fc_static']) >= 20:
+                print(f"  Skipping display of {len(plot_batches['fc_static'])} FC plots. Will be too memory exhaustive...")
+            elif show_plots:
                 print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
                 plt.show()
 
@@ -3263,8 +3487,150 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 if not show_plots:
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
-            if show_plots:
+            if show_plots and len(plot_batches['fc_slow_bands']) >= 20:
+                print(f"  Skipping display of {len(plot_batches['fc_slow_bands'])} FC plots. Will be too memory exhaustive...")
+            elif show_plots:
                 print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 6a: Per-Mode FC Analysis
+        if plot_batches['fc_per_mode']:
+            current_plot_batch += 1
+            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_per_mode'])} per-mode FC plots...")
+            for plot_info in plot_batches['fc_per_mode']:
+                csv_output_dir = fc_output_dir if save_figures else None
+
+                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
+                    plot_info['data']['fc_matrix'],
+                    plot_info['data']['fc_labels'],
+                    p_values=plot_info['data'].get('fc_pvalues'),
+                    connectivity_patterns=plot_info['data']['connectivity_patterns'],
+                    channel_label_map=None,
+                    mask_diagonal=plot_info['mask_diagonal'],
+                    mask_nonsignificant=plot_info['mask_nonsignificant'],
+                    subject_group=plot_info['subject_group'],
+                    subject_id=plot_info['subject_id'],
+                    output_dir=csv_output_dir,
+                    verbose=verbose
+                )
+
+                mode_idx = plot_info['mode_idx']
+                frequency = plot_info['frequency']
+                fc_fig_inter.suptitle(f'Mode {mode_idx} FC (Interhemispheric) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'Mode {mode_idx} FC (Ipsilateral) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
+
+                if plot_info['save_dir']:
+                    subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_fc_dir.mkdir(parents=True, exist_ok=True)
+
+                    save_path_inter = subject_fc_dir / f'mode_{mode_idx:02d}_fc_interhemispheric_{frequency:.4f}Hz.svg'
+                    save_path_ipsi = subject_fc_dir / f'mode_{mode_idx:02d}_fc_ipsilateral_{frequency:.4f}Hz.svg'
+
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 2
+
+                if not show_plots:
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
+
+            if show_plots and len(plot_batches['fc_per_mode']) >= 20:
+                print(f"  Skipping display of {len(plot_batches['fc_per_mode'])} FC plots. Will be too memory exhaustive...")
+            elif show_plots:
+                print(f"  Displaying {len(plot_batches['fc_per_mode'])} per-mode FC plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 6b: Individual Subject Slow-Band FC Analysis
+        if plot_batches['fc_slow_bands_individual']:
+            current_plot_batch += 1
+            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots...")
+            for plot_info in plot_batches['fc_slow_bands_individual']:
+                csv_output_dir = fc_output_dir if save_figures else None
+
+                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
+                    plot_info['data']['fc_matrix'],
+                    plot_info['data']['fc_labels'],
+                    p_values=None,  # No p-values for aggregated slow-bands
+                    connectivity_patterns=plot_info['data'].get('connectivity_patterns'),
+                    channel_label_map=None,
+                    mask_diagonal=plot_info['mask_diagonal'],
+                    mask_nonsignificant=plot_info['mask_nonsignificant'],
+                    subject_group=plot_info['subject_group'],
+                    subject_id=plot_info['subject_id'],
+                    output_dir=csv_output_dir,
+                    verbose=verbose,
+                    band_name=plot_info['band_name']
+                )
+
+                band_name = plot_info['band_name']
+                n_modes = plot_info['data']['n_modes']
+                fc_fig_inter.suptitle(f'{band_name} FC (Interhemispheric) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'{band_name} FC (Ipsilateral) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
+
+                if plot_info['save_dir']:
+                    subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
+                    subject_fc_dir.mkdir(parents=True, exist_ok=True)
+
+                    save_path_inter = subject_fc_dir / f'{band_name}_fc_interhemispheric.svg'
+                    save_path_ipsi = subject_fc_dir / f'{band_name}_fc_ipsilateral.svg'
+
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 2
+
+                if not show_plots:
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
+
+            if show_plots and len(plot_batches['fc_slow_bands_individual']) >= 20:
+                print(f"  Skipping display of {len(plot_batches['fc_slow_bands_individual'])} FC plots. Will be too memory exhaustive...")
+            elif show_plots:
+                print(f"  Displaying {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 6c: Cross-Subject Slow-Band FC Analysis
+        if plot_batches['fc_slow_bands_cross_subject']:
+            current_plot_batch += 1
+            print(f"\n[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots...")
+            for plot_info in plot_batches['fc_slow_bands_cross_subject']:
+
+                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
+                    plot_info['data']['fc_matrix'],
+                    plot_info['data']['fc_labels'],
+                    p_values=None,
+                    connectivity_patterns=plot_info['data'].get('connectivity_patterns'),
+                    channel_label_map=None,
+                    mask_diagonal=plot_info['mask_diagonal'],
+                    mask_nonsignificant=plot_info['mask_nonsignificant'],
+                    subject_group=None,
+                    subject_id=f"Group {plot_info['band_name']}",
+                    output_dir=None,
+                    verbose=verbose,
+                    band_name=plot_info['band_name']
+                )
+
+                band_name = plot_info['band_name']
+                description = plot_info['data']['description']
+
+                fc_fig_inter.suptitle(f'{band_name} FC (Interhemispheric) - {description}', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'{band_name} FC (Ipsilateral) - {description}', fontsize=12, fontweight='bold')
+
+                if plot_info['save_path']:
+                    save_path_inter = plot_info['save_path'].parent / f'{plot_info["save_path"].stem}_interhemispheric.svg'
+                    save_path_ipsi = plot_info['save_path'].parent / f'{plot_info["save_path"].stem}_ipsilateral.svg'
+
+                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
+                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                    figures_saved_count += 2
+
+                if not show_plots:
+                    plt.close(fc_fig_inter)
+                    plt.close(fc_fig_ipsi)
+
+            if show_plots and len(plot_batches['fc_slow_bands_cross_subject']) >= 20:
+                print(f"  Skipping display of {len(plot_batches['fc_slow_bands_cross_subject'])} FC plots. Will be too memory exhaustive...")
+            elif show_plots:
+                print(f"  Displaying {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots. Close all figures to continue...")
                 plt.show()
 
         # Batch 7: Group-Averaged FC Analysis
@@ -3428,46 +3794,147 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"INTERHEMISPHERIC NETWORK COHERENCE EXTRACTION SUMMARY")
     print(f"{'='*80}")
 
+    # Extract grouped coherence data from statistics_data
+    grouped_interhemi_coherence = {
+        'static': anhedonic_stat_data['static_coherence_by_group'],
+        'slow_band': anhedonic_stat_data['slow_band_coherence_by_group']
+    }
+
     # Process each FC type separately
     for fc_type in grouped_interhemi_coherence.keys():
         print(f"\n{'─'*80}")
         print(f"FC Type: {fc_type.upper()}")
         print(f"{'─'*80}")
 
-        # Get all unique networks for this FC type
+        if fc_type == 'static':
+            # For static FC, show normal aggregated summary
+            # Get all unique networks for this FC type
+            all_networks = set()
+            for group_data in grouped_interhemi_coherence[fc_type].values():
+                all_networks.update(group_data.keys())
+            all_networks = sorted(all_networks)
+
+            print(f"Total Networks Detected: {len(all_networks)}")
+            if all_networks:
+                print(f"Networks: {', '.join(all_networks)}")
+
+            # Show detailed stats for each network
+            for network_key in all_networks:
+                print(f"\n  Network: {network_key}")
+
+                for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                    if network_key in grouped_interhemi_coherence[fc_type][group_name]:
+                        network_data = grouped_interhemi_coherence[fc_type][group_name][network_key]
+
+                        # Static FC: direct access
+                        values = np.array(network_data['observed_values'])
+                        subjects_count = network_data['n_subjects']
+                        mean_coh = network_data['mean_coherence']
+                        std_coh = network_data['std_coherence']
+
+                        if len(values) > 0:
+                            min_z = np.min(values)
+                            max_z = np.max(values)
+                            print(f"    {group_name:20s}: Mean = {mean_coh:7.3f}, SD = {std_coh:6.3f}, "
+                                  f"Range = [{min_z:7.3f}, {max_z:7.3f}], N = {subjects_count:3d}")
+                        else:
+                            print(f"    {group_name:20s}: NO VALID SUBJECTS")
+                    else:
+                        print(f"    {group_name:20s}: NETWORK NOT PRESENT")
+        else:
+            # For slow-band FC, show per-band breakdown
+            # Get all unique networks and bands for this FC type
+            all_networks = set()
+            all_bands = set()
+            for group_data in grouped_interhemi_coherence[fc_type].values():
+                for network_key, network_data in group_data.items():
+                    all_networks.add(network_key)
+                    all_bands.update(network_data.keys())
+
+            all_networks = sorted(all_networks)
+            all_bands = sorted(all_bands)
+
+            print(f"Total Networks Detected: {len(all_networks)}")
+            if all_networks:
+                print(f"Networks: {', '.join(all_networks)}")
+            print(f"Slow Bands Available: {', '.join(all_bands)}")
+
+            # Show detailed stats for each network, broken down by band
+            for network_key in all_networks:
+                print(f"\n  Network: {network_key}")
+
+                for band_name in all_bands:
+                    print(f"    {band_name}:")
+
+                    for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                        if (network_key in grouped_interhemi_coherence[fc_type][group_name] and
+                            band_name in grouped_interhemi_coherence[fc_type][group_name][network_key]):
+
+                            band_data = grouped_interhemi_coherence[fc_type][group_name][network_key][band_name]
+                            values = np.array(band_data['observed_values'])
+                            subjects_count = band_data['n_subjects']
+                            mean_coh = band_data['mean_coherence']
+                            std_coh = band_data['std_coherence']
+
+                            if len(values) > 0:
+                                min_z = np.min(values)
+                                max_z = np.max(values)
+                                print(f"      {group_name:18s}: Mean = {mean_coh:7.3f}, SD = {std_coh:6.3f}, "
+                                      f"Range = [{min_z:7.3f}, {max_z:7.3f}], N = {subjects_count:3d}")
+                            else:
+                                print(f"      {group_name:18s}: NO VALID SUBJECTS")
+                        else:
+                            print(f"      {group_name:18s}: NO DATA FOR THIS BAND")
+
+    # Compute basic statistics from grouped coherence data
+    observed_test_statistics = {}
+    for fc_type in grouped_interhemi_coherence.keys():
+        observed_test_statistics[fc_type] = {}
+
+        # Get all networks for this FC type
         all_networks = set()
         for group_data in grouped_interhemi_coherence[fc_type].values():
             all_networks.update(group_data.keys())
-        all_networks = sorted(all_networks)
 
-        print(f"Total Networks Detected: {len(all_networks)}")
-        if all_networks:
-            print(f"Networks: {', '.join(all_networks)}")
-
-        # Show detailed stats for each network
         for network_key in all_networks:
-            print(f"\n  Network: {network_key}")
+            # Collect values per group for this network
+            group_means = {}
+            group_sds = {}
+            group_sizes = {}
 
             for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                 if network_key in grouped_interhemi_coherence[fc_type][group_name]:
                     network_data = grouped_interhemi_coherence[fc_type][group_name][network_key]
-                    values = np.array(network_data['valid_fisher_z_values'])
+
+                    if fc_type == 'static':
+                        values = np.array(network_data['observed_values'])
+                    else:
+                        # Aggregate slow-band values
+                        values = []
+                        for band_data in network_data.values():
+                            values.extend(band_data['observed_values'])
+                        values = np.array(values)
 
                     if len(values) > 0:
-                        mean_z = np.mean(values)
-                        std_z = np.std(values, ddof=1) if len(values) > 1 else 0.0
-                        min_z = np.min(values)
-                        max_z = np.max(values)
-                        n_valid = network_data['n_valid_subjects']
-                        n_excluded = network_data['n_excluded_subjects']
-
-                        print(f"    {group_name:20s}: Mean = {mean_z:7.3f}, SD = {std_z:6.3f}, "
-                              f"Range = [{min_z:7.3f}, {max_z:7.3f}], "
-                              f"N = {n_valid:3d} (excluded: {n_excluded})")
+                        group_means[group_name] = np.mean(values)
+                        group_sds[group_name] = np.std(values, ddof=1) if len(values) > 1 else 0.0
+                        group_sizes[group_name] = len(values)
                     else:
-                        print(f"    {group_name:20s}: NO VALID SUBJECTS")
+                        group_means[group_name] = np.nan
+                        group_sds[group_name] = np.nan
+                        group_sizes[group_name] = 0
                 else:
-                    print(f"    {group_name:20s}: NETWORK NOT PRESENT")
+                    group_means[group_name] = np.nan
+                    group_sds[group_name] = np.nan
+                    group_sizes[group_name] = 0
+
+            observed_test_statistics[fc_type][network_key] = {
+                'group_means': group_means,
+                'group_sds': group_sds,
+                'group_sizes': group_sizes,
+                'anova': {'note': 'Not computed'},
+                'pairwise': {}
+            }
 
     # Test statistics detailed summary
     print(f"\n{'='*80}")
@@ -3479,42 +3946,82 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"FC Type: {fc_type.upper()}")
         print(f"{'─'*80}")
 
-        # Get all networks for this FC type
-        all_networks_fc = sorted(observed_test_statistics[fc_type].keys())
+        if fc_type == 'slow_band':
+            # For slow-band, show per-band breakdown instead of aggregated
+            # Get all networks and bands from the original data structure
+            slow_band_data = grouped_interhemi_coherence['slow_band']
+            all_networks_fc = set()
+            all_bands = set()
 
-        for network_key in all_networks_fc:
-            stats = observed_test_statistics[fc_type][network_key]
+            for group_data in slow_band_data.values():
+                for network_key, network_data in group_data.items():
+                    all_networks_fc.add(network_key)
+                    all_bands.update(network_data.keys())
 
-            print(f"\n  {network_key}:")
-            print(f"    Group Means (Fisher-Z):")
-            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
-                mean_val = stats['group_means'].get(group_name, np.nan)
-                sd_val = stats['group_sds'].get(group_name, np.nan)
-                n_val = stats['group_sizes'].get(group_name, 0)
-                if not np.isnan(mean_val):
-                    print(f"      {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {n_val:3d}")
-                else:
-                    print(f"      {group_name:20s}: No data")
+            all_networks_fc = sorted(all_networks_fc)
+            all_bands = sorted(all_bands)
 
-            # ANOVA results
-            if 'anova' in stats:
-                anova = stats['anova']
-                if not np.isnan(anova.get('F_statistic', np.nan)):
-                    print(f"    ANOVA: F({anova['n_groups_compared']-1},{sum(stats['group_sizes'].values())-anova['n_groups_compared']}) = "
-                          f"{anova['F_statistic']:.3f}, p = {anova['p_value']:.4f} "
-                          f"{'***' if anova['p_value'] < 0.001 else '**' if anova['p_value'] < 0.01 else '*' if anova['p_value'] < 0.05 else 'ns'}")
-                else:
-                    print(f"    ANOVA: {anova.get('note', 'Not computed')}")
+            print(f"Showing per-band breakdown for {len(all_bands)} bands: {', '.join(all_bands)}")
 
-            # Pairwise comparisons
-            if 'pairwise' in stats and len(stats['pairwise']) > 0:
-                print(f"    Pairwise comparisons:")
-                for comparison_name, comparison_data in stats['pairwise'].items():
-                    t_stat = comparison_data['t_statistic']
-                    p_val = comparison_data['p_value']
-                    mean_diff = comparison_data['mean_diff']
-                    sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
-                    print(f"      {comparison_name:45s}: t = {t_stat:7.3f}, p = {p_val:.4f} {sig_marker:3s} (Δ = {mean_diff:7.3f})")
+            for network_key in all_networks_fc:
+                print(f"\n  {network_key}:")
+
+                for band_name in all_bands:
+                    print(f"    {band_name}:")
+
+                    for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                        if (network_key in slow_band_data[group_name] and
+                            band_name in slow_band_data[group_name][network_key]):
+
+                            band_data = slow_band_data[group_name][network_key][band_name]
+                            values = np.array(band_data['observed_values'])
+
+                            if len(values) > 0:
+                                mean_val = np.mean(values)
+                                sd_val = np.std(values, ddof=1) if len(values) > 1 else 0.0
+                                val_count = len(values)
+                                print(f"      {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {val_count:3d}")
+                            else:
+                                print(f"      {group_name:20s}: No data")
+                        else:
+                            print(f"      {group_name:20s}: No data")
+        else:
+            # For static FC, show normal aggregated stats
+            all_networks_fc = sorted(observed_test_statistics[fc_type].keys())
+
+            for network_key in all_networks_fc:
+                stats = observed_test_statistics[fc_type][network_key]
+
+                print(f"\n  {network_key}:")
+                print(f"    Group Means (Fisher-Z):")
+                for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                    mean_val = stats['group_means'].get(group_name, np.nan)
+                    sd_val = stats['group_sds'].get(group_name, np.nan)
+                    val_count = stats['group_sizes'].get(group_name, 0)
+                    if not np.isnan(mean_val):
+                        print(f"      {group_name:20s}: M = {mean_val:7.3f}, SD = {sd_val:6.3f}, N = {val_count:3d}")
+                    else:
+                        print(f"      {group_name:20s}: No data")
+
+                # ANOVA results
+                if 'anova' in stats:
+                    anova = stats['anova']
+                    if not np.isnan(anova.get('F_statistic', np.nan)):
+                        print(f"    ANOVA: F({anova['n_groups_compared']-1},{sum(stats['group_sizes'].values())-anova['n_groups_compared']}) = "
+                              f"{anova['F_statistic']:.3f}, p = {anova['p_value']:.4f} "
+                              f"{'***' if anova['p_value'] < 0.001 else '**' if anova['p_value'] < 0.01 else '*' if anova['p_value'] < 0.05 else 'ns'}")
+                    else:
+                        print(f"    ANOVA: {anova.get('note', 'Not computed')}")
+
+                # Pairwise comparisons
+                if 'pairwise' in stats and len(stats['pairwise']) > 0:
+                    print(f"    Pairwise comparisons:")
+                    for comparison_name, comparison_data in stats['pairwise'].items():
+                        t_stat = comparison_data['t_statistic']
+                        p_val = comparison_data['p_value']
+                        mean_diff = comparison_data['mean_diff']
+                        sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
+                        print(f"      {comparison_name:45s}: t = {t_stat:7.3f}, p = {p_val:.4f} {sig_marker:3s} (Δ = {mean_diff:7.3f})")
 
     # Validation warnings
     print(f"\n{'='*80}")
@@ -3525,16 +4032,23 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     for fc_type in grouped_interhemi_coherence.keys():
         for group_name, networks in grouped_interhemi_coherence[fc_type].items():
             for network_key, network_data in networks.items():
-                values = np.array(network_data['valid_fisher_z_values'])
+                if fc_type == 'static':
+                    values = np.array(network_data['observed_values'])
+                else:
+                    # Slow-band: aggregate all band values
+                    values = []
+                    for band_data in network_data.values():
+                        values.extend(band_data['observed_values'])
+                    values = np.array(values)
 
                 # Check for extreme values (|z| > 2.0 unusual but valid)
                 if len(values) > 0:
                     extreme_mask = np.abs(values) > 2.0
                     if np.any(extreme_mask):
                         warnings_found = True
-                        n_extreme = np.sum(extreme_mask)
+                        extreme_count = np.sum(extreme_mask)
                         extreme_vals = values[extreme_mask]
-                        print(f"⚠ {fc_type}/{group_name}/{network_key}: {n_extreme} subjects with |Fisher-Z| > 2.0")
+                        print(f"⚠ {fc_type}/{group_name}/{network_key}: {extreme_count} subjects with |Fisher-Z| > 2.0")
                         print(f"  Extreme values: {extreme_vals}")
 
                 # Check for networks with few subjects
@@ -3542,8 +4056,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     warnings_found = True
                     print(f"⚠ {fc_type}/{group_name}/{network_key}: Only {len(values)} subjects (statistical power may be low)")
 
-                # Check for excluded subjects
-                if network_data['n_excluded_subjects'] > 0:
+                # Check for excluded subjects (if tracking is available)
+                if 'n_excluded_subjects' in network_data and network_data['n_excluded_subjects'] > 0:
                     warnings_found = True
                     print(f"ℹ {fc_type}/{group_name}/{network_key}: {network_data['n_excluded_subjects']} subjects excluded (no valid parcel pairs)")
 
@@ -3594,10 +4108,17 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*80}")
 
     if save_figures:
+        # Create groups configuration for logging
+        groups_config = [
+            ('Low Anhedonic', low_anhedonic_to_process),
+            ('High Anhedonic', high_anhedonic_to_process),
+            ('Non-anhedonic', non_anhedonic_to_process)
+        ]
+
         log_file = write_analysis_log(
             output_dir=run_parent_dir,
             groups_config=groups_config,
-            all_results=all_results,
+            all_results=all_subject_results,
             low_anhedonic_subjects=low_anhedonic_subjects,
             high_anhedonic_subjects=high_anhedonic_subjects,
             timestamp=run_timestamp
@@ -3627,10 +4148,18 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"No files saved (--no-save mode)")
         print(f"Analysis completed successfully")
 
+    # ===== EXTRACT FC RESULTS FOR GROUP ANALYSIS =====
+    # Extract successful FC results for each group
+    anhedonic_fc_results = [result for result in anhedonic_results.values() if result.get('success', False)]
+    non_anhedonic_fc_results = [result for result in non_anhedonic_results.values() if result.get('success', False)]
+
+    # Placeholder for group comparison (not implemented yet)
+    group_comparison_results = {}
+
     # ===== RETURN MULTI-SUBJECT RESULTS =====
     return {
         'anhedonic_subjects': anhedonic_subjects_to_process,
-        'non_anhedonic_subjects': non_anhedonic_subjects_to_process,
+        'non_anhedonic_subjects': non_anhedonic_to_process,
         'processing_mode': 'downloaded_only' if use_downloaded_only else 'all_available',
         'configuration': {
             'limit_subjects': LIMIT_SUBJECTS,
