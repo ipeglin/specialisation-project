@@ -2982,7 +2982,7 @@ def prepare_plotting_data(all_subject_results, verbose=True):
             if result.get('mvmd_metadata', {}).get('center_freqs') is not None:
                 center_freqs = result['mvmd_metadata']['center_freqs']
                 subject_plotting_data['slow_band_fc_modes'] = aggregate_modes_to_slow_bands_for_plotting(
-                    fc_modes.get('z_fc'), center_freqs, verbose=False
+                    fc_modes.get('z_fc'), center_freqs, mode_fc_pvalues=result.get('mode_fc_pvalues'), verbose=False
                 )
                 subject_plotting_data['center_freqs'] = center_freqs
 
@@ -2998,13 +2998,14 @@ def prepare_plotting_data(all_subject_results, verbose=True):
     return plotting_data
 
 
-def aggregate_modes_to_slow_bands_for_plotting(z_fc_modes, center_freqs, verbose=False):
+def aggregate_modes_to_slow_bands_for_plotting(z_fc_modes, center_freqs, mode_fc_pvalues=None, verbose=False):
     """
     Aggregate mode-level Z-transformed FC matrices into slow-band FC matrices for individual subject plotting.
 
     Args:
         z_fc_modes: Z-transformed FC matrices per mode (n_modes, n_channels, n_channels)
         center_freqs: Center frequencies for each mode
+        mode_fc_pvalues: Optional p-values per mode (n_modes, n_channels, n_channels)
         verbose: Whether to print verbose output
 
     Returns:
@@ -3035,13 +3036,20 @@ def aggregate_modes_to_slow_bands_for_plotting(z_fc_modes, center_freqs, verbose
         band_z_matrices = z_fc_modes[mode_indices]
         avg_band_z_matrix = np.nanmean(band_z_matrices, axis=0)
 
+        band_pvalues = None
+        if mode_fc_pvalues is not None:
+            # Conservative combine: take the minimum p-value across contributing modes
+            band_mode_pvalues = mode_fc_pvalues[mode_indices]
+            band_pvalues = np.nanmin(band_mode_pvalues, axis=0)
+
         # Convert to R-scale for plotting
         avg_band_r_matrix = fisher_z_to_r(avg_band_z_matrix)
 
         slow_band_fc[band_name] = {
             'fc_matrix': avg_band_r_matrix,
             'n_modes': len(mode_indices),
-            'frequencies': band_data['frequencies']
+            'frequencies': band_data['frequencies'],
+            'fc_pvalues': band_pvalues
         }
 
         if verbose:
@@ -3862,19 +3870,19 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                             alpha=0.05
                         )
 
-                        plot_batches['fc_slow_bands_individual'].append({
-                            'subject_id': subject_id,
-                            'subject_group': subject_group,
-                            'band_name': band_name,
-                            'data': {
-                                'fc_matrix': band_data['fc_matrix'],
-                                'fc_labels': fc_labels,
-                                'fc_pvalues': None,  # No p-values for aggregated bands
-                                'connectivity_patterns': band_connectivity_patterns,
-                                'n_modes': band_data['n_modes'],
-                                'frequencies': band_data['frequencies']
-                            },
-                            'mask_diagonal': mask_diagonal,
+                    plot_batches['fc_slow_bands_individual'].append({
+                        'subject_id': subject_id,
+                        'subject_group': subject_group,
+                        'band_name': band_name,
+                        'data': {
+                            'fc_matrix': band_data['fc_matrix'],
+                            'fc_labels': fc_labels,
+                            'fc_pvalues': band_data.get('fc_pvalues'),
+                            'connectivity_patterns': band_connectivity_patterns,
+                            'n_modes': band_data['n_modes'],
+                            'frequencies': band_data['frequencies']
+                        },
+                        'mask_diagonal': mask_diagonal,
                             'mask_nonsignificant': mask_nonsignificant,
                             'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
                         })
@@ -4483,7 +4491,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
-                        p_values=plot_info['data'].get('avg_fc_pvalues'),
+                        p_values=None,  # Omit p-values for group averages
                         connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
@@ -4506,7 +4514,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                         plot_info['data']['avg_fc_matrix'],
                         plot_info['data']['avg_fc_labels'],
-                        p_values=plot_info['data'].get('avg_fc_pvalues'),
+                        p_values=None,  # Omit p-values for group averages
                         connectivity_patterns=connectivity_patterns,
                         channel_label_map=None,
                         mask_diagonal=plot_info['mask_diagonal'],
@@ -4580,63 +4588,63 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 print(f"  Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots. Close all figures to continue...")
                 plt.show()
 
-        # # Batch 9: MVMD Mode Decomposition
-        # if plot_batches['mvmd_modes']:
-        #     total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
-        #     current_plot_batch += 1
-        #     print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
+        # Batch 9: MVMD Mode Decomposition
+        if plot_batches['mvmd_modes']:
+            total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
+            current_plot_batch += 1
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
 
-        #     # Process in sub-batches of 28 figures to avoid memory issues
-        #     MAX_FIGS_PER_BATCH = 28
-        #     current_batch_figs = []
+            # Process in sub-batches of 28 figures to avoid memory issues
+            MAX_FIGS_PER_BATCH = 28
+            current_batch_figs = []
 
-        #     for plot_info in plot_batches['mvmd_modes']:
-        #         mvmd_figure_generator = plot_signal_decomposition(
-        #             plot_info['mvmd_data']['original'],
-        #             plot_info['mvmd_data']['time_modes'],
-        #             subject_id=plot_info['subject_id'],
-        #             channel_label_map=plot_info['channel_label_map'],
-        #             center_freqs=plot_info['center_freqs'],
-        #             max_figures_per_batch=MAX_FIGS_PER_BATCH
-        #         )
+            for plot_info in plot_batches['mvmd_modes']:
+                mvmd_figure_generator = plot_signal_decomposition(
+                    plot_info['mvmd_data']['original'],
+                    plot_info['mvmd_data']['time_modes'],
+                    subject_id=plot_info['subject_id'],
+                    channel_label_map=plot_info['channel_label_map'],
+                    center_freqs=plot_info['center_freqs'],
+                    max_figures_per_batch=MAX_FIGS_PER_BATCH
+                )
 
-        #         # Process each batch of figures from the generator
-        #         channel_idx_base = 0
-        #         for mvmd_figures in mvmd_figure_generator:
-        #             if plot_info['save_dir']:
-        #                 subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
-        #                 subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
+                # Process each batch of figures from the generator
+                channel_idx_base = 0
+                for mvmd_figures in mvmd_figure_generator:
+                    if plot_info['save_dir']:
+                        subject_mvmd_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_mvmd_dir.mkdir(parents=True, exist_ok=True)
 
-        #                 for fig_idx, fig in enumerate(mvmd_figures):
-        #                     channel_idx = channel_idx_base + fig_idx
-        #                     if plot_info['channel_label_map'] is not None:
-        #                         channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
-        #                         channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
-        #                     else:
-        #                         channel_label_clean = f'ch{channel_idx}'
+                        for fig_idx, fig in enumerate(mvmd_figures):
+                            channel_idx = channel_idx_base + fig_idx
+                            if plot_info['channel_label_map'] is not None:
+                                channel_label = plot_info['channel_label_map'].get(channel_idx, f'ch{channel_idx}')
+                                channel_label_clean = channel_label.replace('/', '_').replace(' ', '_')
+                            else:
+                                channel_label_clean = f'ch{channel_idx}'
 
-        #                     fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
-        #                     fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-        #                     figures_saved_count += 1
+                            fig_path = subject_mvmd_dir / f'mvmd_modes_decomposition_{channel_label_clean}.svg'
+                            fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                            figures_saved_count += 1
 
-        #             if show_plots:
-        #                 current_batch_figs.extend(mvmd_figures)
+                    if show_plots:
+                        current_batch_figs.extend(mvmd_figures)
 
-        #                 # Display and clear batch when reaching limit
-        #                 if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
-        #                     print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-        #                     plt.show()
-        #                     current_batch_figs = []
-        #             else:
-        #                 for fig in mvmd_figures:
-        #                     plt.close(fig)
+                        # Display and clear batch when reaching limit
+                        if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
+                            print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
+                            plt.show()
+                            current_batch_figs = []
+                    else:
+                        for fig in mvmd_figures:
+                            plt.close(fig)
 
-        #             channel_idx_base += len(mvmd_figures)
+                    channel_idx_base += len(mvmd_figures)
 
-        #     # Display remaining figures if any
-        #     if show_plots and current_batch_figs:
-        #         print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-        #         plt.show()
+            # Display remaining figures if any
+            if show_plots and current_batch_figs:
+                print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
+                plt.show()
 
 
         print(f"\n{'='*80}")
