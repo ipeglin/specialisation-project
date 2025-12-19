@@ -2519,3 +2519,169 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
             }))
 
     return figures
+
+
+def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
+    """
+    Create violin plots for ipsilateral intra-network connectivity (within hemisphere).
+    Uses ANOVA/post-hoc structures keyed under ipsilateral results.
+    """
+    import pandas as pd
+    import seaborn as sns
+    from matplotlib.patches import Patch
+
+    ipsi_static_groups = stat_data.get('ipsi_static_coherence_by_group', {})
+    ipsi_slow_groups = stat_data.get('ipsi_slow_band_coherence_by_group', {})
+    ipsi_static_anova = anova_results.get('ipsi_static_results', {})
+    ipsi_slow_anova = anova_results.get('ipsi_slow_band_results', {})
+    post_hoc_collection = anova_results.get('post_hoc_collection', [])
+
+    if not ipsi_static_groups and not ipsi_slow_groups:
+        return []
+
+    # Build post-hoc lookup
+    post_hoc_lookup = {}
+    for ph_data in post_hoc_collection:
+        network = ph_data['network']
+        band = ph_data['band']
+        key = (band, network)
+        post_hoc_lookup[key] = ph_data['post_hoc']
+
+    def _make_violin(df, band_name, conn_key, anova_lookup, title_label):
+        network_anova = anova_lookup.get(conn_key, {})
+        omnibus_p = network_anova.get('omnibus_p', np.nan)
+        fdr_p = network_anova.get('fdr_corrected_p', np.nan)
+        group_sizes = network_anova.get('group_sizes', {})
+        post_hoc_df = post_hoc_lookup.get((band_name, conn_key))
+
+        global _open_fig_warning_shown
+        if not _open_fig_warning_shown and len(plt.get_fignums()) >= 20:
+            print("[WARN] More than 20 figures are open; consider closing figures to conserve memory.")
+            _open_fig_warning_shown = True
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        group_order = ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']
+        colors = ['#2ecc71', '#f39c12', '#e74c3c']
+        color_map = dict(zip(group_order, colors))
+
+        sns.violinplot(
+            data=df,
+            x='group',
+            y='fisher_z',
+            order=group_order,
+            hue='group',
+            palette=color_map,
+            dodge=False,
+            inner=None,
+            ax=ax,
+            alpha=0.6,
+            legend=False,
+        )
+
+        sns.boxplot(
+            data=df, x='group', y='fisher_z', order=group_order,
+            width=0.3, showfliers=False, ax=ax,
+            boxprops=dict(alpha=0.7),
+            whiskerprops=dict(alpha=0.7),
+            capprops=dict(alpha=0.7)
+        )
+
+        sns.stripplot(
+            data=df, x='group', y='fisher_z', order=group_order,
+            color='black', size=4, alpha=0.4, ax=ax, jitter=True
+        )
+
+        ax.set_xlabel('Group', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Fisher-Z Connectivity', fontsize=12, fontweight='bold')
+        ax.set_xticks(range(len(group_order)))
+        ax.set_xticklabels(['Non-anhedonic', 'Low anhedonic', 'High anhedonic'], fontsize=11, rotation=0)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+        ax.set_title(f'{title_label} - {band_name}', fontsize=14, fontweight='bold', pad=20)
+
+        stats_text = []
+        n_text = 'N: ' + ', '.join([
+            f"{g.split('-')[0].capitalize()}={group_sizes.get(g, 0)}"
+            for g in group_order
+            if g in group_sizes
+        ])
+        stats_text.append(n_text)
+
+        if not np.isnan(omnibus_p):
+            stats_text.append(f'Welch ANOVA p = {omnibus_p:.4f}')
+        if not np.isnan(fdr_p):
+            fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
+            stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
+
+        if post_hoc_df is not None:
+            stats_text.append('Games-Howell post-hoc:')
+            for _, row in post_hoc_df.iterrows():
+                a = row['A']
+                b = row['B']
+                p_val = row['pval']
+                sig_marker = '***' if p_val < 0.001 else '**' if p_val < 0.01 else '*' if p_val < 0.05 else 'ns'
+                a_short = a.split('-')[0].capitalize()
+                b_short = b.split('-')[0].capitalize()
+                stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
+
+        if stats_text:
+            ax.text(0.02, 0.98, '\n'.join(stats_text),
+                    transform=ax.transAxes, fontsize=9, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                    family='monospace')
+
+        legend_elements = [
+            Patch(facecolor=colors[0], edgecolor='black', linewidth=0.5, alpha=0.8, label='Non-anhedonic'),
+            Patch(facecolor=colors[1], edgecolor='black', linewidth=0.5, alpha=0.8, label='Low anhedonic'),
+            Patch(facecolor=colors[2], edgecolor='black', linewidth=0.5, alpha=0.8, label='High anhedonic'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', framealpha=0.9, edgecolor='black')
+
+        fig.tight_layout()
+        return fig
+
+    figures = []
+
+    # Static ipsilateral
+    if ipsi_static_groups:
+        all_conn_keys = set()
+        for group_data in ipsi_static_groups.values():
+            all_conn_keys.update(group_data.keys())
+        for conn_key in sorted(all_conn_keys):
+            plot_data = []
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                conn_data = ipsi_static_groups.get(group_name, {}).get(conn_key, {})
+                for val in conn_data.get('observed_values', []):
+                    plot_data.append({'group': group_name, 'fisher_z': val})
+            if not plot_data:
+                continue
+            df = pd.DataFrame(plot_data)
+            title_label = conn_key
+            fig = _make_violin(df, 'static_ipsi', conn_key, ipsi_static_anova, title_label)
+            figures.append((fig, {'band_name': 'static_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
+
+    # Slow-band ipsilateral
+    if ipsi_slow_groups:
+        all_bands = set()
+        all_conn_keys = set()
+        for group_data in ipsi_slow_groups.values():
+            for conn_key, band_dict in group_data.items():
+                all_conn_keys.add(conn_key)
+                all_bands.update(band_dict.keys())
+
+        for band_name in sorted(all_bands, key=lambda x: int(x.split('-')[1]) if 'slow-' in x else 0, reverse=True):
+            for conn_key in sorted(all_conn_keys):
+                plot_data = []
+                for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                    band_data = ipsi_slow_groups.get(group_name, {}).get(conn_key, {}).get(band_name, {})
+                    for val in band_data.get('observed_values', []):
+                        plot_data.append({'group': group_name, 'fisher_z': val})
+                if not plot_data:
+                    continue
+                df = pd.DataFrame(plot_data)
+                title_label = f\"{conn_key}\"
+                fig = _make_violin(df, f'{band_name}_ipsi', conn_key, ipsi_slow_anova, title_label)
+                figures.append((fig, {'band_name': f'{band_name}_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
+
+    return figures

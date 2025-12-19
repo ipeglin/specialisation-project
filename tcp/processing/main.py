@@ -55,6 +55,7 @@ from tcp.processing.lib.mvmd import MVMD
 from tcp.processing.lib.plot import (
     plot_fc_results,
     plot_interhemispheric_intra_network_violin,
+    plot_ipsilateral_intra_network_violin,
     plot_marginal_spectrum_per_mode,
     plot_multivariate_hilbert_spectrum,
     plot_roi_timeseries_result,
@@ -1826,15 +1827,35 @@ def create_connectivity_mappings(all_subject_results, verbose=True):
                                 'region': lh_region, 'network': lh_network
                             })
 
-    # Create ipsilateral pairs within each hemisphere
-    for hemisphere, channels in [('left_hemisphere', lh_channels), ('right_hemisphere', rh_channels)]:
+    # Create ipsilateral pairs within each hemisphere and group by region/network combinations
+    def parse_region_network(label):
+        parts = label.split('_')
+        region = parts[0] if len(parts) > 0 else 'Unknown'
+        network = parts[2] if len(parts) > 2 else 'Unknown'
+        return region, network
+
+    ipsilateral_pair_groups = {'LH': {}, 'RH': {}}
+    for hemisphere, channels in [('LH', [ch for ch in sorted_labels if '_LH_' in ch]),
+                                 ('RH', [ch for ch in sorted_labels if '_RH_' in ch])]:
         for i, ch1 in enumerate(channels):
-            for j, ch2 in enumerate(channels[i+1:], i+1):
+            for ch2 in channels[i+1:]:
                 idx1 = channel_index_map[ch1]
                 idx2 = channel_index_map[ch2]
-                ipsilateral_pairs[hemisphere].append({
+                region1, network1 = parse_region_network(ch1)
+                region2, network2 = parse_region_network(ch2)
+                key_parts = sorted([f"{region1}_{network1}", f"{region2}_{network2}"])
+                conn_key = f"{hemisphere}:{key_parts[0]}__{key_parts[1]}"
+                if conn_key not in ipsilateral_pair_groups[hemisphere]:
+                    ipsilateral_pair_groups[hemisphere][conn_key] = {
+                        'pairs': [],
+                        'regions_networks': key_parts
+                    }
+                ipsilateral_pair_groups[hemisphere][conn_key]['pairs'].append({
                     'idx1': idx1, 'idx2': idx2,
-                    'label1': ch1, 'label2': ch2
+                    'label1': ch1, 'label2': ch2,
+                    'region1': region1, 'network1': network1,
+                    'region2': region2, 'network2': network2,
+                    'hemisphere': hemisphere
                 })
 
     # Create intra-network pairs for statistics (only same region + same network across hemispheres)
@@ -1860,6 +1881,7 @@ def create_connectivity_mappings(all_subject_results, verbose=True):
         'channel_index_map': channel_index_map,
         'interhemispheric_pairs': interhemispheric_pairs,
         'ipsilateral_pairs': ipsilateral_pairs,
+        'ipsilateral_pair_groups': ipsilateral_pair_groups,
         'intra_network_pairs': intra_network_pairs,
         'cortical_channels': cortical_channels,
         'subcortical_channels': subcortical_channels
@@ -2061,6 +2083,61 @@ def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network
 
     return band_coherence
 
+
+def compute_band_specific_coherence_from_modes_ipsi(z_fc_modes, center_freqs, pair_group, subject_channel_labels=None, verbose=False):
+    """
+    Compute band-specific ipsilateral coherence (within hemisphere) from mode FC matrices.
+
+    Args:
+        z_fc_modes: Fisher-transformed FC matrices per mode (n_modes, n_channels, n_channels)
+        center_freqs: Center frequencies for each mode
+        pair_group: Dict with keys 'pairs' (list of pair dicts with label1/label2) and 'regions_networks'
+        subject_channel_labels: Dict mapping subject indices to channel labels
+        verbose: Whether to print detailed output
+
+    Returns:
+        dict: Band-specific coherence values {band_name: coherence_value}
+    """
+    # Group modes by slow-band
+    band_modes = {}
+    for mode_idx, freq in enumerate(center_freqs):
+        band_num = get_band_number(freq)
+        if band_num is not None:
+            band_name = f'slow-{band_num}'
+            band_modes.setdefault(band_name, []).append(mode_idx)
+
+    band_coherence = {}
+    for band_name, mode_indices in band_modes.items():
+        if not mode_indices:
+            continue
+
+        band_z_matrices = z_fc_modes[mode_indices]
+        avg_band_z_matrix = np.nanmean(band_z_matrices, axis=0)
+
+        network_z_values = []
+        for pair in pair_group['pairs']:
+            if subject_channel_labels:
+                subject_label_to_idx = {label: idx for idx, label in subject_channel_labels.items()}
+                l1 = pair['label1']
+                l2 = pair['label2']
+                if l1 in subject_label_to_idx and l2 in subject_label_to_idx:
+                    idx1 = subject_label_to_idx[l1]
+                    idx2 = subject_label_to_idx[l2]
+                    z_val = avg_band_z_matrix[idx1, idx2]
+                    if not np.isnan(z_val):
+                        network_z_values.append(z_val)
+            else:
+                idx1 = pair['idx1']
+                idx2 = pair['idx2']
+                z_val = avg_band_z_matrix[idx1, idx2]
+                if not np.isnan(z_val):
+                    network_z_values.append(z_val)
+
+        if network_z_values:
+            band_coherence[band_name] = np.mean(network_z_values)
+
+    return band_coherence
+
 def get_group_permutations(all_subject_results, groups, verbose=False):
     results = {
         'group_permutations': [],
@@ -2142,6 +2219,8 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
     stats_results = {
         'static_coherence_by_group': {},
         'slow_band_coherence_by_group': {},
+        'ipsi_static_coherence_by_group': {},
+        'ipsi_slow_band_coherence_by_group': {},
     }
 
     # Process each anhedonia group
@@ -2152,6 +2231,10 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
         # Initialize group data
         stats_results['static_coherence_by_group'][group_name] = {}
         stats_results['slow_band_coherence_by_group'][group_name] = {}
+        stats_results['ipsi_static_coherence_by_group'][group_name] = {}
+        stats_results['ipsi_slow_band_coherence_by_group'][group_name] = {}
+        stats_results['ipsi_static_coherence_by_group'][group_name] = {}
+        stats_results['ipsi_slow_band_coherence_by_group'][group_name] = {}
 
         valid_subjects = 0
 
@@ -2267,6 +2350,76 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
                             'mean_coherence': np.mean(coherence_values),
                             'std_coherence': np.std(coherence_values),
                             'subject_ids': slow_band_coherence_subjects[band_name]
+                        }
+
+        # IPSILATERAL COHERENCE (within hemisphere connections)
+        ipsi_groups = connectivity_mappings.get('ipsilateral_pair_groups', {})
+        for hemisphere, conn_groups in ipsi_groups.items():
+            for conn_key, conn_data in conn_groups.items():
+                static_values = []
+                slow_band_values = {}
+                slow_band_subjects = {}
+
+                for subject_id in subject_ids:
+                    result = all_subject_results.get(subject_id)
+                    if not (result and result.get('success')):
+                        continue
+
+                    fc_static_data = result.get('fc_static', {})
+                    z_fc_static = fc_static_data.get('z_fc')
+                    subject_channel_labels = result.get('channel_labels', {})
+
+                    if z_fc_static is not None and subject_channel_labels:
+                        subject_label_to_idx = {label: idx for idx, label in subject_channel_labels.items()}
+                        z_vals = []
+                        for pair in conn_data['pairs']:
+                            l1 = pair['label1']
+                            l2 = pair['label2']
+                            if l1 in subject_label_to_idx and l2 in subject_label_to_idx:
+                                idx1 = subject_label_to_idx[l1]
+                                idx2 = subject_label_to_idx[l2]
+                                z_val = z_fc_static[idx1, idx2]
+                                if not np.isnan(z_val):
+                                    z_vals.append(z_val)
+                        if z_vals:
+                            static_values.append(np.mean(z_vals))
+
+                    # Slow-band from modes
+                    fc_modes_data = result.get('fc_modes', {})
+                    z_fc_modes = fc_modes_data.get('z_fc')
+                    mvmd_data = result.get('mvmd', {})
+                    mvmd_metadata = mvmd_data.get('metadata', {})
+                    center_freqs = mvmd_metadata.get('center_freqs')
+
+                    if z_fc_modes is not None and center_freqs is not None and subject_channel_labels:
+                        band_coh = compute_band_specific_coherence_from_modes_ipsi(
+                            z_fc_modes, center_freqs, conn_data, subject_channel_labels, verbose=False
+                        )
+                        for band_name, val in band_coh.items():
+                            slow_band_values.setdefault(band_name, []).append(val)
+                            slow_band_subjects.setdefault(band_name, []).append(subject_id)
+
+                if static_values:
+                    stats_results['ipsi_static_coherence_by_group'][group_name][f"{conn_key}"] = {
+                        'observed_values': static_values,
+                        'n_subjects': len(static_values),
+                        'mean_coherence': np.mean(static_values),
+                        'std_coherence': np.std(static_values),
+                        'hemisphere': hemisphere,
+                        'regions_networks': conn_data['regions_networks']
+                    }
+
+                if slow_band_values:
+                    stats_results['ipsi_slow_band_coherence_by_group'][group_name][f"{conn_key}"] = {}
+                    for band_name, vals in slow_band_values.items():
+                        stats_results['ipsi_slow_band_coherence_by_group'][group_name][f"{conn_key}"][band_name] = {
+                            'observed_values': vals,
+                            'n_subjects': len(vals),
+                            'mean_coherence': np.mean(vals),
+                            'std_coherence': np.std(vals),
+                            'subject_ids': slow_band_subjects.get(band_name, []),
+                            'hemisphere': hemisphere,
+                            'regions_networks': conn_data['regions_networks']
                         }
 
         if verbose:
@@ -2720,11 +2873,15 @@ def coherence_anova_test(stat_results, verbose=True):
     results = {
         'static_results': {},
         'slow_band_results': {},
+        'ipsi_static_results': {},
+        'ipsi_slow_band_results': {},
         'post_hoc_collection': []
     }
 
     static_groups = stat_results.get('static_coherence_by_group', {})
     slow_band_groups = stat_results.get('slow_band_coherence_by_group', {})
+    ipsi_static_groups = stat_results.get('ipsi_static_coherence_by_group', {})
+    ipsi_slow_groups = stat_results.get('ipsi_slow_band_coherence_by_group', {})
 
     # ===== STATIC FC WELCH ANOVA TESTING =====
     if static_groups:
@@ -2909,13 +3066,169 @@ def coherence_anova_test(stat_results, verbose=True):
 
             results['slow_band_results'][band_name] = band_omnibus_results
 
+    # ===== IPSILATERAL STATIC FC WELCH ANOVA =====
+    if ipsi_static_groups:
+        if verbose:
+            print(f"\nTesting IPSILATERAL static FC across {len(ipsi_static_groups)} groups...")
+
+        all_conn_keys = set()
+        for group_data in ipsi_static_groups.values():
+            all_conn_keys.update(group_data.keys())
+
+        omnibus_p_values_ipsi = []
+        ipsi_static_results = {}
+
+        for conn_key in all_conn_keys:
+            group_data = {}
+            for group_name, group_conn in ipsi_static_groups.items():
+                if conn_key in group_conn:
+                    vals = group_conn[conn_key]['observed_values']
+                    if len(vals) > 0:
+                        group_data[group_name] = vals
+
+            if len(group_data) < 2:
+                continue
+
+            group_sizes = {name: len(values) for name, values in group_data.items()}
+            logging.info(f"IPSILATERAL Connection: {conn_key}")
+            logging.info(f"Groups: {group_sizes}")
+            logging.info(f"Running Welch ANOVA on ipsilateral FC connectivity")
+
+            omnibus_p = run_welch_anova(group_data)
+            omnibus_p_values_ipsi.append(omnibus_p)
+
+            ipsi_static_results[conn_key] = {
+                'omnibus_p': omnibus_p,
+                'group_sizes': group_sizes,
+                'post_hoc_results': None
+            }
+
+            if not np.isnan(omnibus_p) and omnibus_p < 0.05:
+                post_hoc_df = run_games_howell(group_data)
+                if not post_hoc_df.empty:
+                    ipsi_static_results[conn_key]['post_hoc_results'] = post_hoc_df
+                    results['post_hoc_collection'].append({
+                        'network': conn_key,
+                        'band': 'static_ipsi',
+                        'post_hoc': post_hoc_df
+                    })
+
+            if verbose:
+                total_subjects = sum(group_sizes.values())
+                significant = omnibus_p < 0.05 if not np.isnan(omnibus_p) else False
+                print(f"    Result: {total_subjects} subjects, "
+                      f"p = {omnibus_p:.4f} "
+                      f"{'***' if omnibus_p < 0.001 else '**' if omnibus_p < 0.01 else '*' if significant else 'ns'}")
+
+        # Apply FDR correction
+        if omnibus_p_values_ipsi:
+            valid_p_mask = ~np.isnan(omnibus_p_values_ipsi)
+            if valid_p_mask.sum() > 0:
+                fdr_rejected, fdr_corrected_p = fdrcorrection(
+                    np.array(omnibus_p_values_ipsi)[valid_p_mask]
+                )
+                fdr_idx = 0
+                for conn_key in ipsi_static_results:
+                    if not np.isnan(ipsi_static_results[conn_key]['omnibus_p']):
+                        ipsi_static_results[conn_key]['fdr_corrected_p'] = fdr_corrected_p[fdr_idx]
+                        ipsi_static_results[conn_key]['fdr_significant'] = fdr_rejected[fdr_idx]
+                        fdr_idx += 1
+                    else:
+                        ipsi_static_results[conn_key]['fdr_corrected_p'] = np.nan
+                        ipsi_static_results[conn_key]['fdr_significant'] = False
+
+        results['ipsi_static_results'] = ipsi_static_results
+
+    # ===== IPSILATERAL SLOW-BAND WELCH ANOVA =====
+    if ipsi_slow_groups:
+        if verbose:
+            print(f"\nTesting IPSILATERAL slow-band FC across {len(ipsi_slow_groups)} groups...")
+
+        all_conn_keys = set()
+        all_band_names = set()
+        for group_data in ipsi_slow_groups.values():
+            for conn_key, bands in group_data.items():
+                all_conn_keys.add(conn_key)
+                all_band_names.update(bands.keys())
+
+        ipsi_slow_results = {}
+
+        for band_name in all_band_names:
+            omnibus_p_values_band = []
+            band_results = {}
+
+            for conn_key in all_conn_keys:
+                group_data = {}
+                for group_name, group_conn in ipsi_slow_groups.items():
+                    if conn_key in group_conn and band_name in group_conn[conn_key]:
+                        vals = group_conn[conn_key][band_name]['observed_values']
+                        if len(vals) > 0:
+                            group_data[group_name] = vals
+
+                if len(group_data) < 2:
+                    continue
+
+                group_sizes = {name: len(values) for name, values in group_data.items()}
+                logging.info(f"IPSILATERAL Band: {band_name}, Connection: {conn_key}")
+                logging.info(f"Groups: {group_sizes}")
+                logging.info(f"Running Welch ANOVA on ipsilateral slow-band FC")
+
+                omnibus_p = run_welch_anova(group_data)
+                omnibus_p_values_band.append(omnibus_p)
+
+                band_results[conn_key] = {
+                    'omnibus_p': omnibus_p,
+                    'group_sizes': group_sizes,
+                    'post_hoc_results': None
+                }
+
+                if not np.isnan(omnibus_p) and omnibus_p < 0.05:
+                    post_hoc_df = run_games_howell(group_data)
+                    if not post_hoc_df.empty:
+                        band_results[conn_key]['post_hoc_results'] = post_hoc_df
+                        results['post_hoc_collection'].append({
+                            'network': conn_key,
+                            'band': f'{band_name}_ipsi',
+                            'post_hoc': post_hoc_df
+                        })
+
+                if verbose:
+                    total_subjects = sum(group_sizes.values())
+                    significant = omnibus_p < 0.05 if not np.isnan(omnibus_p) else False
+                    print(f"    Result: {total_subjects} subjects, "
+                          f"p = {omnibus_p:.4f} "
+                          f"{'***' if omnibus_p < 0.001 else '**' if omnibus_p < 0.01 else '*' if significant else 'ns'}")
+
+            # FDR correction for this band
+            if omnibus_p_values_band:
+                valid_p_mask = ~np.isnan(omnibus_p_values_band)
+                if valid_p_mask.sum() > 0:
+                    fdr_rejected, fdr_corrected_p = fdrcorrection(
+                        np.array(omnibus_p_values_band)[valid_p_mask]
+                    )
+                    fdr_idx = 0
+                    for conn_key in band_results:
+                        if not np.isnan(band_results[conn_key]['omnibus_p']):
+                            band_results[conn_key]['fdr_corrected_p'] = fdr_corrected_p[fdr_idx]
+                            band_results[conn_key]['fdr_significant'] = fdr_rejected[fdr_idx]
+                            fdr_idx += 1
+                        else:
+                            band_results[conn_key]['fdr_corrected_p'] = np.nan
+                            band_results[conn_key]['fdr_significant'] = False
+
+            results['ipsi_slow_band_results'][band_name] = band_results
+
     if verbose:
         static_networks = len(results['static_results'])
         slow_band_tests = sum(len(band_data) for band_data in results['slow_band_results'].values())
+        ipsi_static_networks = len(results['ipsi_static_results'])
+        ipsi_slow_tests = sum(len(band_data) for band_data in results['ipsi_slow_band_results'].values())
         post_hoc_count = len(results['post_hoc_collection'])
         print(f"\nWelch ANOVA testing completed:")
         print(f"  Static FC: {static_networks} networks tested")
         print(f"  Slow-band FC: {slow_band_tests} network-band combinations tested")
+        print(f"  Ipsilateral static FC: {ipsi_static_networks} connections tested")
+        print(f"  Ipsilateral slow-band FC: {ipsi_slow_tests} connection-band combinations tested")
         print(f"  Games-Howell post-hoc tests: {post_hoc_count} performed")
 
     return results
@@ -3618,6 +3931,79 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         pd.DataFrame(slow_rows).to_csv(slow_anova_path, index=False)
         print(f"Exported slow-band Welch ANOVA results to: {slow_anova_path}")
 
+        # Export IPSILATERAL Welch ANOVA summary (static)
+        ipsi_static_rows = []
+        ipsi_static_results = anhedonic_anova_results.get('ipsi_static_results', {})
+        ipsi_static_stats = anhedonic_stat_data.get('ipsi_static_coherence_by_group', {})
+
+        def _parse_conn_key(conn_key):
+            # conn_key format: "LH:RegionNet__RegionNet"
+            hemi, rest = conn_key.split(':', 1) if ':' in conn_key else ('NA', conn_key)
+            parts = rest.split('__')
+            p1 = parts[0] if len(parts) > 0 else 'NA'
+            p2 = parts[1] if len(parts) > 1 else 'NA'
+            return hemi, p1, p2
+
+        for conn_key, anova_data in ipsi_static_results.items():
+            hemi, rn1, rn2 = _parse_conn_key(conn_key)
+            row = {
+                'band': 'static_ipsi',
+                'connection_key': conn_key,
+                'hemisphere': hemi,
+                'region_network_1': rn1,
+                'region_network_2': rn2,
+                'omnibus_p': anova_data.get('omnibus_p'),
+                'fdr_corrected_p': anova_data.get('fdr_corrected_p'),
+                'fdr_significant': anova_data.get('fdr_significant', False),
+            }
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                conn_stats = ipsi_static_stats.get(group_name, {}).get(conn_key, {})
+                mean_val = conn_stats.get('mean_coherence', np.nan)
+                sd_val = conn_stats.get('std_coherence', np.nan)
+                n_val = conn_stats.get('n_subjects', 0)
+                prefix = group_name.replace('-', '_')
+                row[f'{prefix}_mean_z'] = mean_val
+                row[f'{prefix}_sd_z'] = sd_val
+                row[f'{prefix}_n'] = n_val
+            ipsi_static_rows.append(row)
+
+        ipsi_static_anova_path = anova_output_dir / 'welch_anova_static_ipsilateral.csv'
+        pd.DataFrame(ipsi_static_rows).to_csv(ipsi_static_anova_path, index=False)
+        print(f"Exported ipsilateral static Welch ANOVA results to: {ipsi_static_anova_path}")
+
+        # Export IPSILATERAL Welch ANOVA summary (slow bands)
+        ipsi_slow_rows = []
+        ipsi_slow_results = anhedonic_anova_results.get('ipsi_slow_band_results', {})
+        ipsi_slow_stats = anhedonic_stat_data.get('ipsi_slow_band_coherence_by_group', {})
+
+        for band_name, band_data in ipsi_slow_results.items():
+            for conn_key, anova_data in band_data.items():
+                hemi, rn1, rn2 = _parse_conn_key(conn_key)
+                row = {
+                    'band': f'{band_name}_ipsi',
+                    'connection_key': conn_key,
+                    'hemisphere': hemi,
+                    'region_network_1': rn1,
+                    'region_network_2': rn2,
+                    'omnibus_p': anova_data.get('omnibus_p'),
+                    'fdr_corrected_p': anova_data.get('fdr_corrected_p'),
+                    'fdr_significant': anova_data.get('fdr_significant', False),
+                }
+                for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                    band_stats = ipsi_slow_stats.get(group_name, {}).get(conn_key, {}).get(band_name, {})
+                    mean_val = band_stats.get('mean_coherence', np.nan)
+                    sd_val = band_stats.get('std_coherence', np.nan)
+                    n_val = band_stats.get('n_subjects', 0)
+                    prefix = group_name.replace('-', '_')
+                    row[f'{prefix}_mean_z'] = mean_val
+                    row[f'{prefix}_sd_z'] = sd_val
+                    row[f'{prefix}_n'] = n_val
+                ipsi_slow_rows.append(row)
+
+        ipsi_slow_anova_path = anova_output_dir / 'welch_anova_slow_bands_ipsilateral.csv'
+        pd.DataFrame(ipsi_slow_rows).to_csv(ipsi_slow_anova_path, index=False)
+        print(f"Exported ipsilateral slow-band Welch ANOVA results to: {ipsi_slow_anova_path}")
+
         # Export Games-Howell post-hoc results
         post_hoc_collection = anhedonic_anova_results.get('post_hoc_collection', [])
         for post_hoc_data in post_hoc_collection:
@@ -3665,6 +4051,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Welch ANOVA interhemispheric intra-network directory
         welch_interhemi_dir = figures_base_dir / 'welch_interhemispheric_violin'
+        welch_ipsi_dir = figures_base_dir / 'welch_ipsilateral_violin'
 
         # MVMD decomposition directory
         mvmd_figures_dir = figures_base_dir / 'mvmd_analysis'
@@ -3680,6 +4067,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         fc_subject_dir.mkdir(parents=True, exist_ok=True)
         fc_group_dir.mkdir(parents=True, exist_ok=True)
         welch_interhemi_dir.mkdir(parents=True, exist_ok=True)
+        welch_ipsi_dir.mkdir(parents=True, exist_ok=True)
         mvmd_figures_dir.mkdir(parents=True, exist_ok=True)
         hsa_figures_dir.mkdir(parents=True, exist_ok=True)
         marginal_hsa_figures_dir.mkdir(parents=True, exist_ok=True)
@@ -3689,6 +4077,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"  FC (subject-level): {fc_subject_dir}")
         print(f"  FC (group-level): {fc_group_dir}")
         print(f"  Welch Interhemispheric Violin: {welch_interhemi_dir}")
+        print(f"  Welch Ipsilateral Violin: {welch_ipsi_dir}")
         print(f"  MVMD decomposition: {mvmd_figures_dir}")
         print(f"  Hilbert Spectral Analysis: {hsa_figures_dir}")
         print(f"  Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
@@ -3715,6 +4104,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             'fc_slow_bands_cross_subject': [],
             'fc_group_avg': [],
             'interhemispheric_violin': [],
+            'ipsilateral_violin': [],
             'mvmd_modes': [],
             'hsa_multivariate': [],
             'hsa_marginal': [],
@@ -4066,6 +4456,22 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 })
 
         print(f"  ✓ Prepared {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots")
+
+        # Prepare ipsilateral connectivity violin plots
+        ipsi_figures = plot_ipsilateral_intra_network_violin(
+            stat_data=anhedonic_stat_data,
+            anova_results=anhedonic_anova_results
+        )
+
+        if ipsi_figures:
+            for fig, metadata in ipsi_figures:
+                plot_batches['ipsilateral_violin'].append({
+                    'figure': fig,
+                    'metadata': metadata,
+                    'save_dir': welch_ipsi_dir
+                })
+
+        print(f"  ✓ Prepared {len(plot_batches['ipsilateral_violin'])} ipsilateral violin plots")
 
         # Now create and display plots in batches by type
         # Recompute batch count based on non-empty queues
@@ -4586,6 +4992,38 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
             if show_plots:
                 print(f"  Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots. Close all figures to continue...")
+                plt.show()
+
+        # Batch 9: Ipsilateral Intra-Network Violin Plots
+        if plot_batches['ipsilateral_violin']:
+            current_plot_batch += 1
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['ipsilateral_violin'])} ipsilateral intra-network violin plots...")
+
+            for plot_info in plot_batches['ipsilateral_violin']:
+                fig = plot_info['figure']
+                metadata = plot_info['metadata']
+                save_dir = plot_info['save_dir']
+
+                if save_dir:
+                    band_name = metadata['band_name']
+                    safe_network = metadata['safe_network']
+
+                    # Create band-specific directory
+                    band_dir = save_dir / band_name
+                    band_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Save figure
+                    filename = f'{safe_network}_violin.png'
+                    filepath = band_dir / filename
+                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
+                    figures_saved_count += 1
+
+                # Close figure if not showing
+                if not show_plots:
+                    plt.close(fig)
+
+            if show_plots:
+                print(f"  Displaying {len(plot_batches['ipsilateral_violin'])} ipsilateral violin plots. Close all figures to continue...")
                 plt.show()
 
         # Batch 9: MVMD Mode Decomposition
