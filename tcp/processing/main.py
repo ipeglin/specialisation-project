@@ -3405,36 +3405,6 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"[Stage 4] Running Welch ANOVA + Games-Howell tests...")
     anhedonic_anova_results = coherence_anova_test(anhedonic_stat_data, verbose=verbose)
 
-    # Save Games-Howell post-hoc results to CSV files
-    if anhedonic_anova_results.get('post_hoc_collection') and save_figures:
-        post_hoc_dir = run_parent_dir / 'post_hoc_results'
-        post_hoc_dir.mkdir(parents=True, exist_ok=True)
-
-        for idx, post_hoc_data in enumerate(anhedonic_anova_results['post_hoc_collection']):
-            network = post_hoc_data['network']
-            band = post_hoc_data['band']
-            post_hoc_df = post_hoc_data['post_hoc']
-
-            # Clean network and band names for filename
-            safe_network = network.replace('/', '_').replace(' ', '_')
-            safe_band = band.replace('/', '_').replace(' ', '_')
-
-            filename = f"games_howell_{safe_network}_{safe_band}.csv"
-            filepath = post_hoc_dir / filename
-
-            # Save with additional metadata
-            with open(filepath, 'w') as f:
-                f.write(f"# Games-Howell Post-hoc Test Results\n")
-                f.write(f"# Network: {network}\n")
-                f.write(f"# Band: {band}\n")
-                f.write(f"# Test performed only because omnibus Welch ANOVA p < 0.05 (uncorrected)\n")
-                f.write(f"# Post-hoc p-values are NOT corrected for multiple comparisons\n")
-                f.write(f"#\n")
-                post_hoc_df.to_csv(f, index=False)
-
-            if verbose:
-                print(f"Saved Games-Howell results to: {filepath}")
-
     # STAGE 5: Compute group-averaged FC
     print(f"[Stage 5] Computing group-averaged FC...")
 
@@ -3568,16 +3538,104 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         group_avg_output_dir = csv_export_dir / 'group_averages'
         group_avg_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create ANOVA/Post-hoc output directory
+        anova_output_dir = csv_export_dir / 'anova_results'
+        anova_output_dir.mkdir(parents=True, exist_ok=True)
+        post_hoc_dir = csv_export_dir / 'post_hoc_results'
+        post_hoc_dir.mkdir(parents=True, exist_ok=True)
+
         # Export connectivity mappings
         mappings_file = csv_export_dir / 'connectivity_mappings.csv'
         print(f"Exporting connectivity mappings to: {mappings_file}")
 
-        # Export statistics data
-        stats_file = csv_export_dir / 'statistics_data.csv'
-        print(f"Exporting statistics data to: {stats_file}")
+        # Export Welch ANOVA summary (static)
+        static_rows = []
+        static_results = anhedonic_anova_results.get('static_results', {})
+        static_stats = anhedonic_stat_data.get('static_coherence_by_group', {})
 
-        # TODO: Implement actual CSV export functions for new data structures
-        print(f"[INFO] CSV export functions need to be implemented for new data structures")
+        def _get_group_stats(group_dict, network_key, group_name):
+            net_data = group_dict.get(group_name, {}).get(network_key, {})
+            return (
+                net_data.get('mean_coherence', np.nan),
+                net_data.get('std_coherence', np.nan),
+                net_data.get('n_subjects', 0)
+            )
+
+        for network_key, anova_data in static_results.items():
+            row = {
+                'band': 'static',
+                'network': network_key,
+                'omnibus_p': anova_data.get('omnibus_p'),
+                'fdr_corrected_p': anova_data.get('fdr_corrected_p'),
+                'fdr_significant': anova_data.get('fdr_significant', False),
+            }
+            for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                mean_val, sd_val, n_val = _get_group_stats(static_stats, network_key, group_name)
+                prefix = group_name.replace('-', '_')
+                row[f'{prefix}_mean_z'] = mean_val
+                row[f'{prefix}_sd_z'] = sd_val
+                row[f'{prefix}_n'] = n_val
+            static_rows.append(row)
+
+        static_anova_path = anova_output_dir / 'welch_anova_static.csv'
+        pd.DataFrame(static_rows).to_csv(static_anova_path, index=False)
+        print(f"Exported static Welch ANOVA results to: {static_anova_path}")
+
+        # Export Welch ANOVA summary (slow bands)
+        slow_rows = []
+        slow_results = anhedonic_anova_results.get('slow_band_results', {})
+        slow_stats = anhedonic_stat_data.get('slow_band_coherence_by_group', {})
+
+        for band_name, band_data in slow_results.items():
+            for network_key, anova_data in band_data.items():
+                row = {
+                    'band': band_name,
+                    'network': network_key,
+                    'omnibus_p': anova_data.get('omnibus_p'),
+                    'fdr_corrected_p': anova_data.get('fdr_corrected_p'),
+                    'fdr_significant': anova_data.get('fdr_significant', False),
+                }
+                for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
+                    net_data = slow_stats.get(group_name, {}).get(network_key, {}).get(band_name, {})
+                    mean_val = net_data.get('mean_coherence', np.nan)
+                    sd_val = net_data.get('std_coherence', np.nan)
+                    n_val = net_data.get('n_subjects', 0)
+                    prefix = group_name.replace('-', '_')
+                    row[f'{prefix}_mean_z'] = mean_val
+                    row[f'{prefix}_sd_z'] = sd_val
+                    row[f'{prefix}_n'] = n_val
+                slow_rows.append(row)
+
+        slow_anova_path = anova_output_dir / 'welch_anova_slow_bands.csv'
+        pd.DataFrame(slow_rows).to_csv(slow_anova_path, index=False)
+        print(f"Exported slow-band Welch ANOVA results to: {slow_anova_path}")
+
+        # Export Games-Howell post-hoc results
+        post_hoc_collection = anhedonic_anova_results.get('post_hoc_collection', [])
+        for post_hoc_data in post_hoc_collection:
+            network = post_hoc_data['network']
+            band = post_hoc_data['band']
+            post_hoc_df = post_hoc_data['post_hoc']
+
+            # Clean network and band names for filename
+            safe_network = network.replace('/', '_').replace(' ', '_')
+            safe_band = band.replace('/', '_').replace(' ', '_')
+
+            filename = f"games_howell_{safe_network}_{safe_band}.csv"
+            filepath = post_hoc_dir / filename
+
+            # Save with additional metadata
+            with open(filepath, 'w') as f:
+                f.write(f"# Games-Howell Post-hoc Test Results\n")
+                f.write(f"# Network: {network}\n")
+                f.write(f"# Band: {band}\n")
+                f.write(f"# Test performed only because omnibus Welch ANOVA p < 0.05 (uncorrected)\n")
+                f.write(f"# Post-hoc p-values are NOT corrected for multiple comparisons\n")
+                f.write(f"#\n")
+                post_hoc_df.to_csv(f, index=False)
+
+        if post_hoc_collection:
+            print(f"Exported {len(post_hoc_collection)} Games-Howell files to: {post_hoc_dir}")
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
     figures_saved_count = 0
