@@ -2358,7 +2358,6 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
     """
     import pandas as pd
     import seaborn as sns
-    from matplotlib.patches import Patch
 
     static_groups = stat_data.get('static_coherence_by_group', {})
     static_anova = anova_results.get('static_results', {})
@@ -2531,7 +2530,6 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
     """
     import pandas as pd
     import seaborn as sns
-    from matplotlib.patches import Patch
 
     ipsi_static_groups = stat_data.get('ipsi_static_coherence_by_group', {})
     ipsi_slow_groups = stat_data.get('ipsi_slow_band_coherence_by_group', {})
@@ -2636,13 +2634,6 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                     transform=ax.transAxes, fontsize=9, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
                     family='monospace')
-
-        legend_elements = [
-            Patch(facecolor=colors[0], edgecolor='black', linewidth=0.5, alpha=0.8, label='Non-anhedonic'),
-            Patch(facecolor=colors[1], edgecolor='black', linewidth=0.5, alpha=0.8, label='Low anhedonic'),
-            Patch(facecolor=colors[2], edgecolor='black', linewidth=0.5, alpha=0.8, label='High anhedonic'),
-        ]
-        ax.legend(handles=legend_elements, loc='upper left', framealpha=0.9, edgecolor='black')
 
         fig.tight_layout()
         return fig

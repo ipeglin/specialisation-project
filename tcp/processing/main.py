@@ -1619,6 +1619,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'r_fc': fc_matrix,
                 'z_fc': z_fc_static,
                 'labels': fc_labels,
+                'p_values': fc_pvalues,
             },
             'mvmd': {
                 **mvmd_result,
@@ -1630,6 +1631,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'labels': mode_fc_data.get('fc_labels', None),
                 'n_modes': mode_fc_data.get('n_modes', 0),
                 'n_channels': mode_fc_data.get('n_channels', 0),
+                'p_values': mode_fc_data.get('mode_fc_pvalues', None),
             },
             'fc_bands': {
                 'r_fc': band_fc_data.get('fc_matrix', None),
@@ -1927,8 +1929,18 @@ def aggregate_group_connectivity(all_subject_results, connectivity_mappings, anh
 
         for subject_id in subject_ids:
             result = all_subject_results.get(subject_id)
-            if result and result.get('success') and result.get('z_fc_static') is not None:
-                static_matrices.append(result['z_fc_static'])
+            if not result or not result.get('success'):
+                continue
+
+            fc_static = result.get('fc_static', {}) or {}
+            z_fc_static = fc_static.get('z_fc')
+
+            if z_fc_static is None:
+                # Fallback to legacy key if needed
+                z_fc_static = result.get('z_fc_static')
+
+            if z_fc_static is not None:
+                static_matrices.append(z_fc_static)
                 valid_subjects.append(subject_id)
 
         if static_matrices:
@@ -1957,8 +1969,16 @@ def aggregate_group_connectivity(all_subject_results, connectivity_mappings, anh
             if not (result and result.get('success')):
                 continue
 
-            z_fc_modes = result.get('z_fc_modes')
-            center_freqs = result.get('mvmd_metadata', {}).get('center_freqs')
+            fc_modes = result.get('fc_modes', {}) or {}
+            z_fc_modes = fc_modes.get('z_fc')
+            if z_fc_modes is None:
+                z_fc_modes = result.get('z_fc_modes')  # legacy fallback
+
+            mvmd_metadata = (result.get('mvmd', {}) or {}).get('metadata', {})
+            if not mvmd_metadata:
+                mvmd_metadata = result.get('mvmd_metadata', {})  # legacy fallback
+
+            center_freqs = mvmd_metadata.get('center_freqs')
 
             if z_fc_modes is None or center_freqs is None:
                 continue
@@ -3279,7 +3299,7 @@ def prepare_plotting_data(all_subject_results, verbose=True):
             subject_plotting_data['static_fc_matrix'] = r_fc_static
 
             # Add p-values and compute connectivity patterns for plotting
-            static_fc_pvalues = fc_static.get('p_values')
+            static_fc_pvalues = fc_static.get('p_values') or result.get('static_fc_pvalues')
             subject_plotting_data['static_fc_pvalues'] = static_fc_pvalues
             subject_plotting_data['static_connectivity_patterns'] = analyze_connectivity_patterns(
                 r_fc_static, labels_list, p_values=static_fc_pvalues
@@ -3291,11 +3311,14 @@ def prepare_plotting_data(all_subject_results, verbose=True):
             r_fc_modes = fc_modes['r_fc']
             subject_plotting_data['r_fc_modes'] = r_fc_modes
 
+            mode_fc_pvalues = fc_modes.get('p_values') or result.get('mode_fc_pvalues')
+
             # Aggregate modes into slow-bands for plotting
-            if result.get('mvmd_metadata', {}).get('center_freqs') is not None:
-                center_freqs = result['mvmd_metadata']['center_freqs']
+            mvmd_metadata = (result.get('mvmd', {}) or {}).get('metadata', {}) or result.get('mvmd_metadata', {})
+            center_freqs = mvmd_metadata.get('center_freqs')
+            if center_freqs is not None:
                 subject_plotting_data['slow_band_fc_modes'] = aggregate_modes_to_slow_bands_for_plotting(
-                    fc_modes.get('z_fc'), center_freqs, mode_fc_pvalues=result.get('mode_fc_pvalues'), verbose=False
+                    fc_modes.get('z_fc'), center_freqs, mode_fc_pvalues=mode_fc_pvalues, verbose=False
                 )
                 subject_plotting_data['center_freqs'] = center_freqs
 
@@ -3649,9 +3672,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"LIMITING ENABLED: Processing {len(low_anhedonic_to_process)} low-anhedonic + {len(high_anhedonic_to_process)} high-anhedonic + {len(non_anhedonic_to_process)} non-anhedonic subjects")
         print(f"  Total: {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_to_process)} non-anhedonic = {len(anhedonic_subjects_to_process) + len(non_anhedonic_to_process)} subjects")
     else:
-        anhedonic_subjects_to_process = accessible_anhedonic
+        # Use all accessible subjects, but retain subgroup membership for logging/statistics
+        low_anhedonic_to_process = [sid for sid in low_anhedonic_subjects if sid in accessible_anhedonic]
+        high_anhedonic_to_process = [sid for sid in high_anhedonic_subjects if sid in accessible_anhedonic]
+        anhedonic_subjects_to_process = low_anhedonic_to_process + high_anhedonic_to_process
         non_anhedonic_to_process = accessible_non_anhedonic
-        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic + {len(non_anhedonic_to_process)} non-anhedonic subjects")
+        print(f"FULL ANALYSIS: Processing {len(anhedonic_subjects_to_process)} anhedonic "
+              f"(low={len(low_anhedonic_to_process)}, high={len(high_anhedonic_to_process)}) "
+              f"+ {len(non_anhedonic_to_process)} non-anhedonic subjects")
 
     # ===== NEW 5-STAGE PIPELINE =====
 
@@ -4214,7 +4242,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     fc_labels = subject_data.get('static_fc_labels', [])
 
                     # Get mode p-values from result
-                    mode_fc_pvalues = result.get('mode_fc_pvalues')
+                    mode_fc_pvalues = (result.get('fc_modes', {}) or {}).get('p_values')
+                    if mode_fc_pvalues is None:
+                        mode_fc_pvalues = result.get('mode_fc_pvalues')  # legacy fallback
 
                     # Create plots for each mode
                     for mode_idx in range(r_fc_modes.shape[0]):
@@ -4253,31 +4283,31 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
                     for band_name, band_data in slow_band_fc_data.items():
                         # Compute connectivity patterns for this slow-band
-                        # Note: No p-values for slow-band aggregations (would need statistical testing)
+                        band_pvalues = None  # TODO: proper aggregation of mode-level p-values for bands
                         band_connectivity_patterns = analyze_connectivity_patterns(
                             band_data['fc_matrix'],
                             fc_labels,
-                            p_values=None,  # No p-values for aggregated slow-bands
+                            p_values=band_pvalues,
                             alpha=0.05
                         )
 
-                    plot_batches['fc_slow_bands_individual'].append({
-                        'subject_id': subject_id,
-                        'subject_group': subject_group,
-                        'band_name': band_name,
-                        'data': {
-                            'fc_matrix': band_data['fc_matrix'],
-                            'fc_labels': fc_labels,
-                            'fc_pvalues': band_data.get('fc_pvalues'),
-                            'connectivity_patterns': band_connectivity_patterns,
-                            'n_modes': band_data['n_modes'],
-                            'frequencies': band_data['frequencies']
-                        },
-                        'mask_diagonal': mask_diagonal,
-                        'mask_nonsignificant': mask_nonsignificant,
-                        'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
-                    })
-                    plots_for_subject += 1
+                        plot_batches['fc_slow_bands_individual'].append({
+                            'subject_id': subject_id,
+                            'subject_group': subject_group,
+                            'band_name': band_name,
+                            'data': {
+                                'fc_matrix': band_data['fc_matrix'],
+                                'fc_labels': fc_labels,
+                                'fc_pvalues': None,  # placeholder until we aggregate band-level p-values correctly
+                                'connectivity_patterns': band_connectivity_patterns,
+                                'n_modes': band_data['n_modes'],
+                                'frequencies': band_data['frequencies']
+                            },
+                            'mask_diagonal': mask_diagonal,
+                            'mask_nonsignificant': mask_nonsignificant,
+                            'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
+                        })
+                        plots_for_subject += 1
 
             debug_print(f"        About to check slow-band FC plots...")
             # 3c. Prepare slow-band FC plots (legacy)
@@ -4786,7 +4816,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['fc_matrix'],
                     plot_info['data']['fc_labels'],
-                    p_values=None,  # No p-values for aggregated slow-bands
+                    p_values=None,  # TODO: aggregate band-level p-values appropriately before plotting
                     connectivity_patterns=plot_info['data'].get('connectivity_patterns'),
                     channel_label_map=None,
                     mask_diagonal=plot_info['mask_diagonal'],
