@@ -4273,10 +4273,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                             'frequencies': band_data['frequencies']
                         },
                         'mask_diagonal': mask_diagonal,
-                            'mask_nonsignificant': mask_nonsignificant,
-                            'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
-                        })
-                        plots_for_subject += 1
+                        'mask_nonsignificant': mask_nonsignificant,
+                        'save_dir': fc_subject_dir if save_figures and fc_subject_dir else None
+                    })
+                    plots_for_subject += 1
 
             debug_print(f"        About to check slow-band FC plots...")
             # 3c. Prepare slow-band FC plots (legacy)
