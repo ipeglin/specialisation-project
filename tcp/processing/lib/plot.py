@@ -855,12 +855,6 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             ax2_inter.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2_inter.grid(True, alpha=0.3, axis='y')
 
-            # Calculate significance statistics
-            total_pairs = len(inter_data)
-            significant_pairs = sum(1 for pair_data in inter_data.values()
-                                   if pair_data.get('significant', False))
-            significance_pct = (significant_pairs / total_pairs * 100) if total_pairs > 0 else 0
-
             # Add group label in upper left if provided
             if subject_group:
                 ax2_inter.text(0.02, 0.98, f'Group: {subject_group}',
@@ -868,10 +862,16 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
 
-            # Add significance percentage text in bottom left
-            ax2_inter.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
-                    transform=ax2_inter.transAxes, fontsize=9, verticalalignment='bottom',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
+            # Add significance percentage text in bottom left (only if p-values were provided)
+            if p_values is not None:
+                total_pairs = len(inter_data)
+                significant_pairs = sum(1 for pair_data in inter_data.values()
+                                       if pair_data.get('significant', False))
+                significance_pct = (significant_pairs / total_pairs * 100) if total_pairs > 0 else 0
+
+                ax2_inter.text(0.02, 0.02, f'{significance_pct:.1f}% significant pairs\n({significant_pairs}/{total_pairs})',
+                        transform=ax2_inter.transAxes, fontsize=9, verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
             # Create legend with color-coded region/network pairs
             from matplotlib.patches import Patch
@@ -1378,12 +1378,6 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
             ax2_ipsi.axhline(y=0, color='black', linestyle='-', alpha=0.3)
             ax2_ipsi.grid(True, alpha=0.3, axis='y')
 
-            # Calculate significance statistics
-            total_ipsi_pairs = len(ipsi_data)
-            significant_ipsi_pairs = sum(1 for pair_data in ipsi_data.values()
-                                   if pair_data.get('significant', False))
-            ipsi_significance_pct = (significant_ipsi_pairs / total_ipsi_pairs * 100) if total_ipsi_pairs > 0 else 0
-
             # Add group label in upper left if provided
             if subject_group:
                 ax2_ipsi.text(0.02, 0.98, f'Group: {subject_group}',
@@ -1391,10 +1385,16 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
                         fontweight='bold',
                         bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7, edgecolor='gray'))
 
-            # Add significance percentage text in bottom left
-            ax2_ipsi.text(0.02, 0.02, f'{ipsi_significance_pct:.1f}% significant pairs\n({significant_ipsi_pairs}/{total_ipsi_pairs})',
-                    transform=ax2_ipsi.transAxes, fontsize=9, verticalalignment='bottom',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
+            # Add significance percentage text in bottom left (only if p-values were provided)
+            if p_values is not None:
+                total_ipsi_pairs = len(ipsi_data)
+                significant_ipsi_pairs = sum(1 for pair_data in ipsi_data.values()
+                                       if pair_data.get('significant', False))
+                ipsi_significance_pct = (significant_ipsi_pairs / total_ipsi_pairs * 100) if total_ipsi_pairs > 0 else 0
+
+                ax2_ipsi.text(0.02, 0.02, f'{ipsi_significance_pct:.1f}% significant pairs\n({significant_ipsi_pairs}/{total_ipsi_pairs})',
+                        transform=ax2_ipsi.transAxes, fontsize=9, verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
 
             # Create legend with color-coded ipsilateral connections
             from matplotlib.patches import Patch
@@ -1658,8 +1658,8 @@ def plot_signal_decomposition(original, components, subject_id=None, channel_lab
 
         current_batch.append(fig)
 
-        # Yield batch when it reaches max size
-        if len(current_batch) >= max_figures_per_batch:
+        # Yield batch when it reaches max size (if max_figures_per_batch is set)
+        if max_figures_per_batch is not None and len(current_batch) >= max_figures_per_batch:
             yield current_batch
             current_batch = []
 
@@ -2455,8 +2455,6 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
                 a_short = a.split('-')[0].capitalize()
                 b_short = b.split('-')[0].capitalize()
                 stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
-        elif post_hoc_df is not None:
-            stats_text.append('Games-Howell post-hoc not shown (omnibus not significant after FDR)')
 
         if stats_text:
             ax.text(0.02, 0.98, '\n'.join(stats_text),
@@ -2626,8 +2624,6 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 a_short = a.split('-')[0].capitalize()
                 b_short = b.split('-')[0].capitalize()
                 stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
-        elif post_hoc_df is not None:
-            stats_text.append('Games-Howell post-hoc not shown (omnibus not significant after FDR)')
 
         if stats_text:
             ax.text(0.02, 0.98, '\n'.join(stats_text),
@@ -2667,7 +2663,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 all_conn_keys.add(conn_key)
                 all_bands.update(band_dict.keys())
 
-        for band_name in sorted(all_bands, key=lambda x: int(x.split('-')[1]) if 'slow-' in x else 0, reverse=True):
+        for band_name in sorted(all_bands, key=lambda x: int(x.split('-')[1]) if 'Slow-' in x else 0, reverse=True):
             for conn_key in sorted(all_conn_keys):
                 plot_data = []
                 for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:

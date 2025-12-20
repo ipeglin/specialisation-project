@@ -68,7 +68,7 @@ from tcp.processing.roi import (
     ROIExtractionService,
     SubCorticalAtlasLookup,
 )
-from tcp.processing.utils.lists import chunks, split_by_sizes
+from tcp.processing.utils.lists import split_by_sizes
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,7 @@ def compute_fc_per_mode(time_modes, channel_labels, verbose=False):
         # Handle case where compute_fc_matrix returns None (shouldn't happen with valid input)
         if fc_matrix is None:
             if verbose:
-                print(f"  [WARNING] Mode {mode_idx}: FC computation returned None, skipping")
+                print(f"  [WARNING] Mode {mode_idx + 1}: FC computation returned None, skipping")
             mode_fc_matrices[mode_idx, :, :] = np.nan
             mode_fc_z_matrices[mode_idx, :, :] = np.nan
             mode_fc_pvalues[mode_idx, :, :] = np.nan
@@ -385,7 +385,7 @@ def aggregate_mode_fc_to_bands(mode_fc_data, mode_frequencies, verbose=False):
             fc_pvalues = mode_fc_pvalues[mode_idx, :, :]
 
             if verbose:
-                print(f"\n  Slow-{band_num}: Using single mode (mode {mode_idx}, freq={mode_freqs[0]:.4f} Hz)")
+                print(f"\n  Slow-{band_num}: Using single mode (mode {mode_idx + 1}, freq={mode_freqs[0]:.4f} Hz)")
 
         else:
             # Multiple modes in band: Average using Fisher Z-transformation
@@ -949,7 +949,7 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
         mode_coherence_by_band[band_num].append(mode_network_coherence)
 
         if verbose and len(mode_network_coherence) > 0:
-            print(f"    Mode {mode_idx} (freq={freq:.4f} Hz, band=Slow-{band_num}): {len(mode_network_coherence)} networks")
+            print(f"    Mode {mode_idx + 1} (freq={freq:.4f} Hz, band=Slow-{band_num}): {len(mode_network_coherence)} networks")
 
     # Level 2: Average across modes within each band (spectral reduction)
     band_specific_coherence = {}
@@ -988,7 +988,7 @@ def compute_band_specific_coherence(mode_fc_data, mode_frequencies, verbose=Fals
         band_specific_coherence[band_name] = band_coherence
 
         if verbose:
-            print(f"    {band_name}: {len(band_coherence)} networks, {modes_in_band_count} modes averaged")
+            print(f"    {band_name.capitalize()}: {len(band_coherence)} networks, {modes_in_band_count} modes averaged")
 
     return band_specific_coherence
 
@@ -1667,13 +1667,13 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 }
             },
 
-            """ LEGACY UNDERNEATH """
-            'z_fc_static': z_fc_static, # LEGACY
-            'static_fc_pvalues': fc_pvalues, # LEGACY
-            'z_fc_modes': z_fc_modes, # LEGACY
-            'mode_fc_pvalues': mode_fc_data.get('mode_fc_pvalues') if mode_fc_data else None, # LEGACY
-            'analytic_signal_modes': analytic_signal_modes, # LEGACY
-            'mvmd_metadata': mvmd_metadata, # LEGACY
+            # """ LEGACY UNDERNEATH """
+            # 'z_fc_static': z_fc_static, # LEGACY
+            # 'static_fc_pvalues': fc_pvalues, # LEGACY
+            # 'z_fc_modes': z_fc_modes, # LEGACY
+            # 'mode_fc_pvalues': mode_fc_data.get('mode_fc_pvalues') if mode_fc_data else None, # LEGACY
+            # 'analytic_signal_modes': analytic_signal_modes, # LEGACY
+            # 'mvmd_metadata': mvmd_metadata, # LEGACY
         }
 
     except Exception as e:
@@ -2049,8 +2049,6 @@ def compute_band_specific_coherence_from_modes(z_fc_modes, center_freqs, network
     Returns:
         dict: Band-specific coherence values {band_name: coherence_value}
     """
-    from tcp.processing.lib.slow_band import get_frequency_range
-
     # Group modes by slow-band
     band_modes = {}
     for mode_idx, freq in enumerate(center_freqs):
@@ -3299,7 +3297,7 @@ def prepare_plotting_data(all_subject_results, verbose=True):
             subject_plotting_data['static_fc_matrix'] = r_fc_static
 
             # Add p-values and compute connectivity patterns for plotting
-            static_fc_pvalues = fc_static.get('p_values') or result.get('static_fc_pvalues')
+            static_fc_pvalues = fc_static.get('p_values')
             subject_plotting_data['static_fc_pvalues'] = static_fc_pvalues
             subject_plotting_data['static_connectivity_patterns'] = analyze_connectivity_patterns(
                 r_fc_static, labels_list, p_values=static_fc_pvalues
@@ -3311,7 +3309,7 @@ def prepare_plotting_data(all_subject_results, verbose=True):
             r_fc_modes = fc_modes['r_fc']
             subject_plotting_data['r_fc_modes'] = r_fc_modes
 
-            mode_fc_pvalues = fc_modes.get('p_values') or result.get('mode_fc_pvalues')
+            mode_fc_pvalues = fc_modes.get('p_values')
 
             # Aggregate modes into slow-bands for plotting
             mvmd_metadata = (result.get('mvmd', {}) or {}).get('metadata', {}) or result.get('mvmd_metadata', {})
@@ -3463,6 +3461,40 @@ def aggregate_modes_to_slow_bands_for_plotting(z_fc_modes, center_freqs, mode_fc
 #                 print(f"  {band_name}: {len(z_matrices_list)} mode matrices aggregated for {group_name}")
 
 #     return group_slow_bands
+
+
+def display_plots_in_batches(batch_size=20):
+    """
+    Display currently open matplotlib figures in batches to prevent system overload.
+
+    WARNING: Due to matplotlib limitations, this function can only display figures once.
+    If there are more figures than batch_size, only the first batch_size will be shown.
+    The calling code should handle creating and displaying figures in smaller batches.
+
+    Args:
+        batch_size: Maximum number of plots to display at once (default: 20)
+    """
+    import matplotlib.pyplot as plt
+
+    all_fignums = plt.get_fignums()
+    total_figures = len(all_fignums)
+
+    if total_figures == 0:
+        return
+
+    if total_figures > batch_size:
+        print(f"  WARNING: {total_figures} figures detected, but only {batch_size} can be displayed per batch.")
+        print(f"           Displaying first {batch_size} figures. Remaining {total_figures - batch_size} will be closed.")
+
+        # Close excess figures
+        for fignum in all_fignums[batch_size:]:
+            plt.close(fignum)
+
+        print(f"  Displaying plots 1-{batch_size} of {batch_size}. Close all figures to continue...")
+    else:
+        print(f"  Displaying {total_figures} plots. Close all figures to continue...")
+
+    plt.show()
 
 
 def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
@@ -4518,6 +4550,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         # Batch 1: ROI Cortical Timeseries
         if plot_batches['roi_cortical']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_cortical'])} cortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_cortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Cortical')
@@ -4545,12 +4578,12 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     if not show_plots:
                         plt.close(fig)
             if show_plots:
-                print(f"  Displaying {len(plot_batches['roi_cortical'])} cortical ROI plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 2: ROI Subcortical Timeseries
         if plot_batches['roi_subcortical']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['roi_subcortical'])} subcortical ROI timeseries plots...")
             for plot_info in plot_batches['roi_subcortical']:
                 figures = plot_roi_timeseries_result(plot_info['data'], subject_id=plot_info['subject_id'], atlas_type='Subcortical')
@@ -4576,12 +4609,12 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     if not show_plots:
                         plt.close(fig)
             if show_plots:
-                print(f"  Displaying {len(plot_batches['roi_subcortical'])} subcortical ROI plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 3: Multivariate Hilbert Spectrum
         if plot_batches['hsa_multivariate']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
 
             for plot_info in plot_batches['hsa_multivariate']:
@@ -4610,12 +4643,12 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         plt.close(hs_fig)
 
             if show_plots:
-                print(f"  Displaying {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 4: Marginal Spectrum per Mode
         if plot_batches['hsa_marginal']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
 
             for plot_info in plot_batches['hsa_marginal']:
@@ -4644,63 +4677,77 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         plt.close(mhs_fig)
 
             if show_plots:
-                print(f"  Displaying {len(plot_batches['hsa_marginal'])} Marginal Spectrum plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 5: Static FC Analysis
         if plot_batches['fc_static']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_static'])} static FC plots...")
-            for plot_info in plot_batches['fc_static']:
-                # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
-                csv_output_dir = fc_output_dir if save_figures else None
 
-                fc_fig_inter, fc_fig_ipsi = plot_fc_results(
-                    plot_info['data']['static_fc_matrix'],
-                    plot_info['data']['static_fc_labels'],
-                    p_values=plot_info['data']['static_fc_pvalues'],
-                    connectivity_patterns=plot_info['data']['static_connectivity_patterns'],
-                    channel_label_map=plot_info['data'].get('channel_label_map'),
-                    mask_diagonal=plot_info['mask_diagonal'],
-                    mask_nonsignificant=plot_info['mask_nonsignificant'],
-                    subject_group=plot_info['subject_group'],
-                    subject_id=plot_info['subject_id'],
-                    output_dir=csv_output_dir,
-                    verbose=verbose
-                )
-                if fc_fig_inter is None or fc_fig_ipsi is None:
-                    print(f"  Skipping static FC plot for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
-                    continue
-                fc_fig_inter.suptitle(f'FC Analysis (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
-                fc_fig_ipsi.suptitle(f'FC Analysis (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+            # Process in sub-batches to avoid showing too many figures at once
+            # Each plot creates 2 figures (inter + ipsi), so max 10 plots = 20 figures
+            MAX_PLOTS_PER_DISPLAY = 10
+            total_plots = len(plot_batches['fc_static'])
+            num_display_batches = (total_plots + MAX_PLOTS_PER_DISPLAY - 1) // MAX_PLOTS_PER_DISPLAY
 
-                if plot_info['save_dir']:
-                    # Create subject directory
-                    subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
-                    subject_fc_dir.mkdir(parents=True, exist_ok=True)
+            for display_batch_idx in range(num_display_batches):
+                start_idx = display_batch_idx * MAX_PLOTS_PER_DISPLAY
+                end_idx = min((display_batch_idx + 1) * MAX_PLOTS_PER_DISPLAY, total_plots)
+                current_display_batch = plot_batches['fc_static'][start_idx:end_idx]
 
-                    # Save interhemispheric figure
-                    save_path_inter = subject_fc_dir / 'static_fc_interhemispheric.svg'
-                    fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
-                    figures_saved_count += 1
+                for plot_info in current_display_batch:
+                    # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
+                    csv_output_dir = fc_output_dir if save_figures else None
 
-                    # Save ipsilateral figure
-                    save_path_ipsi = subject_fc_dir / 'static_fc_ipsilateral.svg'
-                    fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
-                    figures_saved_count += 1
+                    fc_fig_inter, fc_fig_ipsi = plot_fc_results(
+                        plot_info['data']['static_fc_matrix'],
+                        plot_info['data']['static_fc_labels'],
+                        p_values=plot_info['data']['static_fc_pvalues'],
+                        connectivity_patterns=plot_info['data']['static_connectivity_patterns'],
+                        channel_label_map=plot_info['data'].get('channel_label_map'),
+                        mask_diagonal=plot_info['mask_diagonal'],
+                        mask_nonsignificant=plot_info['mask_nonsignificant'],
+                        subject_group=plot_info['subject_group'],
+                        subject_id=plot_info['subject_id'],
+                        output_dir=csv_output_dir,
+                        verbose=verbose
+                    )
+                    if fc_fig_inter is None or fc_fig_ipsi is None:
+                        print(f"  Skipping static FC plot for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                        continue
+                    fc_fig_inter.suptitle(f'FC Analysis (Interhemispheric) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
+                    fc_fig_ipsi.suptitle(f'FC Analysis (Ipsilateral) - {plot_info["subject_id"]}', fontsize=16, fontweight='bold')
 
-                if not show_plots:
-                    plt.close(fc_fig_inter)
-                    plt.close(fc_fig_ipsi)
-            if show_plots and len(plot_batches['fc_static']) >= 20:
-                print(f"  Skipping display of {len(plot_batches['fc_static'])} FC plots. Will be too memory exhaustive...")
-            elif show_plots:
-                print(f"  Displaying {len(plot_batches['fc_static'])} FC plots. Close all figures to continue...")
-                plt.show()
+                    if plot_info['save_dir']:
+                        # Create subject directory
+                        subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
+                        subject_fc_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Save interhemispheric figure
+                        save_path_inter = subject_fc_dir / 'static_fc_interhemispheric.svg'
+                        fc_fig_inter.savefig(save_path_inter, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                        # Save ipsilateral figure
+                        save_path_ipsi = subject_fc_dir / 'static_fc_ipsilateral.svg'
+                        fc_fig_ipsi.savefig(save_path_ipsi, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                    if not show_plots:
+                        plt.close(fc_fig_inter)
+                        plt.close(fc_fig_ipsi)
+
+                # Display this sub-batch if showing plots
+                if show_plots:
+                    if num_display_batches > 1:
+                        print(f"  Sub-batch {display_batch_idx + 1}/{num_display_batches}")
+                    display_plots_in_batches()
 
         # Batch 6: Slow-Band FC Analysis
         if plot_batches['fc_slow_bands']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
@@ -4750,15 +4797,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                 if not show_plots:
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
-            if show_plots and len(plot_batches['fc_slow_bands']) >= 20:
-                print(f"  Skipping display of {len(plot_batches['fc_slow_bands'])} FC plots. Will be too memory exhaustive...")
-            elif show_plots:
-                print(f"  Displaying {len(plot_batches['fc_slow_bands'])} slow-band FC plots. Close all figures to continue...")
-                plt.show()
+            if show_plots:
+                display_plots_in_batches()
 
         # Batch 6a: Per-Mode FC Analysis
         if plot_batches['fc_per_mode']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_per_mode'])} per-mode FC plots...")
             for plot_info in plot_batches['fc_per_mode']:
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -4777,13 +4822,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     verbose=verbose
                 )
                 if fc_fig_inter is None or fc_fig_ipsi is None:
-                    print(f"  Skipping per-mode FC plot (mode {plot_info['mode_idx']}) for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
+                    print(f"  Skipping per-mode FC plot (mode {plot_info['mode_idx'] + 1}) for {plot_info['subject_id']} due to missing data (empty matrix/labels)")
                     continue
 
                 mode_idx = plot_info['mode_idx']
                 frequency = plot_info['frequency']
-                fc_fig_inter.suptitle(f'Mode {mode_idx} FC (Interhemispheric) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
-                fc_fig_ipsi.suptitle(f'Mode {mode_idx} FC (Ipsilateral) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
+                fc_fig_inter.suptitle(f'Mode {mode_idx + 1} FC (Interhemispheric) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'Mode {mode_idx + 1} FC (Ipsilateral) - {plot_info["subject_id"]} ({frequency:.4f} Hz)', fontsize=12, fontweight='bold')
 
                 if plot_info['save_dir']:
                     subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
@@ -4800,15 +4845,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
 
-            if show_plots and len(plot_batches['fc_per_mode']) >= 20:
-                print(f"  Skipping display of {len(plot_batches['fc_per_mode'])} FC plots. Will be too memory exhaustive...")
-            elif show_plots:
-                print(f"  Displaying {len(plot_batches['fc_per_mode'])} per-mode FC plots. Close all figures to continue...")
-                plt.show()
+            if show_plots:
+                display_plots_in_batches()
 
         # Batch 6b: Individual Subject Slow-Band FC Analysis
         if plot_batches['fc_slow_bands_individual']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands_individual']:
                 csv_output_dir = fc_output_dir if save_figures else None
@@ -4833,8 +4876,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
                 band_name = plot_info['band_name']
                 n_modes = plot_info['data']['n_modes']
-                fc_fig_inter.suptitle(f'{band_name} FC (Interhemispheric) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
-                fc_fig_ipsi.suptitle(f'{band_name} FC (Ipsilateral) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
+                fc_fig_inter.suptitle(f'{band_name.capitalize()} FC (Interhemispheric) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'{band_name.capitalize()} FC (Ipsilateral) - {plot_info["subject_id"]} ({n_modes} modes)', fontsize=12, fontweight='bold')
 
                 if plot_info['save_dir']:
                     subject_fc_dir = plot_info['save_dir'] / plot_info['subject_id']
@@ -4851,15 +4894,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
 
-            if show_plots and len(plot_batches['fc_slow_bands_individual']) >= 20:
-                print(f"  Skipping display of {len(plot_batches['fc_slow_bands_individual'])} FC plots. Will be too memory exhaustive...")
-            elif show_plots:
-                print(f"  Displaying {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots. Close all figures to continue...")
-                plt.show()
+            if show_plots:
+                display_plots_in_batches()
 
         # Batch 6c: Cross-Subject Slow-Band FC Analysis
         if plot_batches['fc_slow_bands_cross_subject']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands_cross_subject']:
 
@@ -4878,14 +4919,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     band_name=plot_info['band_name']
                 )
                 if fc_fig_inter is None or fc_fig_ipsi is None:
-                    print(f"  Skipping cross-subject slow-band FC plot ({plot_info['band_name']}) due to missing data (empty matrix/labels)")
+                    print(f"  Skipping cross-subject slow-band FC plot ({plot_info['band_name'].capitalize()}) due to missing data (empty matrix/labels)")
                     continue
 
                 band_name = plot_info['band_name']
                 description = plot_info['data']['description']
 
-                fc_fig_inter.suptitle(f'{band_name} FC (Interhemispheric) - {description}', fontsize=12, fontweight='bold')
-                fc_fig_ipsi.suptitle(f'{band_name} FC (Ipsilateral) - {description}', fontsize=12, fontweight='bold')
+                fc_fig_inter.suptitle(f'FC (Interhemispheric) - {description}', fontsize=12, fontweight='bold')
+                fc_fig_ipsi.suptitle(f'FC (Ipsilateral) - {description}', fontsize=12, fontweight='bold')
 
                 if plot_info['save_path']:
                     save_path_inter = plot_info['save_path'].parent / f'{plot_info["save_path"].stem}_interhemispheric.svg'
@@ -4899,15 +4940,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
 
-            if show_plots and len(plot_batches['fc_slow_bands_cross_subject']) >= 20:
-                print(f"  Skipping display of {len(plot_batches['fc_slow_bands_cross_subject'])} FC plots. Will be too memory exhaustive...")
-            elif show_plots:
-                print(f"  Displaying {len(plot_batches['fc_slow_bands_cross_subject'])} cross-subject slow-band FC plots. Close all figures to continue...")
-                plt.show()
+            if show_plots:
+                display_plots_in_batches()
 
         # Batch 7: Group-Averaged FC Analysis
         if plot_batches['fc_group_avg']:
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_group_avg'])} group-averaged FC plots...")
             for plot_info in plot_batches['fc_group_avg']:
                 # Compute connectivity patterns for group-averaged matrix
@@ -4987,13 +5026,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fc_fig_inter)
                     plt.close(fc_fig_ipsi)
             if show_plots:
-                print(f"  Displaying {len(plot_batches['fc_group_avg'])} group-averaged FC plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 8: Interhemispheric Intra-Network Violin Plots
         if plot_batches['interhemispheric_violin']:
             current_plot_batch += 1
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['interhemispheric_violin'])} interhemispheric intra-network violin plots...")
+            # Don't close all figures here - violin plots are pre-created
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric intra-network violin plots...")
 
             # Suppress seaborn warnings about identical ylims
             warnings.filterwarnings('ignore', message='Attempting to set identical low and high ylims')
@@ -5022,13 +5061,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fig)
 
             if show_plots:
-                print(f"  Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric violin plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 9: Ipsilateral Intra-Network Violin Plots
         if plot_batches['ipsilateral_violin']:
             current_plot_batch += 1
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['ipsilateral_violin'])} ipsilateral intra-network violin plots...")
+            # Don't close all figures here - violin plots are pre-created
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['ipsilateral_violin'])} ipsilateral intra-network violin plots...")
 
             for plot_info in plot_batches['ipsilateral_violin']:
                 fig = plot_info['figure']
@@ -5054,18 +5093,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     plt.close(fig)
 
             if show_plots:
-                print(f"  Displaying {len(plot_batches['ipsilateral_violin'])} ipsilateral violin plots. Close all figures to continue...")
-                plt.show()
+                display_plots_in_batches()
 
         # Batch 9: MVMD Mode Decomposition
         if plot_batches['mvmd_modes']:
             total_mode_figs = sum(p['mvmd_data']['original'].shape[0] for p in plot_batches['mvmd_modes'])
             current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {total_mode_figs} MVMD mode decomposition plots ({len(plot_batches['mvmd_modes'])} subjects)...")
-
-            # Process in sub-batches of 28 figures to avoid memory issues
-            MAX_FIGS_PER_BATCH = 28
-            current_batch_figs = []
 
             for plot_info in plot_batches['mvmd_modes']:
                 mvmd_figure_generator = plot_signal_decomposition(
@@ -5074,7 +5109,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     subject_id=plot_info['subject_id'],
                     channel_label_map=plot_info['channel_label_map'],
                     center_freqs=plot_info['center_freqs'],
-                    max_figures_per_batch=MAX_FIGS_PER_BATCH
+                    max_figures_per_batch=None
                 )
 
                 # Process each batch of figures from the generator
@@ -5096,24 +5131,15 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                             fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
                             figures_saved_count += 1
 
-                    if show_plots:
-                        current_batch_figs.extend(mvmd_figures)
-
-                        # Display and clear batch when reaching limit
-                        if len(current_batch_figs) >= MAX_FIGS_PER_BATCH:
-                            print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-                            plt.show()
-                            current_batch_figs = []
-                    else:
+                    if not show_plots:
                         for fig in mvmd_figures:
                             plt.close(fig)
 
                     channel_idx_base += len(mvmd_figures)
 
-            # Display remaining figures if any
-            if show_plots and current_batch_figs:
-                print(f"  Displaying {len(current_batch_figs)} MVMD mode plots. Close all figures to continue...")
-                plt.show()
+            # Display all MVMD figures in batches
+            if show_plots:
+                display_plots_in_batches()
 
 
         print(f"\n{'='*80}")
