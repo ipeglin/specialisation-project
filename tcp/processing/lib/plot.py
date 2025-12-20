@@ -2445,7 +2445,8 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        if post_hoc_df is not None:
+        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
             for _, row in post_hoc_df.iterrows():
                 a = row['A']
@@ -2455,6 +2456,8 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
                 a_short = a.split('-')[0].capitalize()
                 b_short = b.split('-')[0].capitalize()
                 stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
+        elif post_hoc_df is not None:
+            stats_text.append('Games-Howell post-hoc not shown (omnibus not significant after FDR)')
 
         if stats_text:
             ax.text(0.02, 0.98, '\n'.join(stats_text),
@@ -2614,7 +2617,8 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        if post_hoc_df is not None:
+        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
             for _, row in post_hoc_df.iterrows():
                 a = row['A']
@@ -2624,6 +2628,8 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 a_short = a.split('-')[0].capitalize()
                 b_short = b.split('-')[0].capitalize()
                 stats_text.append(f'  {a_short} vs {b_short}: p = {p_val:.4f} {sig_marker}')
+        elif post_hoc_df is not None:
+            stats_text.append('Games-Howell post-hoc not shown (omnibus not significant after FDR)')
 
         if stats_text:
             ax.text(0.02, 0.98, '\n'.join(stats_text),
