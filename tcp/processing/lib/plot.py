@@ -2680,7 +2680,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 if not plot_data:
                     continue
                 df = pd.DataFrame(plot_data)
-                title_label = f\"{conn_key}\"
+                title_label = f"{conn_key}"
                 fig = _make_violin(df, f'{band_name}_ipsi', conn_key, ipsi_slow_anova, title_label)
                 figures.append((fig, {'band_name': f'{band_name}_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
 
