@@ -4039,6 +4039,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     fc_subject_dir = None
     fc_group_dir = None
     welch_interhemi_dir = None
+    welch_ipsi_dir = None
     mvmd_figures_dir = None
     hsa_figures_dir = None
     marginal_hsa_figures_dir = None
