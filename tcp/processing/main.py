@@ -4071,11 +4071,26 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             band = post_hoc_data['band']
             post_hoc_df = post_hoc_data['post_hoc']
 
-            # Clean network and band names for filename
-            safe_network = network.replace('/', '_').replace(' ', '_')
-            safe_band = band.replace('/', '_').replace(' ', '_')
+            # Create compact, readable filename with network abbreviations
+            network_abbrev = (network
+                .replace('Default', 'Def')
+                .replace('Control', 'Ctrl')
+                .replace('Dorsal-attention', 'DorsAtt')
+                .replace('Ventral-attention', 'VentAtt')
+                .replace('Salience', 'Sal')
+                .replace('Limbic', 'Lim')
+                .replace('Frontoparietal', 'FP')
+                .replace('Somatomotor', 'SM')
+                .replace('Visual', 'Vis')
+                .replace('/', '_')
+                .replace(' ', '_')
+                .replace('-', '_'))
 
-            filename = f"games_howell_{safe_network}_{safe_band}.csv"
+            # Abbreviate band: "slow-1" -> "s1", "Slow-1" -> "s1"
+            band_abbrev = band.lower().replace('slow-', 's').replace('slow_', 's')
+
+            # Format: posthoc_{network}_{band}.csv
+            filename = f"posthoc_{network_abbrev}_{band_abbrev}.csv"
             filepath = post_hoc_dir / filename
 
             # Save with additional metadata
