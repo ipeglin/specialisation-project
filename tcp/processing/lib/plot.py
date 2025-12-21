@@ -2600,10 +2600,12 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
         ax.set_title(f'{title_label} - {band_name}', fontsize=14, fontweight='bold', pad=20)
 
         stats_text = []
+        # Calculate actual group sizes from the plot data for reliability
+        actual_group_sizes = df['group'].value_counts().to_dict()
         n_text = 'N: ' + ', '.join([
-            f"{g.split('-')[0].capitalize()}={group_sizes.get(g, 0)}"
+            f"{g.split('-')[0].capitalize()}={actual_group_sizes.get(g, 0)}"
             for g in group_order
-            if g in group_sizes
+            if actual_group_sizes.get(g, 0) > 0
         ])
         stats_text.append(n_text)
 

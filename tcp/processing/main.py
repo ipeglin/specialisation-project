@@ -4071,26 +4071,33 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             band = post_hoc_data['band']
             post_hoc_df = post_hoc_data['post_hoc']
 
-            # Create compact, readable filename with network abbreviations
-            network_abbrev = (network
-                .replace('Default', 'Def')
-                .replace('Control', 'Ctrl')
-                .replace('Dorsal-attention', 'DorsAtt')
-                .replace('Ventral-attention', 'VentAtt')
-                .replace('Salience', 'Sal')
-                .replace('Limbic', 'Lim')
+            # Create short, filesystem-safe filename
+            # Use very short network abbreviations to avoid truncation
+            network_short = (network
+                .replace('Default', 'DF')
+                .replace('Control', 'CO')
+                .replace('Dorsal-attention', 'DA')
+                .replace('Ventral-attention', 'VA')
+                .replace('Salience', 'SA')
+                .replace('Limbic', 'LI')
                 .replace('Frontoparietal', 'FP')
                 .replace('Somatomotor', 'SM')
-                .replace('Visual', 'Vis')
-                .replace('/', '_')
-                .replace(' ', '_')
-                .replace('-', '_'))
+                .replace('Visual', 'VI')
+                .replace('/', '')
+                .replace(' ', '')
+                .replace('-', ''))
 
-            # Abbreviate band: "slow-1" -> "s1", "Slow-1" -> "s1"
-            band_abbrev = band.lower().replace('slow-', 's').replace('slow_', 's')
+            # Simplify band notation
+            if 'static' in band.lower():
+                band_short = 'static'
+            elif 'ipsi' in band.lower():
+                band_short = 'ipsi'
+            else:
+                # For slow bands: "slow-1" -> "s1"
+                band_short = band.lower().replace('slow-', 's').replace('slow_', 's')
 
-            # Format: posthoc_{network}_{band}.csv
-            filename = f"posthoc_{network_abbrev}_{band_abbrev}.csv"
+            # Format: gh_{network}_{band}.csv (Games-Howell abbreviated)
+            filename = f"gh_{network_short}_{band_short}.csv"
             filepath = post_hoc_dir / filename
 
             # Save with additional metadata
