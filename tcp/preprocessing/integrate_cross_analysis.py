@@ -42,6 +42,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.config.data_source_config import DataSourceConfig, DataSourceType, create_datalad_config
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 from tcp.preprocessing.utils.subject_id_transform import manifest_to_directory_id
 
@@ -51,16 +52,20 @@ class CrossAnalysisIntegrator:
 
     def __init__(self,
                  analysis_groups_dir: Optional[Path] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 data_source_config: Optional[DataSourceConfig] = None):
         self.analysis_groups_dir = Path(analysis_groups_dir) if analysis_groups_dir else \
             get_script_output_path('tcp_preprocessing', 'generate_analysis_groups')
         self.output_dir = Path(output_dir) if output_dir else \
             get_script_output_path('tcp_preprocessing', 'integrate_cross_analysis')
+        self.data_source_config = data_source_config or create_datalad_config(get_tcp_dataset_path())
 
         self.combined_subjects: Optional[pd.DataFrame] = None
+        self.subject_file_mapping: Optional[Dict] = None
 
         print(f"Analysis groups input: {self.analysis_groups_dir}")
         print(f"Output directory: {self.output_dir}")
+        print(f"Data source: {self.data_source_config.source_type.value}")
 
     def load_combined_subjects_data(self) -> None:
         """Load the combined subjects data with all classifications"""
@@ -83,6 +88,92 @@ class CrossAnalysisIntegrator:
         if missing_cols:
             print(f"  Available columns: {list(self.combined_subjects.columns)}")
             raise ValueError(f"Missing required columns: {missing_cols}")
+
+    def _load_subject_file_mapping(self) -> Dict:
+        """Load subject file mapping from map_subject_files.py output"""
+        print("Loading subject file mapping...")
+
+        mapping_file = get_script_output_path('tcp_preprocessing', 'map_subject_files') / "subject_file_mapping.json"
+
+        if not mapping_file.exists():
+            raise FileNotFoundError(
+                f"Subject file mapping not found: {mapping_file}\n"
+                f"Please run map_subject_files.py first."
+            )
+
+        with open(mapping_file, 'r') as f:
+            mapping_data = json.load(f)
+
+        self.subject_file_mapping = mapping_data.get('subjects', {})
+        print(f"  Loaded file mappings for {len(self.subject_file_mapping)} subjects")
+
+        return self.subject_file_mapping
+
+    def _parcellate_hcp_subjects(self) -> None:
+        """
+        Parcellate HCP subjects that don't have .h5 files yet.
+
+        This method:
+        1. Identifies HCP subjects without .h5 files
+        2. Parcellates their NIFTI files using HCPParcellator
+        3. Updates the file mapping with new .h5 paths
+        """
+        if not self.data_source_config.is_hcp_enabled():
+            return
+
+        if not self.subject_file_mapping:
+            self._load_subject_file_mapping()
+
+        # Find HCP subjects without .h5 files
+        hcp_subjects_to_parcellate = []
+        for subject_id, file_map in self.subject_file_mapping.items():
+            if file_map.get('data_source') == 'hcp':
+                # Check if timeseries .h5 files exist
+                has_h5 = any(len(files) > 0 for files in file_map.get('timeseries', {}).values())
+                if not has_h5:
+                    hcp_subjects_to_parcellate.append(subject_id)
+
+        if not hcp_subjects_to_parcellate:
+            print("No HCP subjects need parcellation")
+            return
+
+        print(f"\nParcellating {len(hcp_subjects_to_parcellate)} HCP subjects...")
+
+        # Import HCPParcellator
+        from tcp.preprocessing.hcp_parcellation import HCPParcellator
+
+        # Initialize parcellator
+        parcellator = HCPParcellator(
+            hcp_root=self.data_source_config.hcp_root,
+            verbose=True
+        )
+
+        # Create output directory
+        output_dir = self.data_source_config.hcp_parcellated_output
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Parcellate subjects (sequential for now, can be parallelized later)
+        successful = 0
+        failed = 0
+
+        for subject_id in hcp_subjects_to_parcellate:
+            try:
+                h5_path = parcellator.parcellate_subject(
+                    subject_id=subject_id,
+                    task=self.data_source_config.default_task,
+                    output_dir=output_dir
+                )
+
+                # Update file mapping
+                task = self.data_source_config.default_task
+                self.subject_file_mapping[subject_id]['timeseries'][task] = [str(h5_path.absolute())]
+                successful += 1
+
+            except Exception as e:
+                print(f"  ERROR: Failed to parcellate {subject_id}: {e}")
+                failed += 1
+
+        print(f"\nParcellation complete: {successful} successful, {failed} failed")
 
     def generate_cross_tabulations(self) -> Dict:
         """Generate comprehensive cross-tabulation analyses"""
@@ -352,7 +443,11 @@ class CrossAnalysisIntegrator:
             # Convert subject ID to directory format using utility function
             subject_dir_id = manifest_to_directory_id(subject_id)
             
+            # Get data source for this subject
+            data_source = subject_row.get('data_source', 'datalad')
+
             subject_manifest = {
+                "data_source": data_source,
                 "demographics": {
                     "age": subject_row.get('age', None),
                     "sex": subject_row.get('sex', None),
@@ -371,12 +466,13 @@ class CrossAnalysisIntegrator:
                 "files": {
                     "timeseries": {
                         "base_path": f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}",
-                        "available": [],  # Will be populated by file scanning
-                        "patterns": ["*_parcellated.h5"]
+                        "available": [],  # Will be populated below
+                        "patterns": ["*_parcellated.h5"],
+                        "path_type": "relative" if data_source == "datalad" else "absolute"
                     },
                     "motion": {
                         "base_path": "motion_FD",
-                        "available": [],  # Will be populated by file scanning
+                        "available": [],  # Will be populated below
                         "patterns": ["TCP_FD_*.csv"]
                     }
                 },
@@ -388,29 +484,36 @@ class CrossAnalysisIntegrator:
                 },
                 "validation_status": "validated"  # All subjects in this pipeline are validated
             }
-            
+
             # Determine analysis group memberships
             for group_name, dataset in analysis_datasets.items():
                 if subject_id in dataset['subject_id'].values:
                     subject_manifest["analysis_group_memberships"].append(group_name)
-            
-            # Check for actual file availability (basic check)
-            timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
-            if timeseries_dir.exists():
-                # List available timeseries files
-                timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+
+            # Populate timeseries files based on data source
+            if self.subject_file_mapping and subject_id in self.subject_file_mapping:
+                # Use file mapping from map_subject_files.py
+                file_map = self.subject_file_mapping[subject_id]
+                timeseries_files = []
+                for task, files in file_map.get('timeseries', {}).items():
+                    timeseries_files.extend(files)
+
                 if timeseries_files:
                     subject_manifest["data_availability"]["has_timeseries"] = True
-                    subject_manifest["files"]["timeseries"]["available"] = [
-                        f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}" 
-                        for f in timeseries_files
-                    ]
-                else:
-                    # Directory exists but no files found - log for debugging
-                    print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
+                    subject_manifest["files"]["timeseries"]["available"] = timeseries_files
             else:
-                # Directory doesn't exist - this might be expected for some subjects
-                pass  # Keep has_timeseries as False
+                # Fallback: scan filesystem for datalad subjects
+                timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
+                if timeseries_dir.exists():
+                    timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+                    if timeseries_files:
+                        subject_manifest["data_availability"]["has_timeseries"] = True
+                        subject_manifest["files"]["timeseries"]["available"] = [
+                            f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}"
+                            for f in timeseries_files
+                        ]
+                    else:
+                        print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
             
             # Check motion data availability
             motion_dir = dataset_path / "motion_FD"
@@ -513,20 +616,68 @@ def main():
     parser.add_argument('--output-dir', type=Path,
                         help='Override output directory')
 
+    # Data source configuration
+    parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
+                       default='datalad',
+                       help='Data source type: datalad (default), hcp, or combined')
+    parser.add_argument('--hcp-root', type=Path,
+                       help='Path to HCP output directory (required for hcp/combined modes)')
+    parser.add_argument('--hcp-parcellated-output', type=Path,
+                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
+                       default='prefer_hcp',
+                       help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
+    parser.add_argument('--default-task', type=str, default='hammer',
+                       help='Default task name for HCP data discovery (default: hammer)')
+
     args = parser.parse_args()
 
     print("TCP Cross-Analysis Integration")
     print("=" * 50)
 
     try:
+        # Create data source configuration
+        dataset_path = get_tcp_dataset_path()
+
+        if args.data_source_type == 'datalad':
+            data_source_config = create_datalad_config(
+                dataset_path=dataset_path,
+                default_task=args.default_task
+            )
+        elif args.data_source_type == 'hcp':
+            if not args.hcp_root or not args.hcp_parcellated_output:
+                parser.error("--hcp-root and --hcp-parcellated-output are required for HCP mode")
+            from tcp.preprocessing.config.data_source_config import create_hcp_config
+            data_source_config = create_hcp_config(
+                hcp_root=args.hcp_root,
+                parcellated_output=args.hcp_parcellated_output,
+                default_task=args.default_task
+            )
+        elif args.data_source_type == 'combined':
+            if not args.hcp_root or not args.hcp_parcellated_output:
+                parser.error("--hcp-root and --hcp-parcellated-output are required for combined mode")
+            from tcp.preprocessing.config.data_source_config import create_combined_config
+            data_source_config = create_combined_config(
+                dataset_path=dataset_path,
+                hcp_root=args.hcp_root,
+                hcp_parcellated_output=args.hcp_parcellated_output,
+                duplicate_resolution=args.duplicate_resolution,
+                default_task=args.default_task
+            )
+
         # Initialize integrator
         integrator = CrossAnalysisIntegrator(
             analysis_groups_dir=args.analysis_groups_dir,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            data_source_config=data_source_config
         )
 
         # Load combined subjects data
         integrator.load_combined_subjects_data()
+
+        # Load subject file mapping and parcellate HCP subjects if needed
+        integrator._load_subject_file_mapping()
+        integrator._parcellate_hcp_subjects()
 
         # Generate cross-tabulations
         cross_tabs = integrator.generate_cross_tabulations()

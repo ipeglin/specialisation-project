@@ -27,21 +27,24 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_tcp_dataset_path, get_script_output_path
+from tcp.preprocessing.config.data_source_config import DataSourceConfig, create_datalad_config
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class SubjectFileMapper:
-    """Maps data file paths for filtered subjects"""
+    """Maps data file paths for filtered subjects (supports DATALAD and HCP sources)"""
 
     def __init__(self,
                  filtered_subjects_dir: Optional[Path] = None,
                  dataset_path: Optional[Path] = None,
-                 output_dir: Optional[Path] = None):
+                 output_dir: Optional[Path] = None,
+                 data_source_config: Optional[DataSourceConfig] = None):
         self.filtered_subjects_dir = Path(filtered_subjects_dir) if filtered_subjects_dir else \
             get_script_output_path('tcp_preprocessing', 'filter_subjects')
         self.dataset_path = Path(dataset_path) if dataset_path else get_tcp_dataset_path()
         self.output_dir = Path(output_dir) if output_dir else \
             get_script_output_path('tcp_preprocessing', 'map_subject_files')
+        self.data_source_config = data_source_config or create_datalad_config(self.dataset_path)
             
         # Directory for sampled subjects (priority input)
         self.sampled_subjects_dir = get_script_output_path('tcp_preprocessing', 'sample_subjects_for_download')
@@ -74,26 +77,37 @@ class SubjectFileMapper:
         print(f"Filtered subjects directory: {self.filtered_subjects_dir}")
         print(f"Dataset path: {self.dataset_path}")
         print(f"Output directory: {self.output_dir}")
+        print(f"Data source: {self.data_source_config.source_type.value}")
 
-    def load_filtered_subjects(self) -> List[str]:
-        """Load subject IDs, prioritizing sampled subjects if available"""
+    def load_filtered_subjects(self) -> Tuple[List[str], pd.DataFrame]:
+        """Load subject IDs with data source information, prioritizing sampled subjects if available"""
         print("\nLoading subjects for file mapping...")
 
         # Try to load sampled subjects first (priority)
         sampled_subjects_file = self.sampled_subjects_dir / "sampled_subjects_for_download.csv"
-        
+
         if sampled_subjects_file.exists():
             print(f"  Found sampled subjects file: {sampled_subjects_file}")
             subjects_df = pd.read_csv(sampled_subjects_file)
-            
+
             if 'subject_id' not in subjects_df.columns:
                 raise ValueError("subject_id column not found in sampled subjects data")
-                
+
+            # Ensure data_source column exists (default to 'datalad' if missing)
+            if 'data_source' not in subjects_df.columns:
+                subjects_df['data_source'] = 'datalad'
+
             subject_ids = subjects_df['subject_id'].tolist()
             print(f"  Loaded {len(subject_ids)} SAMPLED subjects for mapping")
             print(f"  (This will significantly reduce mapping time and storage requirements)")
-            return subject_ids
-        
+
+            # Print data source breakdown
+            source_counts = subjects_df['data_source'].value_counts().to_dict()
+            for source, count in source_counts.items():
+                print(f"    - {source}: {count} subjects")
+
+            return subject_ids, subjects_df
+
         # Fallback to task-filtered subjects
         subjects_file = self.filtered_subjects_dir / "task_filtered_subjects.csv"
 
@@ -112,14 +126,23 @@ class SubjectFileMapper:
         if 'subject_id' not in subjects_df.columns:
             raise ValueError("subject_id column not found in filtered subjects data")
 
+        # Ensure data_source column exists (default to 'datalad' if missing)
+        if 'data_source' not in subjects_df.columns:
+            subjects_df['data_source'] = 'datalad'
+
         subject_ids = subjects_df['subject_id'].tolist()
         print(f"  Loaded {len(subject_ids)} filtered subjects (full dataset)")
         print(f"  WARNING: This will map ALL filtered subjects. Consider running sample_subjects_for_download.py first for development.")
 
-        return subject_ids
+        # Print data source breakdown
+        source_counts = subjects_df['data_source'].value_counts().to_dict()
+        for source, count in source_counts.items():
+            print(f"    - {source}: {count} subjects")
 
-    def map_subject_files(self, subject_ids: List[str]) -> Dict[str, Dict]:
-        """Map all file paths for each subject"""
+        return subject_ids, subjects_df
+
+    def map_subject_files(self, subject_ids: List[str], subjects_df: pd.DataFrame) -> Dict[str, Dict]:
+        """Map all file paths for each subject (supports both DATALAD and HCP sources)"""
         print(f"\nMapping files for {len(subject_ids)} subjects...")
 
         subject_file_mapping = {}
@@ -129,21 +152,33 @@ class SubjectFileMapper:
             if i % 50 == 0 or i == len(subject_ids):
                 print(f"  Progress: {i}/{len(subject_ids)} subjects")
 
-            file_map = self._map_single_subject(subject_id, timeseries_path)
+            # Get data source for this subject
+            data_source = subjects_df[subjects_df['subject_id'] == subject_id]['data_source'].iloc[0] \
+                if 'data_source' in subjects_df.columns else 'datalad'
+
+            file_map = self._map_single_subject(subject_id, timeseries_path, data_source)
             subject_file_mapping[subject_id] = file_map
 
         print(f"  File mapping complete")
         return subject_file_mapping
 
-    def _map_single_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
-        """Map files for a single subject"""
+    def _map_single_subject(self, subject_id: str, timeseries_path: Path, data_source: str = 'datalad') -> Dict:
+        """Dispatch to appropriate mapper based on data source"""
+        if data_source == 'hcp':
+            return self._map_hcp_subject(subject_id)
+        else:
+            return self._map_datalad_subject(subject_id, timeseries_path)
+
+    def _map_datalad_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
+        """Map files for a datalad subject"""
         file_map = {
             'raw_nifti': {'hammer': [], 'stroop': []},
             'events': {'hammer': [], 'stroop': []},
             'json_metadata': {'hammer': [], 'stroop': []},
             'anatomical': {'t1w': [], 't2w': []},
             'anatomical_json': {'t1w': [], 't2w': []},
-            'timeseries': {'hammer': [], 'stroop': []}
+            'timeseries': {'hammer': [], 'stroop': []},
+            'data_source': 'datalad'
         }
 
         # Map raw NIFTI, events, and JSON metadata from func/ directory
@@ -191,6 +226,56 @@ class SubjectFileMapper:
                         file_map['timeseries'][task] = [
                             str(f.relative_to(self.dataset_path)) for f in files
                         ]
+
+        return file_map
+
+    def _map_hcp_subject(self, subject_id: str) -> Dict:
+        """
+        Map files for an HCP subject.
+
+        HCP subjects have NIFTI files that need parcellation.
+        Timeseries (.h5) files will be generated later by integrate_cross_analysis.py
+
+        Args:
+            subject_id: Subject ID (e.g., 'sub-NDARINVXXXXX')
+
+        Returns:
+            File mapping with absolute paths to HCP NIFTI files
+        """
+        file_map = {
+            'raw_nifti': {'hammer': [], 'stroop': []},
+            'events': {'hammer': [], 'stroop': []},
+            'json_metadata': {'hammer': [], 'stroop': []},
+            'anatomical': {'t1w': [], 't2w': []},
+            'anatomical_json': {'t1w': [], 't2w': []},
+            'timeseries': {'hammer': [], 'stroop': []},  # Empty until parcellated
+            'data_source': 'hcp'
+        }
+
+        if not self.data_source_config.hcp_root:
+            return file_map
+
+        # Handle subject_id with or without "sub-" prefix
+        if not subject_id.startswith('sub-'):
+            subject_id = f'sub-{subject_id}'
+
+        subject_dir = self.data_source_config.hcp_root / subject_id
+        results_dir = subject_dir / "MNINonLinear" / "Results"
+
+        if not results_dir.exists():
+            return file_map
+
+        # Map HCP BOLD files for hammer task (run 1 only)
+        task = self.data_source_config.default_task
+        task_dir = results_dir / f"task-{task}AP_run-01_bold"
+        bold_file = task_dir / f"task-{task}AP_run-01_bold.nii.gz"
+
+        if bold_file.exists():
+            # Store ABSOLUTE path for HCP files (they're external to datalad dataset)
+            file_map['raw_nifti'][task] = [str(bold_file.absolute())]
+
+        # Note: timeseries will be populated later after parcellation
+        # by integrate_cross_analysis.py
 
         return file_map
 
@@ -362,24 +447,68 @@ def main():
     parser.add_argument('--output-dir', type=Path,
                         help='Override output directory')
 
+    # Data source configuration
+    parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
+                       default='datalad',
+                       help='Data source type: datalad (default), hcp, or combined')
+    parser.add_argument('--hcp-root', type=Path,
+                       help='Path to HCP output directory (required for hcp/combined modes)')
+    parser.add_argument('--hcp-parcellated-output', type=Path,
+                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
+                       default='prefer_hcp',
+                       help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
+    parser.add_argument('--default-task', type=str, default='hammer',
+                       help='Default task name for HCP data discovery (default: hammer)')
+
     args = parser.parse_args()
 
     print("TCP Subject File Mapping")
     print("=" * 50)
 
     try:
+        # Create data source configuration
+        dataset_path = args.dataset_path or get_tcp_dataset_path()
+
+        if args.data_source_type == 'datalad':
+            data_source_config = create_datalad_config(
+                dataset_path=dataset_path,
+                default_task=args.default_task
+            )
+        elif args.data_source_type == 'hcp':
+            if not args.hcp_root or not args.hcp_parcellated_output:
+                parser.error("--hcp-root and --hcp-parcellated-output are required for HCP mode")
+            from tcp.preprocessing.config.data_source_config import create_hcp_config
+            data_source_config = create_hcp_config(
+                hcp_root=args.hcp_root,
+                parcellated_output=args.hcp_parcellated_output,
+                default_task=args.default_task
+            )
+        elif args.data_source_type == 'combined':
+            if not args.hcp_root or not args.hcp_parcellated_output:
+                parser.error("--hcp-root and --hcp-parcellated-output are required for combined mode")
+            from tcp.preprocessing.config.data_source_config import create_combined_config
+            data_source_config = create_combined_config(
+                dataset_path=dataset_path,
+                hcp_root=args.hcp_root,
+                hcp_parcellated_output=args.hcp_parcellated_output,
+                duplicate_resolution=args.duplicate_resolution,
+                default_task=args.default_task
+            )
+
         # Initialize mapper
         mapper = SubjectFileMapper(
             filtered_subjects_dir=args.filtered_subjects_dir,
-            dataset_path=args.dataset_path,
-            output_dir=args.output_dir
+            dataset_path=dataset_path,
+            output_dir=args.output_dir,
+            data_source_config=data_source_config
         )
 
         # Load filtered subjects
-        subject_ids = mapper.load_filtered_subjects()
+        subject_ids, subjects_df = mapper.load_filtered_subjects()
 
         # Map files for each subject
-        subject_file_mapping = mapper.map_subject_files(subject_ids)
+        subject_file_mapping = mapper.map_subject_files(subject_ids, subjects_df)
 
         # Find global files
         global_files = mapper.find_global_files()

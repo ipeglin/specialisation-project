@@ -25,6 +25,7 @@ sys.path.insert(0, str(project_root))
 import pandas as pd
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
+from tcp.preprocessing.config.data_source_config import DataSourceConfig, DataSourceType, create_datalad_config
 from tcp.preprocessing.utils.filter_pipeline import SubjectFilterPipeline
 from tcp.preprocessing.utils.subject_filters import TaskAvailabilityFilter
 from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, ERROR
@@ -49,17 +50,20 @@ def detect_input_source() -> Path:
     )
 
 class NewSubjectFilterPipeline:
-    """Updated pipeline that works with new data structure"""
-    
-    def __init__(self, input_dir: Path, output_dir: Path, dataset_path: Path):
+    """Updated pipeline that works with new data structure and supports multiple data sources"""
+
+    def __init__(self, input_dir: Path, output_dir: Path, dataset_path: Path,
+                 data_source_config: Optional[DataSourceConfig] = None):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.dataset_path = Path(dataset_path)
+        self.data_source_config = data_source_config or create_datalad_config(dataset_path)
         self.filters = []
-        
+
         print(f"Input directory: {self.input_dir}")
         print(f"Output directory: {self.output_dir}")
         print(f"Dataset path: {self.dataset_path}")
+        print(f"Data source: {self.data_source_config.source_type.value}")
     
     def add_filter(self, filter_instance):
         """Add a filter to the pipeline"""
@@ -74,22 +78,23 @@ class NewSubjectFilterPipeline:
 
         import pandas as pd
 
-        # Check input format and load accordingly
+        # Load datalad subjects from validation/phenotype files
         phenotype_file = self.input_dir / 'phenotype_filtered_subjects.csv'
         validation_file = self.input_dir / 'valid_subjects.csv'
 
+        datalad_subjects_df = None
+
         if phenotype_file.exists():
             # Load from phenotype filtering
-            print("Loading phenotype filtered subjects...")
-            subjects_df = pd.read_csv(phenotype_file)
-            print(f"  Loaded {len(subjects_df)} phenotype-filtered subjects")
-            # Keep Group column if present (for later analysis), but don't split here
+            print("Loading phenotype filtered subjects (datalad)...")
+            datalad_subjects_df = pd.read_csv(phenotype_file)
+            print(f"  Loaded {len(datalad_subjects_df)} phenotype-filtered subjects")
 
         elif validation_file.exists():
             # Load from validation step
-            print("Loading validated subjects...")
-            subjects_df = pd.read_csv(validation_file)
-            print(f"  Loaded {len(subjects_df)} validated subjects")
+            print("Loading validated subjects (datalad)...")
+            datalad_subjects_df = pd.read_csv(validation_file)
+            print(f"  Loaded {len(datalad_subjects_df)} validated subjects")
 
         else:
             # Try legacy format (backward compatibility)
@@ -101,13 +106,35 @@ class NewSubjectFilterPipeline:
                 patients_df = pd.read_csv(patient_file)
                 controls_df = pd.read_csv(control_file)
                 # Combine into unified list
-                subjects_df = pd.concat([patients_df, controls_df], ignore_index=True)
-                print(f"  Loaded {len(subjects_df)} subjects ({len(patients_df)} patients + {len(controls_df)} controls)")
+                datalad_subjects_df = pd.concat([patients_df, controls_df], ignore_index=True)
+                print(f"  Loaded {len(datalad_subjects_df)} subjects ({len(patients_df)} patients + {len(controls_df)} controls)")
             else:
                 raise FileNotFoundError(f"No valid subject files found in {self.input_dir}")
 
+        # If HCP is enabled, discover HCP subjects and merge
+        if self.data_source_config.is_hcp_enabled():
+            hcp_subjects_df = self._discover_hcp_subjects()
+
+            if self.data_source_config.is_combined_mode():
+                # COMBINED mode: merge datalad and HCP subjects
+                print("\nCOMBINED mode: Merging datalad and HCP subjects...")
+                subjects_df = self._merge_subject_sources(datalad_subjects_df, hcp_subjects_df)
+            else:
+                # HCP-only mode
+                print("\nHCP-only mode: Using only HCP subjects...")
+                subjects_df = hcp_subjects_df
+                if 'data_source' not in subjects_df.columns:
+                    subjects_df['data_source'] = 'hcp'
+        else:
+            # DATALAD-only mode (default)
+            subjects_df = datalad_subjects_df
+            if 'data_source' not in subjects_df.columns:
+                subjects_df['data_source'] = 'datalad'
+
         # Generate task file paths by scanning the dataset
-        print("Generating task file paths...")
+        # Note: This currently only scans datalad dataset
+        # HCP files will be mapped later in map_subject_files.py
+        print("\nGenerating task file paths...")
         file_paths = self._generate_task_file_paths(subjects_df)
 
         return subjects_df, file_paths
@@ -174,7 +201,79 @@ class NewSubjectFilterPipeline:
         
         print(f"  Task file scanning complete")
         return file_paths
-    
+
+    def _discover_hcp_subjects(self) -> pd.DataFrame:
+        """
+        Scan HCP directory for subjects with task data.
+
+        Returns:
+            DataFrame with columns: subject_id, data_source='hcp'
+        """
+        if not self.data_source_config.is_hcp_enabled():
+            return pd.DataFrame(columns=['subject_id', 'data_source'])
+
+        print("Discovering HCP subjects...")
+        hcp_subjects = self.data_source_config.discover_hcp_subjects()
+
+        if not hcp_subjects:
+            print("  No HCP subjects found")
+            return pd.DataFrame(columns=['subject_id', 'data_source'])
+
+        print(f"  Found {len(hcp_subjects)} HCP subjects with {self.data_source_config.default_task} task data")
+
+        return pd.DataFrame([
+            {'subject_id': subj, 'data_source': 'hcp'}
+            for subj in hcp_subjects
+        ])
+
+    def _merge_subject_sources(self, datalad_df: pd.DataFrame,
+                              hcp_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge datalad and HCP subject lists with duplicate resolution.
+
+        Args:
+            datalad_df: DataFrame of datalad subjects
+            hcp_df: DataFrame of HCP subjects
+
+        Returns:
+            Combined DataFrame with data_source column
+        """
+        # Tag sources
+        datalad_df = datalad_df.copy()
+        hcp_df = hcp_df.copy()
+        datalad_df['data_source'] = 'datalad'
+        if 'data_source' not in hcp_df.columns:
+            hcp_df['data_source'] = 'hcp'
+
+        # Find duplicates
+        duplicates = set(datalad_df['subject_id']) & set(hcp_df['subject_id'])
+
+        if duplicates:
+            strategy = self.data_source_config.duplicate_resolution
+            print(f"WARNING: {len(duplicates)} subjects found in both sources")
+            print(f"  Duplicate resolution strategy: {strategy}")
+            print(f"  Duplicate subject IDs: {sorted(list(duplicates))[:5]}{'...' if len(duplicates) > 5 else ''}")
+
+            if strategy == "error":
+                raise ValueError(
+                    f"Duplicate subjects found in both datalad and HCP: {duplicates}\n"
+                    f"Set --duplicate-resolution to 'prefer_hcp' or 'prefer_datalad' to resolve."
+                )
+            elif strategy == "prefer_hcp":
+                # Keep HCP fMRI data, remove datalad fMRI data for these subjects
+                print(f"  Keeping HCP fMRI data for {len(duplicates)} subjects")
+                datalad_df = datalad_df[~datalad_df['subject_id'].isin(duplicates)]
+            elif strategy == "prefer_datalad":
+                # Keep datalad fMRI data, remove HCP fMRI data for these subjects
+                print(f"  Keeping datalad fMRI data for {len(duplicates)} subjects")
+                hcp_df = hcp_df[~hcp_df['subject_id'].isin(duplicates)]
+
+        # Merge
+        combined_df = pd.concat([datalad_df, hcp_df], ignore_index=True)
+        print(f"Combined subject list: {len(datalad_df)} datalad + {len(hcp_df)} HCP = {len(combined_df)} total")
+
+        return combined_df
+
     def apply_filters(self, subjects_df, file_paths):
         """Apply filters to unified subject list (group-agnostic)"""
         import json
@@ -293,7 +392,21 @@ def main():
                        help='Tasks to filter for (default: hammer stroop)')
     parser.add_argument('--data-types', nargs='+', default=['raw_nifti', 'timeseries', 'events'],
                        help='Data types to check (default: raw_nifti timeseries events)')
-    
+
+    # Data source configuration
+    parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
+                       default='datalad',
+                       help='Data source type: datalad (default), hcp, or combined')
+    parser.add_argument('--hcp-root', type=Path,
+                       help='Path to HCP output directory (required for hcp/combined modes)')
+    parser.add_argument('--hcp-parcellated-output', type=Path,
+                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
+                       default='prefer_hcp',
+                       help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
+    parser.add_argument('--default-task', type=str, default='hammer',
+                       help='Default task name for HCP data discovery (default: hammer)')
+
     args = parser.parse_args()
     
     print(f"TCP Subject Task Data Filtering")
@@ -309,11 +422,41 @@ def main():
     # Set paths
     output_dir = args.output_dir or get_script_output_path('tcp_preprocessing', 'filter_subjects')
     dataset_path = args.dataset_path or get_tcp_dataset_path()
-    
+
     print(f"Output directory: {output_dir}")
-    
+
+    # Create data source configuration
+    if args.data_source_type == 'datalad':
+        data_source_config = create_datalad_config(
+            dataset_path=dataset_path,
+            default_task=args.default_task
+        )
+    elif args.data_source_type == 'hcp':
+        if not args.hcp_root or not args.hcp_parcellated_output:
+            parser.error("--hcp-root and --hcp-parcellated-output are required for HCP mode")
+        from tcp.preprocessing.config.data_source_config import create_hcp_config
+        data_source_config = create_hcp_config(
+            hcp_root=args.hcp_root,
+            parcellated_output=args.hcp_parcellated_output,
+            default_task=args.default_task
+        )
+    elif args.data_source_type == 'combined':
+        if not args.hcp_root or not args.hcp_parcellated_output:
+            parser.error("--hcp-root and --hcp-parcellated-output are required for combined mode")
+        from tcp.preprocessing.config.data_source_config import create_combined_config
+        data_source_config = create_combined_config(
+            dataset_path=dataset_path,
+            hcp_root=args.hcp_root,
+            hcp_parcellated_output=args.hcp_parcellated_output,
+            duplicate_resolution=args.duplicate_resolution,
+            default_task=args.default_task
+        )
+
     # Initialize new pipeline
-    pipeline = NewSubjectFilterPipeline(input_dir, output_dir, dataset_path)
+    pipeline = NewSubjectFilterPipeline(
+        input_dir, output_dir, dataset_path,
+        data_source_config=data_source_config
+    )
 
     # Configure task availability filter
     task_filter = TaskAvailabilityFilter(
