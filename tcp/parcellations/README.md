@@ -1,6 +1,9 @@
 # Brain Parcellation Atlases
 
+**Location:** `tcp/parcellations/`
+
 This directory contains brain parcellation atlases required for HCP data parcellation.
+The atlases are stored at the TCP module root level to be accessible by both preprocessing and processing code.
 
 ## Required Atlas Files
 

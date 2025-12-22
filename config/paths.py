@@ -403,7 +403,7 @@ def get_parcellations_path(subpath: str = '') -> Path:
     """
     Get path to parcellation atlases directory.
 
-    Returns path to tcp/processing/parcellations which contains:
+    Returns path to tcp/parcellations which contains:
     - cortical/yeo17: Yeo 400-parcel cortical atlas
     - subcortical/tian: Tian subcortical atlas
     - cerebellar: Cerebellar atlas (when available)
@@ -414,10 +414,10 @@ def get_parcellations_path(subpath: str = '') -> Path:
     Returns:
         Path to parcellations directory
     """
-    # Parcellations are stored in tcp/processing/parcellations
-    # relative to the code repository root
+    # Parcellations are stored in tcp/parcellations (general location)
+    # accessible to both preprocessing and processing code
     code_root = get_code_path('specialisation-project')
-    parcellations_base = code_root / 'tcp' / 'processing' / 'parcellations'
+    parcellations_base = code_root / 'tcp' / 'parcellations'
     return parcellations_base / subpath if subpath else parcellations_base
 
 if __name__ == "__main__":
