@@ -399,6 +399,27 @@ def get_mdd_analysis_path(subpath: str = 'mdd_analysis') -> Path:
     """Get path for MDD analysis outputs (uses analysis category)"""
     return get_script_output_path('mdd_analysis', subpath=subpath)
 
+def get_parcellations_path(subpath: str = '') -> Path:
+    """
+    Get path to parcellation atlases directory.
+
+    Returns path to tcp/processing/parcellations which contains:
+    - cortical/yeo17: Yeo 400-parcel cortical atlas
+    - subcortical/tian: Tian subcortical atlas
+    - cerebellar: Cerebellar atlas (when available)
+
+    Args:
+        subpath: Optional subdirectory path (e.g., 'cortical/yeo17')
+
+    Returns:
+        Path to parcellations directory
+    """
+    # Parcellations are stored in tcp/processing/parcellations
+    # relative to the code repository root
+    code_root = get_code_path('specialisation-project')
+    parcellations_base = code_root / 'tcp' / 'processing' / 'parcellations'
+    return parcellations_base / subpath if subpath else parcellations_base
+
 if __name__ == "__main__":
     # Test and display configuration
     print("=== Path Configuration System ===")
