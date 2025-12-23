@@ -150,8 +150,8 @@ class TCPPipeline:
                 'script': 'parcellate_hcp_subjects.py',
                 'description': 'Parcellate HCP subjects to .h5 timeseries files',
                 'required': False,
-                'estimated_time': '2-6 hours (depends on number of HCP subjects)',
-                'timeout': 21600  # 6 hours
+                'estimated_time': '2-17.5 hours (depends on number of HCP subjects)',
+                'timeout': 63000  # 17.5 hours assuming 5min per subject for 210 subjects
             },
             PipelineStep.INTEGRATE_CROSS_ANALYSIS: {
                 'script': 'integrate_cross_analysis.py',
