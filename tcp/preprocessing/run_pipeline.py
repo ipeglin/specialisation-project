@@ -55,6 +55,7 @@ class PipelineStep(Enum):
     GENERATE_ANALYSIS_GROUPS = "generate_analysis_groups"
     SAMPLE_SUBJECTS = "sample_subjects"
     MAP_SUBJECT_FILES = "map_subject_files"
+    PARCELLATE_HCP_SUBJECTS = "parcellate_hcp_subjects"
     INTEGRATE_CROSS_ANALYSIS = "integrate_cross_analysis"
     FETCH_FILTERED_DATA = "fetch_filtered_data"
 
@@ -144,6 +145,13 @@ class TCPPipeline:
                 'required': True,
                 'estimated_time': '1-10 minutes',
                 'timeout': 1200  # 20 minutes
+            },
+            PipelineStep.PARCELLATE_HCP_SUBJECTS: {
+                'script': 'parcellate_hcp_subjects.py',
+                'description': 'Parcellate HCP subjects to .h5 timeseries files',
+                'required': False,
+                'estimated_time': '2-6 hours (depends on number of HCP subjects)',
+                'timeout': 21600  # 6 hours
             },
             PipelineStep.INTEGRATE_CROSS_ANALYSIS: {
                 'script': 'integrate_cross_analysis.py',
@@ -283,6 +291,13 @@ class TCPPipeline:
             mapping_dir = get_script_output_path('tcp_preprocessing', 'map_subject_files')
             return (mapping_dir / 'subject_file_mapping.json').exists()
 
+        elif step == PipelineStep.PARCELLATE_HCP_SUBJECTS:
+            # Check if HCP parcellation was completed by checking if file mapping was updated
+            # This step is optional and only relevant if HCP data is being used
+            # For now, we'll consider it incomplete if it hasn't been run yet
+            # (Could be enhanced to check for .h5 files in parcellated output directory)
+            return False
+
         elif step == PipelineStep.INTEGRATE_CROSS_ANALYSIS:
             # Check if cross-analysis integration output exists (optional step)
             cross_dir = get_script_output_path('tcp_preprocessing', 'integrate_cross_analysis')
@@ -354,7 +369,7 @@ class TCPPipeline:
 
             # Add HCP data source arguments for steps that need them
             if step in [PipelineStep.FILTER_SUBJECTS, PipelineStep.MAP_SUBJECT_FILES,
-                       PipelineStep.INTEGRATE_CROSS_ANALYSIS]:
+                       PipelineStep.PARCELLATE_HCP_SUBJECTS, PipelineStep.INTEGRATE_CROSS_ANALYSIS]:
                 if 'data_source_type' in kwargs:
                     cmd.extend(['--data-source-type', kwargs['data_source_type']])
                 if 'hcp_root' in kwargs and kwargs['hcp_root']:

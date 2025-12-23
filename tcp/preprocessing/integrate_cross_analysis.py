@@ -109,72 +109,6 @@ class CrossAnalysisIntegrator:
 
         return self.subject_file_mapping
 
-    def _parcellate_hcp_subjects(self) -> None:
-        """
-        Parcellate HCP subjects that don't have .h5 files yet.
-
-        This method:
-        1. Identifies HCP subjects without .h5 files
-        2. Parcellates their NIFTI files using HCPParcellator
-        3. Updates the file mapping with new .h5 paths
-        """
-        if not self.data_source_config.is_hcp_enabled():
-            return
-
-        if not self.subject_file_mapping:
-            self._load_subject_file_mapping()
-
-        # Find HCP subjects without .h5 files
-        hcp_subjects_to_parcellate = []
-        for subject_id, file_map in self.subject_file_mapping.items():
-            if file_map.get('data_source') == 'hcp':
-                # Check if timeseries .h5 files exist
-                has_h5 = any(len(files) > 0 for files in file_map.get('timeseries', {}).values())
-                if not has_h5:
-                    hcp_subjects_to_parcellate.append(subject_id)
-
-        if not hcp_subjects_to_parcellate:
-            print("No HCP subjects need parcellation")
-            return
-
-        print(f"\nParcellating {len(hcp_subjects_to_parcellate)} HCP subjects...")
-
-        # Import HCPParcellator
-        from tcp.preprocessing.hcp_parcellation import HCPParcellator
-
-        # Initialize parcellator
-        parcellator = HCPParcellator(
-            hcp_root=self.data_source_config.hcp_root,
-            verbose=True
-        )
-
-        # Create output directory
-        output_dir = self.data_source_config.hcp_parcellated_output
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Parcellate subjects (sequential for now, can be parallelized later)
-        successful = 0
-        failed = 0
-
-        for subject_id in hcp_subjects_to_parcellate:
-            try:
-                h5_path = parcellator.parcellate_subject(
-                    subject_id=subject_id,
-                    task=self.data_source_config.default_task,
-                    output_dir=output_dir
-                )
-
-                # Update file mapping
-                task = self.data_source_config.default_task
-                self.subject_file_mapping[subject_id]['timeseries'][task] = [str(h5_path.absolute())]
-                successful += 1
-
-            except Exception as e:
-                print(f"  ERROR: Failed to parcellate {subject_id}: {e}")
-                failed += 1
-
-        print(f"\nParcellation complete: {successful} successful, {failed} failed")
-
     def generate_cross_tabulations(self) -> Dict:
         """Generate comprehensive cross-tabulation analyses"""
         print("Generating cross-tabulation analyses...")
@@ -675,9 +609,8 @@ def main():
         # Load combined subjects data
         integrator.load_combined_subjects_data()
 
-        # Load subject file mapping and parcellate HCP subjects if needed
+        # Load subject file mapping
         integrator._load_subject_file_mapping()
-        integrator._parcellate_hcp_subjects()
 
         # Generate cross-tabulations
         cross_tabs = integrator.generate_cross_tabulations()
