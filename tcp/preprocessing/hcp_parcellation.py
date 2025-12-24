@@ -387,15 +387,12 @@ class HCPParcellator:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Convert subject_id from BIDS format to timeseries format
-        # sub-NDARINVXXXXX -> NDAR_INVXXXXX
-        if subject_id.startswith('sub-NDAR'):
-            timeseries_id = subject_id.replace('sub-NDAR', 'NDAR_')
-        else:
-            timeseries_id = subject_id
+        # Ensure subject_id is in BIDS format
+        if not subject_id.startswith('sub-'):
+            subject_id = f"sub-{subject_id}"
 
-        # Output filename: {timeseries_id}_{task}.h5
-        output_path = output_dir / f"{timeseries_id}_{task}.h5"
+        # Output filename in BIDS format: sub-{subject_id}_task-{task}_parcellated.h5
+        output_path = output_dir / f"{subject_id}_task-{task}_parcellated.h5"
 
         with h5py.File(output_path, 'w') as f:
             # Store each run as a separate dataset
@@ -403,7 +400,7 @@ class HCPParcellator:
                 f.create_dataset(run_name, data=ts_data, compression="gzip")
 
             # Add metadata attributes
-            f.attrs['subject_id'] = timeseries_id
+            f.attrs['subject_id'] = subject_id
             f.attrs['task'] = task
             f.attrs['n_rois'] = self.EXPECTED_TOTAL_PARCELS
             f.attrs['n_runs'] = len(run_timeseries)

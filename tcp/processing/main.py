@@ -43,7 +43,7 @@ import pingouin as pg
 from scipy import signal, stats
 from statsmodels.stats.multitest import fdrcorrection
 
-from config.paths import get_analysis_path
+from config.paths import get_analysis_path, get_parcellations_path
 from tcp.processing import DataLoader, SubjectManager
 from tcp.processing.lib.csv_export import (
     export_group_averaged_fc_to_csv,
@@ -3660,8 +3660,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*50}")
 
     # Initialize modular ROI extraction system
-    cortical_lut_file = Path(__file__).parent / 'parcellations/cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt'
-    subcortical_lut_file = Path(__file__).parent / 'parcellations/subcortical/tian/Tian_Subcortex_S2_3T_label.txt'
+    cortical_lut_file = get_parcellations_path('cortical/yeo17/400Parcels_Yeo2011_17Networks_info.txt')
+    subcortical_lut_file = get_parcellations_path('subcortical/tian/Tian_Subcortex_S2_3T_label.txt')
     cortical_atlas = CorticalAtlasLookup(cortical_lut_file)
     subcortical_atlas = SubCorticalAtlasLookup(subcortical_lut_file)
     cortical_roi_extractor = ROIExtractionService(cortical_atlas)
