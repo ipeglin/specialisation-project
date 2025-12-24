@@ -1405,6 +1405,26 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         if verbose:
             print(f"Loaded data with shape: {data.shape}")
 
+        # Check if this is HCP data (requires de-meaning)
+        subject_metadata = manager.get_subject_metadata(subject_id)
+        data_source = subject_metadata.get('data_source', 'datalad')
+
+        if data_source == 'hcp':
+            # HCP data is not de-meaned by default, so we need to demean each ROI
+            # Data shape: (n_rois, n_timepoints)
+            # De-mean each ROI separately over time (subtract temporal mean from each channel)
+            if verbose:
+                print(f"Detected HCP data - applying de-meaning to {data.shape[0]} ROIs")
+
+            # Calculate mean for each ROI across time (axis=1)
+            roi_means = np.mean(data, axis=1, keepdims=True)  # Shape: (n_rois, 1)
+
+            # Subtract mean from each ROI's timeseries
+            data = data - roi_means
+
+            if verbose:
+                print(f"De-meaning complete - mean signal now ~0 for each ROI")
+
         # Segment into anatomical groups
         cortical_timeseries = data[:400]
         subcortical_timeseries = data[400:432]
