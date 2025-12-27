@@ -14,9 +14,9 @@ Author: Ian Philip Eglin
 Date: 2025-12-23
 """
 
-import sys
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -28,9 +28,9 @@ from config.paths import get_script_output_path, get_tcp_dataset_path
 from tcp.preprocessing.config.data_source_config import (
     DataSourceConfig,
     DataSourceType,
+    create_combined_config,
     create_datalad_config,
     create_hcp_config,
-    create_combined_config
 )
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR, RUNNING
 
@@ -169,6 +169,12 @@ class HCPParcellationRunner:
                 print(f"{ERROR} Failed to parcellate {subject_id}: {e}")
                 failed += 1
                 failed_subjects.append({'subject_id': subject_id, 'error': str(e)})
+
+                # Remove subject from manifest if parcellation failed
+                # This prevents the subject from being counted as available when they have no data
+                if subject_id in self.subject_file_mapping:
+                    print(f"  Removing {subject_id} from manifest (no valid data available)")
+                    del self.subject_file_mapping[subject_id]
 
         # Save updated file mapping
         self.save_subject_file_mapping()

@@ -94,6 +94,8 @@ class DataSourceConfig:
         """
         Scan HCP output directory for subjects with task data.
 
+        Only includes subjects that have actual BOLD .nii.gz files, not just directories.
+
         Returns:
             List of subject IDs (e.g., ['sub-NDARINVXXXXX', ...])
         """
@@ -104,9 +106,18 @@ class DataSourceConfig:
         for subject_dir in sorted(self.hcp_root.glob("sub-*")):
             results_dir = subject_dir / "MNINonLinear" / "Results"
             if results_dir.exists():
-                # Check for task data
-                has_task = any(results_dir.glob(f"task-{self.default_task}AP_run-*_bold"))
-                if has_task:
+                # Check for task directories with actual BOLD files
+                task_dirs = list(results_dir.glob(f"task-{self.default_task}AP_run-*_bold"))
+                has_valid_task = False
+
+                for task_dir in task_dirs:
+                    # Verify that the BOLD .nii.gz file actually exists
+                    bold_file = task_dir / f"{task_dir.name}.nii.gz"
+                    if bold_file.exists() and bold_file.is_file():
+                        has_valid_task = True
+                        break
+
+                if has_valid_task:
                     subjects.append(subject_dir.name)  # e.g., "sub-NDARINVXXXXX"
 
         return subjects
