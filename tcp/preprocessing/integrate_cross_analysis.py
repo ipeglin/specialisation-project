@@ -15,14 +15,15 @@ Author: Ian Philip Eglin
 Date: 2025-10-25
 """
 
-import sys
 import argparse
+import json
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import pandas as pd
+
 import numpy as np
-import json
-from datetime import datetime
+import pandas as pd
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -42,9 +43,13 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_script_output_path, get_tcp_dataset_path
-from tcp.preprocessing.config.data_source_config import DataSourceConfig, DataSourceType, create_datalad_config
-from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
+from tcp.preprocessing.config.data_source_config import (
+    DataSourceConfig,
+    DataSourceType,
+    create_datalad_config,
+)
 from tcp.preprocessing.utils.subject_id_transform import manifest_to_directory_id
+from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
 
 class CrossAnalysisIntegrator:
@@ -136,7 +141,7 @@ class CrossAnalysisIntegrator:
         # 3. Analysis group membership overlap
         analysis_groups = ['primary', 'secondary', 'tertiary', 'quaternary']
         group_membership = {}
-        
+
         for group in analysis_groups:
             group_file = self.analysis_groups_dir / f"{group}_analysis_subjects.csv"
             if group_file.exists():
@@ -318,29 +323,29 @@ class CrossAnalysisIntegrator:
         with open(master_file, 'w') as f:
             json.dump(master_summary, f, indent=2, cls=NumpyEncoder)
         print(f"  {CHECK} Master summary: {master_file}")
-        
+
         # 6. Export comprehensive data manifest for processing pipeline
         self._export_data_manifest(analysis_datasets)
 
     def _export_data_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> None:
         """Export comprehensive data manifest for processing pipeline"""
         print("  Creating comprehensive data manifest for processing pipeline...")
-        
+
         # Load additional subject data for complete manifest
         manifest_data = self._build_comprehensive_manifest(analysis_datasets)
-        
+
         # Export the manifest
         manifest_file = self.output_dir / "processing_data_manifest.json"
         with open(manifest_file, 'w') as f:
             json.dump(manifest_data, f, indent=2, cls=NumpyEncoder)
         print(f"  {CHECK} Processing data manifest: {manifest_file}")
-        
+
     def _build_comprehensive_manifest(self, analysis_datasets: Dict[str, pd.DataFrame]) -> Dict:
         """Build comprehensive data manifest with subject files and metadata"""
         from config.paths import get_tcp_dataset_path
-        
+
         dataset_path = get_tcp_dataset_path()
-        
+
         # Base manifest structure
         manifest = {
             "manifest_metadata": {
@@ -365,18 +370,18 @@ class CrossAnalysisIntegrator:
                 "phenotype": "phenotype/*.tsv"
             }
         }
-        
+
         # Build analysis groups mapping
         for group_name, dataset in analysis_datasets.items():
             manifest["analysis_groups"][group_name] = dataset['subject_id'].tolist()
-        
+
         # Build subject-level manifest
         for _, subject_row in self.combined_subjects.iterrows():
             subject_id = subject_row['subject_id']
-            
+
             # Convert subject ID to directory format using utility function
             subject_dir_id = manifest_to_directory_id(subject_id)
-            
+
             # Get data source for this subject
             data_source = subject_row.get('data_source', 'datalad')
 
@@ -436,19 +441,24 @@ class CrossAnalysisIntegrator:
                     subject_manifest["data_availability"]["has_timeseries"] = True
                     subject_manifest["files"]["timeseries"]["available"] = timeseries_files
             else:
-                # Fallback: scan filesystem for datalad subjects
-                timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
-                if timeseries_dir.exists():
-                    timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
-                    if timeseries_files:
-                        subject_manifest["data_availability"]["has_timeseries"] = True
-                        subject_manifest["files"]["timeseries"]["available"] = [
-                            f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}"
-                            for f in timeseries_files
-                        ]
-                    else:
-                        print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
-            
+                # Fallback: scan filesystem ONLY for datalad subjects
+                # IMPORTANT: Do NOT fall back to datalad data for HCP subjects, as they use different preprocessing
+                if data_source == 'datalad':
+                    timeseries_dir = dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated" / subject_dir_id
+                    if timeseries_dir.exists():
+                        timeseries_files = list(timeseries_dir.glob("*_parcellated.h5"))
+                        if timeseries_files:
+                            subject_manifest["data_availability"]["has_timeseries"] = True
+                            subject_manifest["files"]["timeseries"]["available"] = [
+                                f"fMRI_timeseries_clean_denoised_GSR_parcellated/{subject_dir_id}/{f.name}"
+                                for f in timeseries_files
+                            ]
+                        else:
+                            print(f"    Warning: {subject_id} - timeseries directory exists but no .h5 files found: {timeseries_dir}")
+                else:
+                    # HCP subject with no file mapping entry - should have been filtered out earlier
+                    print(f"    Warning: {subject_id} - HCP subject has no file mapping (missing .nii.gz data?)")
+
             # Check motion data availability
             motion_dir = dataset_path / "motion_FD"
             if motion_dir.exists():
@@ -464,9 +474,9 @@ class CrossAnalysisIntegrator:
             else:
                 # Motion directory doesn't exist
                 pass  # Keep has_motion as False
-            
+
             manifest["subjects"][subject_id] = subject_manifest
-        
+
         return manifest
 
     def _export_human_readable_report(self, cross_tabs: Dict, stats: Dict) -> None:
@@ -590,7 +600,9 @@ def main():
         elif args.data_source_type == 'combined':
             if not args.hcp_root or not args.hcp_parcellated_output:
                 parser.error("--hcp-root and --hcp-parcellated-output are required for combined mode")
-            from tcp.preprocessing.config.data_source_config import create_combined_config
+            from tcp.preprocessing.config.data_source_config import (
+                create_combined_config,
+            )
             data_source_config = create_combined_config(
                 dataset_path=dataset_path,
                 hcp_root=args.hcp_root,
