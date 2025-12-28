@@ -306,11 +306,6 @@ def plot_mvmd_mode_distribution_by_group(all_subject_results, anhedonia_groups, 
             logger.info(f"Created plot with {len(mode_frequencies)} modes from {len(subject_ids)} subjects")
 
     return figures
-    else:
-        fig = plt.figure(figsize=(16, 6))
-        fig.text(0.5, 0.5, 'No matching ROIs found',
-                ha='center', va='center', fontsize=14, color='gray')
-        return [fig]
 
 
 def plot_timeseries_with_envelopes(analytic_signal, analytic_envelope, smoothed_envelope, channel_labels, subject_id=None, envelope_type='raw'):
