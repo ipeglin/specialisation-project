@@ -3700,19 +3700,55 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"\tHIGH: {len(high_anhedonic_subjects)}")
     print(f"  Non-anhedonic subjects: {len(non_anhedonic_subjects)}")
 
-    # Validate file access for processing
-    print(f"\nValidating file access:")
+    # Detect data sources in use and ensure consistency
+    print(f"\nDetecting data sources:")
+    all_candidate_subjects = anhedonic_subjects + non_anhedonic_subjects
+    data_sources_found = set()
+    for subject_id in all_candidate_subjects:
+        try:
+            metadata = manager.get_subject_metadata(subject_id)
+            data_source = metadata.get('data_source', 'datalad')
+            data_sources_found.add(data_source)
+        except:
+            pass
+
+    print(f"  Data sources in manifest: {sorted(data_sources_found)}")
+
+    # Determine which data source to use
+    if len(data_sources_found) > 1:
+        print(f"\n  WARNING: Multiple data sources detected in manifest!")
+        print(f"  This can lead to mixing HCP and datalad preprocessed data, which is INVALID.")
+        print(f"  Filtering will enforce single-source consistency.")
+
+        # Prefer HCP if available (typically more subjects with better preprocessing)
+        if 'hcp' in data_sources_found:
+            required_data_source = 'hcp'
+            print(f"  Using HCP data source (excluding datalad subjects)")
+        else:
+            required_data_source = 'datalad'
+            print(f"  Using datalad data source")
+    elif len(data_sources_found) == 1:
+        required_data_source = list(data_sources_found)[0]
+        print(f"  Single data source detected: {required_data_source}")
+    else:
+        required_data_source = None
+        print(f"  No data source information found, will check all subjects")
+
+    # Validate file access for processing with data source filtering
+    print(f"\nValidating file access (enforcing data_source={required_data_source}):")
     accessible_anhedonic = get_accessible_subjects_from_file(
         subjects=anhedonic_subjects,
         subject_manager=manager,
         file_loader=loader,
-        task='hammer'
+        task='hammer',
+        required_data_source=required_data_source
     )
     accessible_non_anhedonic = get_accessible_subjects_from_file(
         subjects=non_anhedonic_subjects,
         subject_manager=manager,
         file_loader=loader,
-        task='hammer'
+        task='hammer',
+        required_data_source=required_data_source
     )
 
     # Report final accessible counts
