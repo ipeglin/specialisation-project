@@ -4209,33 +4209,21 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             band = post_hoc_data['band']
             post_hoc_df = post_hoc_data['post_hoc']
 
-            # Create short, filesystem-safe filename
-            # Use very short network abbreviations to avoid truncation
-            network_short = (network
-                .replace('Default', 'DF')
-                .replace('Control', 'CO')
-                .replace('Dorsal-attention', 'DA')
-                .replace('Ventral-attention', 'VA')
-                .replace('Salience', 'SA')
-                .replace('Limbic', 'LI')
-                .replace('Frontoparietal', 'FP')
-                .replace('Somatomotor', 'SM')
-                .replace('Visual', 'VI')
-                .replace('/', '')
-                .replace(' ', '')
-                .replace('-', ''))
+            # Create descriptive lower_snake_case filename following project conventions
+            # Network name: convert to lowercase and replace special characters
+            network_clean = (network.lower()
+                .replace('/', '_')
+                .replace(' ', '_')
+                .replace('-', '_'))
 
-            # Simplify band notation
-            if 'static' in band.lower():
-                band_short = 'static'
-            elif 'ipsi' in band.lower():
-                band_short = 'ipsi'
-            else:
-                # For slow bands: "slow-1" -> "s1"
-                band_short = band.lower().replace('slow-', 's').replace('slow_', 's')
+            # Band name: convert to lowercase and replace special characters
+            band_clean = (band.lower()
+                .replace('/', '_')
+                .replace(' ', '_')
+                .replace('-', '_'))
 
-            # Format: gh_{network}_{band}.csv (Games-Howell abbreviated)
-            filename = f"gh_{network_short}_{band_short}.csv"
+            # Format: games_howell_{network}_{band}.csv
+            filename = f"games_howell_{network_clean}_{band_clean}.csv"
             filepath = post_hoc_dir / filename
 
             # Save with additional metadata
