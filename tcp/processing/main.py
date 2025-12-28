@@ -1645,6 +1645,8 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             'mvmd': {
                 **mvmd_result,
                 'metadata': mvmd_metadata,
+                'hilbert_spectral_analysis': hsa_data,
+                'channel_label_map': channel_labels,
             },
             'fc_modes': {
                 'r_fc': mode_fc_data.get('mode_fc_matrices', None),
