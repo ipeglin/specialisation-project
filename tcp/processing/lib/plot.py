@@ -2153,21 +2153,13 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                 # Normalize by number of samples
                 mhs /= n_samples
 
-                # Add vertical line at center frequency for this mode (plot FIRST so it's behind the trace)
+                # Plot marginal spectrum for this mode-channel combination
+                ax.plot(freq_bin_centers, mhs, color='black', linewidth=0.8, alpha=0.9)
+
+                # Add vertical line at center frequency for this mode
                 if center_freq is not None:
                     ax.axvline(x=center_freq, color='crimson', linestyle='--',
-                             linewidth=1.2, alpha=0.7, zorder=1)
-
-                # Plot marginal spectrum for this mode-channel combination (on top of vertical line)
-                ax.plot(freq_bin_centers, mhs, color='black', linewidth=0.8, alpha=0.9, zorder=2)
-
-                # Add text annotation for center frequency
-                if center_freq is not None:
-                    y_min, y_max = ax.get_ylim()
-                    y_text = y_min + 0.08 * (y_max - y_min) if y_max > y_min else y_min
-                    ax.text(center_freq, y_text,
-                            f'$\\omega_{{{mode_num}}}={center_freq:.3f}Hz$',
-                            fontsize=7, color='crimson', ha='center', va='bottom')
+                             linewidth=0.8, alpha=0.6)
 
                 # Set labels
                 if mode_idx == 0:
@@ -2178,7 +2170,7 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                     # Leftmost column: add mode labels as y-axis labels
                     mode_label = f'$u_{{{mode_num}}}$'
                     if center_freq is not None:
-                        mode_label += f'\n{center_freq:.3f} Hz'
+                        mode_label += f'\n$\\omega_{mode_num} = {center_freq:.3f}$ Hz'
                     ax.set_ylabel(mode_label, fontsize=9, fontweight='bold', rotation=0,
                                 ha='right', va='center')
 
