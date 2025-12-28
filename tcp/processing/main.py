@@ -3594,6 +3594,180 @@ def export_mvmd_modes_to_csv(all_subject_results, anhedonia_groups, output_dir, 
     return csv_paths
 
 
+def export_hilbert_spectrum_to_csv(all_subject_results, output_dir, verbose=True):
+    """
+    Export Hilbert spectral analysis data (instantaneous frequency and amplitude) to CSV files.
+
+    Creates one CSV per subject per mode with instantaneous frequency and amplitude
+    for each channel over time.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        output_dir: Directory to save CSV files
+        verbose: Whether to print progress
+
+    Returns:
+        list: Paths to created CSV files
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("EXPORTING HILBERT SPECTRUM DATA TO CSV")
+        print(f"{'='*80}")
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_paths = []
+    total_files = 0
+
+    for subject_id, result in all_subject_results.items():
+        if not (result and result.get('success')):
+            continue
+
+        hsa_data = result.get('hsa')
+        if hsa_data is None or not hsa_data.get('modes_data'):
+            continue
+
+        # Get channel labels
+        channel_labels = result.get('channel_labels', {})
+
+        # Create subject directory
+        subject_dir = output_dir / subject_id
+        subject_dir.mkdir(parents=True, exist_ok=True)
+
+        # Export each mode's data
+        modes_data = hsa_data['modes_data']
+        for mode_data in modes_data:
+            mode_idx = mode_data['mode_idx']
+            inst_freq = mode_data['instantaneous_frequency']  # (channels, samples)
+            inst_amp = mode_data['instantaneous_amplitude']    # (channels, samples)
+
+            n_channels, n_samples = inst_freq.shape
+
+            # Create one row per time point
+            rows = []
+            for t in range(n_samples):
+                row = {'volume': t}
+                for ch_idx in range(n_channels):
+                    ch_label = channel_labels.get(ch_idx, f'Ch{ch_idx}')
+                    row[f'{ch_label}_freq_hz'] = inst_freq[ch_idx, t]
+                    row[f'{ch_label}_amplitude'] = inst_amp[ch_idx, t]
+                rows.append(row)
+
+            # Save to CSV
+            df = pd.DataFrame(rows)
+            csv_path = subject_dir / f'mode_{mode_idx:02d}_hilbert_spectrum.csv'
+            df.to_csv(csv_path, index=False)
+            csv_paths.append(csv_path)
+            total_files += 1
+
+        if verbose:
+            print(f"  {subject_id}: Exported {len(modes_data)} mode files")
+
+    if verbose:
+        print(f"\nTotal Hilbert spectrum CSV files created: {total_files}")
+
+    return csv_paths
+
+
+def export_marginal_hilbert_spectrum_to_csv(all_subject_results, output_dir, verbose=True):
+    """
+    Export marginal Hilbert spectrum data to CSV files.
+
+    The marginal spectrum is computed by integrating the Hilbert spectrum over time,
+    showing frequency content distribution for each mode and channel.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        output_dir: Directory to save CSV files
+        verbose: Whether to print progress
+
+    Returns:
+        list: Paths to created CSV files
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("EXPORTING MARGINAL HILBERT SPECTRUM DATA TO CSV")
+        print(f"{'='*80}")
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_paths = []
+    total_files = 0
+
+    for subject_id, result in all_subject_results.items():
+        if not (result and result.get('success')):
+            continue
+
+        hsa_data = result.get('hsa')
+        if hsa_data is None or not hsa_data.get('modes_data'):
+            continue
+
+        # Get channel labels and sampling rate
+        channel_labels = result.get('channel_labels', {})
+        sampling_rate = hsa_data['sampling_rate']
+        n_samples = hsa_data['n_samples']
+
+        # Create subject directory
+        subject_dir = output_dir / subject_id
+        subject_dir.mkdir(parents=True, exist_ok=True)
+
+        # Define frequency bins
+        nyquist_freq = sampling_rate / 2
+        n_freq_bins = 256
+        freq_bins = np.linspace(0, nyquist_freq, n_freq_bins + 1)
+        freq_bin_centers = (freq_bins[:-1] + freq_bins[1:]) / 2
+
+        # Export each mode's marginal spectrum
+        modes_data = hsa_data['modes_data']
+        for mode_data in modes_data:
+            mode_idx = mode_data['mode_idx']
+            inst_freq = mode_data['instantaneous_frequency']  # (channels, samples)
+            inst_amp = mode_data['instantaneous_amplitude']    # (channels, samples)
+
+            n_channels, _ = inst_freq.shape
+
+            # Compute marginal spectrum for each channel
+            rows = []
+            for freq_idx, freq_center in enumerate(freq_bin_centers):
+                row = {'frequency_hz': freq_center}
+
+                for ch_idx in range(n_channels):
+                    ch_label = channel_labels.get(ch_idx, f'Ch{ch_idx}')
+
+                    # Compute marginal spectrum for this channel
+                    mhs = np.zeros(n_freq_bins)
+                    for t in range(n_samples):
+                        freq_val = inst_freq[ch_idx, t]
+                        amp_val = inst_amp[ch_idx, t]
+
+                        if 0 <= freq_val < nyquist_freq:
+                            freq_bin_idx = np.searchsorted(freq_bins, freq_val) - 1
+                            freq_bin_idx = np.clip(freq_bin_idx, 0, n_freq_bins - 1)
+                            mhs[freq_bin_idx] += amp_val ** 2
+
+                    # Normalize
+                    mhs /= n_samples
+                    row[f'{ch_label}_energy'] = mhs[freq_idx]
+
+                rows.append(row)
+
+            # Save to CSV
+            df = pd.DataFrame(rows)
+            csv_path = subject_dir / f'mode_{mode_idx:02d}_marginal_spectrum.csv'
+            df.to_csv(csv_path, index=False)
+            csv_paths.append(csv_path)
+            total_files += 1
+
+        if verbose:
+            print(f"  {subject_id}: Exported {len(modes_data)} marginal spectrum files")
+
+    if verbose:
+        print(f"\nTotal marginal spectrum CSV files created: {total_files}")
+
+    return csv_paths
+
 
 def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
     """Main function for FC MVP analysis"""
@@ -5642,6 +5816,22 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             all_subject_results=all_subject_results,
             anhedonia_groups=anhedonia_groups,
             output_dir=mvmd_csv_dir,
+            verbose=verbose
+        )
+
+        # Export Hilbert spectrum data to CSV
+        hsa_csv_dir = csv_export_dir / 'hilbert_spectrum'
+        export_hilbert_spectrum_to_csv(
+            all_subject_results=all_subject_results,
+            output_dir=hsa_csv_dir,
+            verbose=verbose
+        )
+
+        # Export marginal Hilbert spectrum data to CSV
+        marginal_hsa_csv_dir = csv_export_dir / 'marginal_hilbert_spectrum'
+        export_marginal_hilbert_spectrum_to_csv(
+            all_subject_results=all_subject_results,
+            output_dir=marginal_hsa_csv_dir,
             verbose=verbose
         )
 
