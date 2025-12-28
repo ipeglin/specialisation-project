@@ -160,6 +160,152 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
     # Return all figures (or create empty if none)
     if figures:
         return figures
+
+
+def plot_mvmd_mode_distribution_by_group(all_subject_results, anhedonia_groups, verbose=True):
+    """
+    Create scatter plots showing MVMD mode center frequency distribution by slow-band for each group.
+
+    Creates one figure per group with modes plotted on a 1D scatter (frequency axis) with
+    color-coded slow-band classification.
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        anhedonia_groups: Dict with group names -> subject ID lists
+        verbose: Whether to print progress
+
+    Returns:
+        list: List of (figure, metadata_dict) tuples where metadata contains group_name
+    """
+    from tcp.processing.lib.slow_band import get_band_number
+
+    if verbose:
+        logger.info("Creating MVMD mode frequency distribution plots by group")
+
+    # Define slow-band colors and ranges
+    slow_band_colors = {
+        'slow-6': '#9467bd',  # purple
+        'slow-5': '#8c564b',  # brown
+        'slow-4': '#e377c2',  # pink
+        'slow-3': '#7f7f7f',  # gray
+        'slow-2': '#bcbd22',  # olive
+        'slow-1': '#17becf',  # cyan
+        'excluded': '#d62728'  # red
+    }
+
+    slow_band_ranges = {
+        '6': (0.000, 0.010),
+        '5': (0.010, 0.027),
+        '4': (0.027, 0.073),
+        '3': (0.073, 0.198),
+        '2': (0.198, 0.500),
+        '1': (0.500, 0.750)
+    }
+
+    figures = []
+
+    for group_name, subject_ids in anhedonia_groups.items():
+        if verbose:
+            logger.info(f"Creating plot for {group_name} group...")
+
+        # Collect all mode frequencies for this group
+        mode_frequencies = []
+        mode_bands = []
+
+        for subject_id in subject_ids:
+            result = all_subject_results.get(subject_id)
+            if not (result and result.get('success')):
+                continue
+
+            # Get center frequencies from MVMD metadata
+            mvmd_data = result.get('mvmd', {})
+            mvmd_metadata = mvmd_data.get('metadata', {})
+            center_freqs = mvmd_metadata.get('center_freqs')
+
+            if center_freqs is None:
+                continue
+
+            # Add each mode
+            for freq in center_freqs:
+                band_num = get_band_number(freq)
+                band_name = f'slow-{band_num}' if band_num else 'excluded'
+                mode_frequencies.append(freq)
+                mode_bands.append(band_name)
+
+        if not mode_frequencies:
+            if verbose:
+                logger.warning(f"No valid mode data found for {group_name}")
+            continue
+
+        # Create figure
+        fig, ax = plt.subplots(figsize=(12, 4))
+
+        # Group modes by slow-band for plotting
+        band_freq_map = {}
+        for freq, band in zip(mode_frequencies, mode_bands):
+            if band not in band_freq_map:
+                band_freq_map[band] = []
+            band_freq_map[band].append(freq)
+
+        # Plot each slow-band with different color
+        for band_name in sorted(band_freq_map.keys(), key=lambda x: (x != 'excluded', x)):
+            freqs = band_freq_map[band_name]
+            color = slow_band_colors.get(band_name, '#333333')
+
+            # Add slight vertical jitter for visibility
+            y_positions = np.random.uniform(-0.1, 0.1, len(freqs))
+
+            ax.scatter(
+                freqs, y_positions,
+                c=color,
+                alpha=0.6,
+                s=50,
+                label=f'{band_name} (n={len(freqs)})',
+                edgecolors='black',
+                linewidths=0.5
+            )
+
+        # Add vertical lines for slow-band boundaries
+        for band_num, (low, high) in slow_band_ranges.items():
+            ax.axvline(low, color='gray', linestyle='--', alpha=0.3, linewidth=1)
+            ax.axvline(high, color='gray', linestyle='--', alpha=0.3, linewidth=1)
+
+            # Add band label at the top
+            mid_freq = (low + high) / 2
+            ax.text(mid_freq, 0.35, f'Slow-{band_num}',
+                   ha='center', va='bottom', fontsize=9, color='gray', alpha=0.7)
+
+        # Formatting
+        ax.set_xlabel('Mode Center Frequency (Hz)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('')
+        ax.set_title(f'MVMD Mode Frequency Distribution - {group_name.upper()}\n'
+                    f'Total modes: {len(mode_frequencies)} | Subjects: {len(subject_ids)}',
+                    fontsize=14, fontweight='bold', pad=15)
+
+        ax.set_ylim(-0.3, 0.5)
+        ax.set_yticks([])
+        ax.grid(True, axis='x', alpha=0.3, linestyle=':')
+
+        # Set x-axis limits to show full frequency range
+        ax.set_xlim(-0.01, 0.77)
+
+        # Legend
+        ax.legend(loc='upper right', framealpha=0.9, fontsize=9, ncol=2)
+
+        plt.tight_layout()
+
+        # Add to figures list with metadata
+        figures.append((fig, {
+            'group_name': group_name,
+            'safe_group_name': group_name.replace(' ', '_').replace('-', '_'),
+            'n_modes': len(mode_frequencies),
+            'n_subjects': len(subject_ids)
+        }))
+
+        if verbose:
+            logger.info(f"Created plot with {len(mode_frequencies)} modes from {len(subject_ids)} subjects")
+
+    return figures
     else:
         fig = plt.figure(figsize=(16, 6))
         fig.text(0.5, 0.5, 'No matching ROIs found',

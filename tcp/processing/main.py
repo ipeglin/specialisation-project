@@ -58,6 +58,7 @@ from tcp.processing.lib.plot import (
     plot_ipsilateral_intra_network_violin,
     plot_marginal_spectrum_per_mode,
     plot_multivariate_hilbert_spectrum,
+    plot_mvmd_mode_distribution_by_group,
     plot_roi_timeseries_result,
     plot_signal_decomposition,
 )
@@ -3517,6 +3518,82 @@ def display_plots_in_batches(batch_size=20):
     plt.show()
 
 
+def export_mvmd_modes_to_csv(all_subject_results, anhedonia_groups, output_dir, verbose=True):
+    """
+    Export MVMD mode center frequencies for all subjects to CSV files.
+
+    Creates one CSV per group with columns: subject_id, mode_idx, center_freq, slow_band
+
+    Args:
+        all_subject_results: Dict of subject_id -> process_subject results
+        anhedonia_groups: Dict with group names -> subject ID lists
+        output_dir: Directory to save CSV files
+        verbose: Whether to print progress
+
+    Returns:
+        dict: Paths to created CSV files by group
+    """
+    if verbose:
+        print(f"\n{'='*80}")
+        print("EXPORTING MVMD MODES TO CSV")
+        print(f"{'='*80}")
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_paths = {}
+
+    for group_name, subject_ids in anhedonia_groups.items():
+        if verbose:
+            print(f"\nExporting {group_name} group...")
+
+        # Collect mode data for this group
+        mode_data = []
+
+        for subject_id in subject_ids:
+            result = all_subject_results.get(subject_id)
+            if not (result and result.get('success')):
+                continue
+
+            # Get center frequencies from MVMD metadata
+            mvmd_data = result.get('mvmd', {})
+            mvmd_metadata = mvmd_data.get('metadata', {})
+            center_freqs = mvmd_metadata.get('center_freqs')
+
+            if center_freqs is None:
+                continue
+
+            # Add each mode as a row
+            for mode_idx, freq in enumerate(center_freqs):
+                band_num = get_band_number(freq)
+                band_name = f'slow-{band_num}' if band_num else 'excluded'
+                freq_range = get_frequency_range(band_num) if band_num else 'N/A'
+
+                mode_data.append({
+                    'subject_id': subject_id,
+                    'mode_idx': mode_idx,
+                    'center_frequency_hz': freq,
+                    'slow_band': band_name,
+                    'frequency_range_hz': freq_range
+                })
+
+        if mode_data:
+            # Create DataFrame and save to CSV
+            df = pd.DataFrame(mode_data)
+            csv_path = output_dir / f'{group_name}_mvmd_modes.csv'
+            df.to_csv(csv_path, index=False)
+            csv_paths[group_name] = csv_path
+
+            if verbose:
+                print(f"  Saved {len(mode_data)} mode entries for {len(subject_ids)} subjects to {csv_path}")
+        else:
+            if verbose:
+                print(f"  No valid mode data found for {group_name}")
+
+    return csv_paths
+
+
+
 def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
     """Main function for FC MVP analysis"""
     from datetime import datetime
@@ -3747,7 +3824,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     for i, subject_id in enumerate(all_subjects_to_process, 1):
         print_progress = True  # Always print per-subject status (success/fail)
         if print_progress:
-            print(f"\n[{i}/{total_subjects}] Processing subject: {subject_id}")
+            print(f"\n[{i}/{total_subjects}] Processing subject: {subject_id}...")
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
@@ -3755,9 +3832,9 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         )
         all_subject_results[subject_id] = subject_result
         if subject_result['success']:
-            print(f"    ✅ Success")
+            print(f"    [{subject_id}] ✅ Success")
         else:
-            print(f"    ❌ Failed: {subject_id} - {subject_result.get('error', 'Unknown error')}")
+            print(f"    [{subject_id}] ❌ Failed: {subject_result.get('error', 'Unknown error')}")
 
     # Quick Stage 1 summary
     successful_subjects = sum(1 for r in all_subject_results.values() if r.get('success'))
@@ -5539,6 +5616,50 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         print(f"Analysis log saved to: {log_file}")
 
+    # ===== MVMD MODE EXPORT AND VISUALIZATION =====
+    # Export MVMD modes to CSV
+    if save_figures:
+        mvmd_csv_dir = run_parent_dir / 'mvmd_modes_csv'
+        csv_paths = export_mvmd_modes_to_csv(
+            all_subject_results=all_subject_results,
+            anhedonia_groups=anhedonia_groups,
+            output_dir=mvmd_csv_dir,
+            verbose=verbose
+        )
+
+    # Create MVMD mode distribution plots
+    if create_plots:
+        print(f"\n{'='*80}")
+        print(f"CREATING MVMD MODE DISTRIBUTION PLOTS")
+        print(f"{'='*80}")
+
+        mvmd_dist_figures = plot_mvmd_mode_distribution_by_group(
+            all_subject_results=all_subject_results,
+            anhedonia_groups=anhedonia_groups,
+            verbose=verbose
+        )
+
+        # Save and/or show the figures
+        if save_figures:
+            mvmd_dist_dir = run_parent_dir / 'mvmd_mode_distribution'
+            mvmd_dist_dir.mkdir(parents=True, exist_ok=True)
+
+            for fig, metadata in mvmd_dist_figures:
+                safe_name = metadata['safe_group_name']
+                fig_path = mvmd_dist_dir / f'{safe_name}_mode_distribution.svg'
+                fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                figures_saved_count += 1
+                if verbose:
+                    print(f"  Saved {metadata['group_name']} plot to {fig_path}")
+
+        if show_plots:
+            print(f"  Displaying {len(mvmd_dist_figures)} MVMD mode distribution plots...")
+            plt.show()
+        else:
+            # Close figures if not showing
+            for fig, _ in mvmd_dist_figures:
+                plt.close(fig)
+
     # ===== FINAL SUMMARY =====
     print(f"\n{'='*80}")
     print(f"ANALYSIS COMPLETE")
@@ -5547,11 +5668,13 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         print(f"All outputs saved to: {run_parent_dir}")
         print(f"  - Static FC CSVs: {fc_output_dir}")
         print(f"  - Group averages: {group_avg_output_dir}")
+        print(f"  - MVMD modes CSVs: {mvmd_csv_dir}")
         if figures_saved_count > 0:
             print(f"  - Figures ({figures_saved_count} total):")
             print(f"    - FC (subject-level): {fc_subject_dir}")
             print(f"    - FC (group-level): {fc_group_dir}")
             print(f"    - MVMD analysis: {mvmd_figures_dir}")
+            print(f"    - MVMD mode distribution: {mvmd_dist_dir}")
             print(f"    - Hilbert Spectral Analysis: {hsa_figures_dir}")
             print(f"    - Marginal Hilbert Spectral Analysis: {marginal_hsa_figures_dir}")
             print(f"    - ROI extraction: {roi_figures_dir}")
