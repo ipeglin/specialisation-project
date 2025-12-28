@@ -4204,30 +4204,27 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Export Games-Howell post-hoc results
         post_hoc_collection = anhedonic_anova_results.get('post_hoc_collection', [])
-        for post_hoc_data in post_hoc_collection:
+        for idx, post_hoc_data in enumerate(post_hoc_collection):
             network = post_hoc_data['network']
             band = post_hoc_data['band']
             post_hoc_df = post_hoc_data['post_hoc']
 
-            # Create descriptive lower_snake_case filename following project conventions
-            # Network name: convert to lowercase and replace special characters
-            network_clean = (network.lower()
-                .replace('/', '_')
-                .replace(' ', '_')
-                .replace('-', '_'))
-
-            # Band name: convert to lowercase and replace special characters
-            band_clean = (band.lower()
-                .replace('/', '_')
-                .replace(' ', '_')
-                .replace('-', '_'))
-
-            # Format: games_howell_{network}_{band}.csv
-            filename = f"games_howell_{network_clean}_{band_clean}.csv"
+            # Use index-based filename to avoid filesystem length limits
+            # Index is 0-padded for proper sorting
+            filename = f"games_howell_{idx:03d}.csv"
             filepath = post_hoc_dir / filename
 
-            # Save DataFrame directly (same pattern as other CSV exports)
-            post_hoc_df.to_csv(filepath, index=False)
+            # Add metadata as first row in DataFrame for reference
+            metadata_row = pd.DataFrame([{
+                'A': f'Network: {network}',
+                'B': f'Band: {band}',
+                'pval': 'p-value',
+                'reject': 'Significant'
+            }])
+
+            # Combine metadata and data, then save
+            combined_df = pd.concat([metadata_row, post_hoc_df], ignore_index=True)
+            combined_df.to_csv(filepath, index=False)
 
         if post_hoc_collection:
             print(f"Exported {len(post_hoc_collection)} Games-Howell files to: {post_hoc_dir}")
