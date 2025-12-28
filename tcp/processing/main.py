@@ -3826,9 +3826,14 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     high_anhedonic_to_process = []
 
     if LIMIT_SUBJECTS:
-        # Separate low-anhedonic and high-anhedonic subjects for proper sampling
-        low_anhedonic_to_process = low_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
-        high_anhedonic_to_process = high_anhedonic_subjects[:MAX_SUBJECTS_PER_GROUP]
+        # CRITICAL: Sample from ACCESSIBLE lists only (already filtered by data source)
+        # First filter to get accessible subjects from each subgroup
+        accessible_low_anhedonic = [sid for sid in low_anhedonic_subjects if sid in accessible_anhedonic]
+        accessible_high_anhedonic = [sid for sid in high_anhedonic_subjects if sid in accessible_anhedonic]
+
+        # Then apply limiting
+        low_anhedonic_to_process = accessible_low_anhedonic[:MAX_SUBJECTS_PER_GROUP]
+        high_anhedonic_to_process = accessible_high_anhedonic[:MAX_SUBJECTS_PER_GROUP]
         non_anhedonic_to_process = accessible_non_anhedonic[:MAX_SUBJECTS_PER_GROUP]
 
         # Combine anhedonic subjects after sampling
