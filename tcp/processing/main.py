@@ -4403,6 +4403,32 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         if post_hoc_collection:
             print(f"Exported {len(post_hoc_collection)} Games-Howell files to: {post_hoc_dir}")
+
+        # Export MVMD modes to CSV
+        mvmd_csv_dir = csv_export_dir / 'mvmd_modes_csv'
+        export_mvmd_modes_to_csv(
+            all_subject_results=all_subject_results,
+            anhedonia_groups=anhedonia_groups,
+            output_dir=mvmd_csv_dir,
+            verbose=verbose
+        )
+
+        # Export Hilbert spectrum data to CSV
+        hsa_csv_dir = csv_export_dir / 'hilbert_spectrum'
+        export_hilbert_spectrum_to_csv(
+            all_subject_results=all_subject_results,
+            output_dir=hsa_csv_dir,
+            verbose=verbose
+        )
+
+        # Export marginal Hilbert spectrum data to CSV
+        marginal_hsa_csv_dir = csv_export_dir / 'marginal_hilbert_spectrum'
+        export_marginal_hilbert_spectrum_to_csv(
+            all_subject_results=all_subject_results,
+            output_dir=marginal_hsa_csv_dir,
+            verbose=verbose
+        )
+
     # ===== INDIVIDUAL SUBJECT PLOTS =====
     individual_plots_created = 0
     figures_saved_count = 0
@@ -5808,33 +5834,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         print(f"Analysis log saved to: {log_file}")
 
-    # ===== MVMD MODE EXPORT AND VISUALIZATION =====
-    # Export MVMD modes to CSV
-    if save_figures:
-        mvmd_csv_dir = csv_export_dir / 'mvmd_modes_csv'
-        csv_paths = export_mvmd_modes_to_csv(
-            all_subject_results=all_subject_results,
-            anhedonia_groups=anhedonia_groups,
-            output_dir=mvmd_csv_dir,
-            verbose=verbose
-        )
-
-        # Export Hilbert spectrum data to CSV
-        hsa_csv_dir = csv_export_dir / 'hilbert_spectrum'
-        export_hilbert_spectrum_to_csv(
-            all_subject_results=all_subject_results,
-            output_dir=hsa_csv_dir,
-            verbose=verbose
-        )
-
-        # Export marginal Hilbert spectrum data to CSV
-        marginal_hsa_csv_dir = csv_export_dir / 'marginal_hilbert_spectrum'
-        export_marginal_hilbert_spectrum_to_csv(
-            all_subject_results=all_subject_results,
-            output_dir=marginal_hsa_csv_dir,
-            verbose=verbose
-        )
-
+    # ===== MVMD MODE VISUALIZATION =====
     # Create MVMD mode distribution plots
     if create_plots:
         print(f"\n{'='*80}")
