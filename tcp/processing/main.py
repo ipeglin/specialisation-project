@@ -1662,7 +1662,8 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                 'mode_frequencies': band_fc_data.get('mode_freqs', []),
                 'n_modes_in_band': band_fc_data.get('modes_in_band_count', 0),
             },
-            'hsa': analytic_signal_modes, # Hilbert Spectral Analysis
+            'hsa': hsa_data, # Hilbert Spectral Analysis (full data structure)
+            'analytic_signal_modes': analytic_signal_modes, # Legacy: just the analytic signals
             'roi_extraction_results': {
                 'cortical': {
                     'atlas_name': cortical_atlas.atlas_name,
@@ -4520,42 +4521,40 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             # We now only work at the mode level and aggregate FC matrices (not time-domain signals).
 
             # 6. Prepare Multivariate Hilbert Spectrum plots
-            if result.get('mvmd'):
+            if result.get('hsa') is not None and result.get('mvmd'):
+                hsa_data = result['hsa']
                 mvmd_data = result['mvmd']
-                if mvmd_data.get('hilbert_spectral_analysis') is not None:
-                    hsa_data = mvmd_data['hilbert_spectral_analysis']
-                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
-                    channel_label_map = mvmd_data.get('channel_label_map', {})
-                    # Convert channel_label_map to list of labels
-                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+                center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+                # Use channel_labels from subject result
+                channel_label_map = result.get('channel_labels', {})
+                channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
 
-                    plot_batches['hsa_multivariate'].append({
-                        'subject_id': subject_id,
-                        'hsa_data': hsa_data,
-                        'center_freqs': center_freqs,
-                        'channel_labels': channel_labels,
-                        'save_dir': hsa_figures_dir if save_figures and hsa_figures_dir else None
-                    })
-                    plots_for_subject += 1
+                plot_batches['hsa_multivariate'].append({
+                    'subject_id': subject_id,
+                    'hsa_data': hsa_data,
+                    'center_freqs': center_freqs,
+                    'channel_labels': channel_labels,
+                    'save_dir': hsa_figures_dir if save_figures and hsa_figures_dir else None
+                })
+                plots_for_subject += 1
 
             # 7. Prepare Marginal Spectrum per Mode plots
-            if result.get('mvmd'):
+            if result.get('hsa') is not None and result.get('mvmd'):
+                hsa_data = result['hsa']
                 mvmd_data = result['mvmd']
-                if mvmd_data.get('hilbert_spectral_analysis') is not None:
-                    hsa_data = mvmd_data['hilbert_spectral_analysis']
-                    center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
-                    channel_label_map = mvmd_data.get('channel_label_map', {})
-                    # Convert channel_label_map to list of labels
-                    channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
+                center_freqs = mvmd_data['center_freqs'][-1, :] if mvmd_data.get('center_freqs') is not None else None
+                # Use channel_labels from subject result
+                channel_label_map = result.get('channel_labels', {})
+                channel_labels = [channel_label_map.get(i, f'Ch{i+1}') for i in range(len(channel_label_map))]
 
-                    plot_batches['hsa_marginal'].append({
-                        'subject_id': subject_id,
-                        'hsa_data': hsa_data,
-                        'center_freqs': center_freqs,
-                        'channel_labels': channel_labels,
-                        'save_dir': marginal_hsa_figures_dir if save_figures and marginal_hsa_figures_dir else None
-                    })
-                    plots_for_subject += 1
+                plot_batches['hsa_marginal'].append({
+                    'subject_id': subject_id,
+                    'hsa_data': hsa_data,
+                    'center_freqs': center_freqs,
+                    'channel_labels': channel_labels,
+                    'save_dir': marginal_hsa_figures_dir if save_figures and marginal_hsa_figures_dir else None
+                })
+                plots_for_subject += 1
 
                 debug_print(f"        Final plots_for_subject count: {plots_for_subject}")
                 if plots_for_subject > 0:
