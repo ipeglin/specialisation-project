@@ -4226,15 +4226,8 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             filename = f"games_howell_{network_clean}_{band_clean}.csv"
             filepath = post_hoc_dir / filename
 
-            # Save with additional metadata
-            with open(filepath, 'w') as f:
-                f.write(f"# Games-Howell Post-hoc Test Results\n")
-                f.write(f"# Network: {network}\n")
-                f.write(f"# Band: {band}\n")
-                f.write(f"# Test performed only because omnibus Welch ANOVA p < 0.05 (uncorrected)\n")
-                f.write(f"# Post-hoc p-values are NOT corrected for multiple comparisons\n")
-                f.write(f"#\n")
-                post_hoc_df.to_csv(f, index=False)
+            # Save DataFrame directly (same pattern as other CSV exports)
+            post_hoc_df.to_csv(filepath, index=False)
 
         if post_hoc_collection:
             print(f"Exported {len(post_hoc_collection)} Games-Howell files to: {post_hoc_dir}")
