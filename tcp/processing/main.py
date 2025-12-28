@@ -5648,7 +5648,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     # ===== MVMD MODE EXPORT AND VISUALIZATION =====
     # Export MVMD modes to CSV
     if save_figures:
-        mvmd_csv_dir = run_parent_dir / 'mvmd_modes_csv'
+        mvmd_csv_dir = csv_export_dir / 'mvmd_modes_csv'
         csv_paths = export_mvmd_modes_to_csv(
             all_subject_results=all_subject_results,
             anhedonia_groups=anhedonia_groups,
@@ -5670,7 +5670,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
         # Save and/or show the figures
         if save_figures:
-            mvmd_dist_dir = run_parent_dir / 'mvmd_mode_distribution'
+            mvmd_dist_dir = figures_base_dir / 'mvmd_mode_distribution'
             mvmd_dist_dir.mkdir(parents=True, exist_ok=True)
 
             for fig, metadata in mvmd_dist_figures:
