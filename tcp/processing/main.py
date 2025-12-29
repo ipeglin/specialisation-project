@@ -5978,7 +5978,7 @@ Output:
                            'Use this to run analysis without any visualization overhead')
     parser.add_argument('--random-seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--num-imf', type=int, default=10,
+    parser.add_argument('--num-imfs', type=int, default=10,
                         help='Number of IMFs for MVMD to decompose signals into')
 
     args = parser.parse_args()
