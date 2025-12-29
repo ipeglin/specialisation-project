@@ -1346,6 +1346,7 @@ def compare_fc_between_groups(group1_fc_results, group2_fc_results, group1_name=
 
 def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atlas,
                    cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
+                   num_imfs=10,
                    verbose=True):
     """
     Stage 1: Pure data extraction and basic computation for a single subject.
@@ -1576,7 +1577,7 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
             print(f"\n=== MVMD DECOMPOSITION ===")
 
         mvmd = MVMD(config=None)
-        mvmd_result = mvmd.decompose(all_channels, num_modes=10)
+        mvmd_result = mvmd.decompose(all_channels, num_modes=num_imfs)
         time_modes = mvmd_result['time_modes']
         center_freqs = mvmd_result['center_freqs'][-1, :]
 
@@ -3769,7 +3770,7 @@ def export_marginal_hilbert_spectrum_to_csv(all_subject_results, output_dir, ver
     return csv_paths
 
 
-def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None, num_imfs=10):
     """Main function for FC MVP analysis"""
     from datetime import datetime
 
@@ -4044,6 +4045,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         subject_result = process_subject(
             subject_id, manager, loader, cortical_atlas, subcortical_atlas,
             cortical_roi_extractor, subcortical_roi_extractor, cortical_ROIs, subcortical_ROIs,
+            num_imfs=num_imfs,
             verbose=verbose
         )
         all_subject_results[subject_id] = subject_result
@@ -5949,6 +5951,7 @@ Examples:
   python fc_mvp.py --subjects-per-group 5   # Limit to 5 subjects per group
   python fc_mvp.py --verbose --show-plots   # Enable verbose output and show plots
   python fc_mvp.py --subjects-per-group 3 --no-save  # Limit subjects and don't save figures
+  python fc_mvp.py --num-imf 10           # Decompose each signal channel into 10 components with MVMD
 
 Output:
   - Static FC matrices and pairwise connectivity CSV files
@@ -5975,6 +5978,8 @@ Output:
                            'Use this to run analysis without any visualization overhead')
     parser.add_argument('--random-seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    parser.add_argument('--num-imf', type=int, default=10,
+                        help='Number of IMFs for MVMD to decompose signals into')
 
     args = parser.parse_args()
 
@@ -5990,6 +5995,8 @@ Output:
     MASK_NONSIGNIFICANT = False
     MASK_DIAGONAL = False
 
+    NUM_IMFS = args.num_imfs
+
     # Reproducibility
     random.seed(args.random_seed)
 
@@ -6000,7 +6007,8 @@ Output:
         show_plots=SHOW_PLOTS,
         save_figures=SAVE_FIGURES,
         verbose=VERBOSE_OUTPUT,
-        subjects_per_group=args.subjects_per_group
+        subjects_per_group=args.subjects_per_group,
+        num_imfs=NUM_IMFS,
     )
 
     # Note: plt.show() is now called within each batch in main(), not here
