@@ -2170,7 +2170,7 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                     # Leftmost column: add mode labels as y-axis labels
                     mode_label = f'$u_{{{mode_num}}}$'
                     if center_freq is not None:
-                        mode_label += f'\n$\\omega_{mode_num} = {center_freq:.3f}$ Hz'
+                        mode_label += f'\n$\\omega_{{{mode_num}}} = {center_freq:.3f}$ Hz'
                     ax.set_ylabel(mode_label, fontsize=9, fontweight='bold', rotation=0,
                                 ha='right', va='center')
 
