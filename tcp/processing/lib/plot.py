@@ -2580,9 +2580,16 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        # Display Games-Howell post-hoc whenever available, even if FDR-corrected p >= 0.05
+        # Rationale: Results are already computed and saved to CSV; hiding creates inconsistency
+        show_posthoc = post_hoc_df is not None and not post_hoc_df.empty
         if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
+
+            # Add warning if omnibus not FDR-significant
+            if not np.isnan(fdr_p) and fdr_p >= 0.05:
+                stats_text.append('  (Note: omnibus n.s. after FDR correction)')
+
             for _, row in post_hoc_df.iterrows():
                 a = row['A']
                 b = row['B']
@@ -2751,9 +2758,16 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        # Display Games-Howell post-hoc whenever available, even if FDR-corrected p >= 0.05
+        # Rationale: Results are already computed and saved to CSV; hiding creates inconsistency
+        show_posthoc = post_hoc_df is not None and not post_hoc_df.empty
         if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
+
+            # Add warning if omnibus not FDR-significant
+            if not np.isnan(fdr_p) and fdr_p >= 0.05:
+                stats_text.append('  (Note: omnibus n.s. after FDR correction)')
+
             for _, row in post_hoc_df.iterrows():
                 a = row['A']
                 b = row['B']
@@ -2802,6 +2816,12 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 all_bands.update(band_dict.keys())
 
         for band_name in sorted(all_bands, key=lambda x: int(x.split('-')[1]) if 'Slow-' in x else 0, reverse=True):
+            # Extract band-level ANOVA results (ipsi_slow_anova structure: {band: {conn: {results}}})
+            # This matches the pattern used for interhemispheric slow-band plots (lines 2637-2650)
+            band_anova_results = ipsi_slow_anova.get(band_name, {})
+            if not band_anova_results:
+                continue  # Skip if no ANOVA results for this band
+
             for conn_key in sorted(all_conn_keys):
                 plot_data = []
                 for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
@@ -2812,7 +2832,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                     continue
                 df = pd.DataFrame(plot_data)
                 title_label = f"{conn_key}"
-                fig = _make_violin(df, f'{band_name}_ipsi', conn_key, ipsi_slow_anova, title_label)
+                fig = _make_violin(df, f'{band_name}_ipsi', conn_key, band_anova_results, title_label)
                 figures.append((fig, {'band_name': f'{band_name}_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
 
     return figures
