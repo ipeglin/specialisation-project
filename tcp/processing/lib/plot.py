@@ -747,9 +747,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
     # Add note about asterisk marker and availability in the title
     # Main title
     if band_name and frequency_range:
-        title_text = f'Static Functional Connectivity - {band_name}'
+        title_text = f'Static FC Matrix - {band_name}'
     else:
-        title_text = 'Static Functional Connectivity Matrix'
+        title_text = 'Whole-signal Static FC Matrix'
 
     # Subtitle with availability and significance info
     subtitle_parts = []
@@ -1302,9 +1302,9 @@ def plot_fc_results(corr_matrix, roi_labels, p_values=None, connectivity_pattern
 
     # Add title for ipsilateral figure
     if band_name and frequency_range:
-        title_text_ipsi = f'Static Functional Connectivity - {band_name}'
+        title_text_ipsi = f'Static FC Matrix - {band_name}'
     else:
-        title_text_ipsi = 'Static Functional Connectivity Matrix'
+        title_text_ipsi = 'Whole-signal Static FC Matrix'
 
     # Subtitle with availability and significance info
     subtitle_parts_ipsi = []
@@ -2563,7 +2563,7 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
         ax.set_xticklabels(['Non-anhedonic', 'Low anhedonic', 'High anhedonic'], fontsize=11, rotation=0)
         ax.grid(axis='y', alpha=0.3, linestyle='--')
 
-        title = f'{network_key} - {band_name}'
+        title = f'{network_key} - {band_name.captialize()}'
         ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
 
         stats_text = []
@@ -2617,7 +2617,7 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
             if not plot_data:
                 continue
             df = pd.DataFrame(plot_data)
-            fig = _make_violin(df, 'static', network_key, static_anova)
+            fig = _make_violin(df, 'whole_signal', network_key, static_anova)
             figures.append((fig, {
                 'band_name': 'static',
                 'network_key': network_key,
@@ -2789,7 +2789,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 continue
             df = pd.DataFrame(plot_data)
             title_label = conn_key
-            fig = _make_violin(df, 'static_ipsi', conn_key, ipsi_static_anova, title_label)
+            fig = _make_violin(df, 'Whole-signal (ipsi)', conn_key, ipsi_static_anova, title_label)
             figures.append((fig, {'band_name': 'static_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
 
     # Slow-band ipsilateral
@@ -2812,7 +2812,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                     continue
                 df = pd.DataFrame(plot_data)
                 title_label = f"{conn_key}"
-                fig = _make_violin(df, f'{band_name}_ipsi', conn_key, ipsi_slow_anova, title_label)
+                fig = _make_violin(df, f'{band_name.capitalize()} (ipsi)', conn_key, ipsi_slow_anova, title_label)
                 figures.append((fig, {'band_name': f'{band_name}_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
 
     return figures
