@@ -146,7 +146,7 @@ def plot_roi_timeseries_result(roi_extraction_results, subject_id=None, atlas_ty
         title_parts = []
         if atlas_type:
             title_parts.append(f'{atlas_type} ROI')
-        title_parts.append(f'{roi_name} Timeseries')
+        title_parts.append(f'{roi_name} BOLD Signal')
         if subject_id:
             title_parts.append(f'({subject_id})')
 
@@ -270,10 +270,17 @@ def plot_mvmd_mode_distribution_by_group(all_subject_results, anhedonia_groups, 
             ax.axvline(low, color='gray', linestyle='--', alpha=0.3, linewidth=1)
             ax.axvline(high, color='gray', linestyle='--', alpha=0.3, linewidth=1)
 
-            # Add band label at the top
+            # Add band label
             mid_freq = (low + high) / 2
-            ax.text(mid_freq, 0.35, f'Slow-{band_num}',
-                   ha='center', va='bottom', fontsize=9, color='gray', alpha=0.7)
+            band_width = high - low
+
+            if band_width < 0.025:  # Narrow band - use vertical text
+                ax.text(mid_freq, 0.0, f'Slow-{band_num}',
+                       ha='center', va='center', fontsize=9, color='gray',
+                       alpha=0.7, rotation=90)
+            else:  # Wide band - use horizontal text
+                ax.text(mid_freq, 0.35, f'Slow-{band_num}',
+                       ha='center', va='bottom', fontsize=9, color='gray', alpha=0.7)
 
         # Formatting
         ax.set_xlabel('Mode Center Frequency (Hz)', fontsize=12, fontweight='bold')
@@ -2171,7 +2178,7 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                     mode_label = f'$u_{{{mode_num}}}$'
                     if center_freq is not None:
                         mode_label += f'\n$\\omega_{{{mode_num}}} = {center_freq:.3f}$ Hz'
-                    ax.set_ylabel(mode_label, fontsize=9, fontweight='bold', rotation=0,
+                    ax.set_ylabel(mode_label, fontsize=9, rotation=0,
                                 ha='right', va='center')
 
                 if mode_idx == n_modes - 1:
@@ -2187,7 +2194,7 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                 ax.tick_params(labelsize=7)
 
         # Figure title
-        title_parts = [f'Marginal Hilbert Spectrum per Mode and Channel: {region_network_key}']
+        title_parts = [f'Marginal Hilbert Spectrum: {region_network_key}']
         if subject_id:
             title_parts.append(f'({subject_id})')
 
