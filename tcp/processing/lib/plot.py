@@ -2160,8 +2160,11 @@ def plot_marginal_spectrum_per_mode(hsa_data, subject_id=None, center_freqs=None
                 # Normalize by number of samples
                 mhs /= n_samples
 
+                # Apply log10 transformation for consistent energy scaling
+                mhs_log = np.log10(mhs + 1e-10)
+
                 # Plot marginal spectrum for this mode-channel combination
-                ax.plot(freq_bin_centers, mhs, color='black', linewidth=0.8, alpha=0.9)
+                ax.plot(freq_bin_centers, mhs_log, color='black', linewidth=0.8, alpha=0.9)
 
                 # Add vertical line at center frequency for this mode
                 if center_freq is not None:
@@ -2438,7 +2441,10 @@ def plot_band_marginal_spectrum(hsa_band_data, subject_id=None, channel_labels=N
             # Normalize by time samples
             mhs_band_integrated /= n_samples
 
-            mhs_per_band.append((mhs_band_integrated, band_name))
+            # Apply log10 transformation for consistent energy scaling
+            mhs_band_integrated_log = np.log10(mhs_band_integrated + 1e-10)
+
+            mhs_per_band.append((mhs_band_integrated_log, band_name))
 
         # Create subplot layout - one subplot per band
         n_cols = 2
@@ -2460,7 +2466,7 @@ def plot_band_marginal_spectrum(hsa_band_data, subject_id=None, channel_labels=N
             # Plot integrated marginal spectrum for this band
             ax.plot(freq_bin_centers, mhs_band_integrated, color='black', linewidth=0.8, alpha=0.9)
 
-            ax.set_ylabel('Energy', fontsize=10, fontweight='bold')
+            ax.set_ylabel('$\log_{10}$(Energy)', fontsize=10, fontweight='bold')
             ax.set_title(f'{band_name} - Marginal Spectrum\n({n_channels_in_group} Channels Integrated)',
                         fontsize=11, fontweight='bold', pad=8)
             ax.grid(True, alpha=0.3, linestyle='--')
