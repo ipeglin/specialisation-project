@@ -2576,7 +2576,7 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
         ax.set_xticklabels(['Non-anhedonic', 'Low anhedonic', 'High anhedonic'], fontsize=11, rotation=0)
         ax.grid(axis='y', alpha=0.3, linestyle='--')
 
-        title = f'{network_key} - {band_name.captialize()}'
+        title = f'{network_key} - {band_name.capitalize()}'
         ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
 
         stats_text = []
