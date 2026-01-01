@@ -2593,7 +2593,7 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        show_posthoc = post_hoc_df is not None and omnibus_p < 0.05
         if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
             for _, row in post_hoc_df.iterrows():
@@ -2764,7 +2764,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
             fdr_sig = '***' if fdr_p < 0.001 else '**' if fdr_p < 0.01 else '*' if fdr_p < 0.05 else 'ns'
             stats_text.append(f'FDR-corrected p = {fdr_p:.4f} {fdr_sig}')
 
-        show_posthoc = post_hoc_df is not None and (np.isnan(fdr_p) or fdr_p < 0.05)
+        show_posthoc = post_hoc_df is not None and omnibus_p < 0.05
         if show_posthoc:
             stats_text.append('Games-Howell post-hoc:')
             for _, row in post_hoc_df.iterrows():
