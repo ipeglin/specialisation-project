@@ -3980,17 +3980,22 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
     print("[Init] Functional Connectivity MVP")
 
-    # Create timestamped parent folder for this analysis run only if saving figures
+    # Create timestamped parent folder for this analysis run if saving figures or exporting CSVs
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    if save_figures:
+    if save_figures or export_csv:
         run_parent_dir = get_analysis_path(f'analysis_runs/run_{run_timestamp}')
         run_parent_dir.mkdir(parents=True, exist_ok=True)
         print(f"[Init] Analysis run directory: {run_parent_dir}")
         print(f"[Init] Timestamp: {run_timestamp}")
-        print(f"[Init] All outputs for this run will be saved in this directory")
+        if save_figures and export_csv:
+            print(f"[Init] All outputs (figures and CSVs) for this run will be saved in this directory")
+        elif save_figures:
+            print(f"[Init] All figure outputs for this run will be saved in this directory")
+        else:
+            print(f"[Init] All CSV outputs for this run will be saved in this directory")
     else:
         run_parent_dir = None
-        print(f"[Init] Running in no-save mode - figures will not be saved to disk")
+        print(f"[Init] Running in no-save mode - no outputs will be saved to disk")
 
     # ===== CONFIGURATION FOR MULTI-SUBJECT ANALYSIS =====
     LIMIT_SUBJECTS = subjects_per_group is not None  # Enable limiting if subjects_per_group is specified
