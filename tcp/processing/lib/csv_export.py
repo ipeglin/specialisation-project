@@ -199,3 +199,91 @@ def export_group_averaged_fc_to_csv(group_avg_data, output_dir, verbose=False):
         print(f"    Exported: {metadata_file.name}")
 
     return created_files
+
+
+def export_significance_fractions_to_csv(stats_results, output_dir, verbose=True):
+    """
+    Export significance fraction summary tables to CSV.
+
+    Creates two CSV files (interhemispheric and ipsilateral) with:
+    - Rows: Whole-signal, slow-2, slow-3, slow-4, slow-5, slow-6
+    - Columns: Non-anhedonic, Low-anhedonic, High-anhedonic
+    - Cells: Mean ± SD of significance fractions
+
+    Args:
+        stats_results: Output from prepare_statistics_data() containing:
+            - static_significance_by_group
+            - slow_band_significance_by_group
+        output_dir: Directory to save CSV files
+        verbose: Whether to print progress
+    """
+    import pandas as pd
+    import numpy as np
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    static_sig = stats_results.get('static_significance_by_group', {})
+    slow_band_sig = stats_results.get('slow_band_significance_by_group', {})
+
+    # Define groups and bands
+    groups = ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']
+    bands = ['whole-signal', 'slow-2', 'slow-3', 'slow-4', 'slow-5', 'slow-6']
+    connectivity_types = ['interhemispheric', 'ipsilateral']
+
+    for conn_type in connectivity_types:
+        if verbose:
+            print(f"  Exporting {conn_type} significance fractions...")
+
+        # Build table data
+        table_data = []
+
+        for band in bands:
+            row = {'Band': band}
+
+            for group in groups:
+                if band == 'whole-signal':
+                    # Static (whole-signal) data
+                    values = static_sig.get(group, {}).get(conn_type, [])
+                else:
+                    # Slow-band data
+                    band_name = band  # e.g., 'slow-4'
+                    values = slow_band_sig.get(group, {}).get(conn_type, {}).get(band_name, [])
+
+                if values and len(values) > 0:
+                    mean_val = np.mean(values)
+                    std_val = np.std(values, ddof=1)  # Sample SD
+                    n_val = len(values)
+
+                    # Format as "mean ± std (n=X)"
+                    row[f'{group}_mean'] = mean_val
+                    row[f'{group}_std'] = std_val
+                    row[f'{group}_n'] = n_val
+                    row[f'{group}_formatted'] = f"{mean_val:.4f} ± {std_val:.4f} (n={n_val})"
+                else:
+                    row[f'{group}_mean'] = np.nan
+                    row[f'{group}_std'] = np.nan
+                    row[f'{group}_n'] = 0
+                    row[f'{group}_formatted'] = 'N/A'
+
+            table_data.append(row)
+
+        # Create DataFrame
+        df = pd.DataFrame(table_data)
+
+        # Reorder columns for readability
+        column_order = ['Band']
+        for group in groups:
+            column_order.extend([f'{group}_mean', f'{group}_std', f'{group}_n', f'{group}_formatted'])
+        df = df[column_order]
+
+        # Export to CSV
+        csv_path = output_dir / f'significance_fractions_{conn_type}.csv'
+        df.to_csv(csv_path, index=False)
+
+        if verbose:
+            print(f"    Saved to: {csv_path}")
+
+    if verbose:
+        print(f"  Significance fraction export complete!")

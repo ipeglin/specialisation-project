@@ -47,6 +47,7 @@ from config.paths import get_analysis_path, get_parcellations_path
 from tcp.processing import DataLoader, SubjectManager
 from tcp.processing.lib.csv_export import (
     export_group_averaged_fc_to_csv,
+    export_significance_fractions_to_csv,
     export_static_fc_results_to_csv,
 )
 from tcp.processing.lib.fisher import fisher_r_to_z, fisher_z_to_r
@@ -680,12 +681,19 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
 
                     # Ipsilateral (same hemisphere, different regions)
                     if roi1_hemi == roi2_hemi:
+                        # Extract network information
+                        roi1_network = roi1_parts[2] if len(roi1_parts) > 2 else None
+                        roi2_network = roi2_parts[2] if len(roi2_parts) > 2 else None
+
                         results['ipsilateral']['pairs'][pair_key] = {
                             'correlation': corr_val,
                             'p_value': p_val,
                             'significant': is_significant,
                             'hemisphere': roi1_hemi,
-                            'regions': f"{roi1_region}_{roi2_region}"
+                            'regions': f"{roi1_region}_{roi2_region}",
+                            'network1': roi1_network,
+                            'network2': roi2_network,
+                            'is_intra_network': (roi1_network == roi2_network and roi1_network is not None)
                         }
 
                     # Contralateral (different hemisphere, different regions)
@@ -784,6 +792,48 @@ def analyze_connectivity_patterns(corr_matrix, roi_labels, p_values=None, alpha=
     results['interhemispheric']['network_stats'] = network_stats
 
     return results
+
+
+def compute_significance_fractions(connectivity_results, connectivity_type, alpha=0.05):
+    """
+    Compute significance fractions from connectivity pattern analysis.
+
+    Extracts the proportion of statistically significant connectivity pairs
+    from the output of analyze_connectivity_patterns(), filtering for
+    intra-network pairs only (same region + same network).
+
+    Args:
+        connectivity_results: Output from analyze_connectivity_patterns()
+        connectivity_type: 'interhemispheric' or 'ipsilateral'
+        alpha: Significance threshold (default: 0.05)
+
+    Returns:
+        dict: {
+            'total_pairs': int - Number of intra-network pairs,
+            'significant_pairs': int - Number of significant intra-network pairs,
+            'significance_fraction': float - Fraction of significant pairs (0.0 to 1.0)
+        }
+    """
+    pattern_data = connectivity_results.get(connectivity_type, {})
+    pairs = pattern_data.get('pairs', {})
+
+    # Filter for intra-network pairs only (same region + same network)
+    intra_network_pairs = {
+        k: v for k, v in pairs.items()
+        if v.get('is_intra_network', False)
+    }
+
+    total_pairs = len(intra_network_pairs)
+    significant_pairs = sum(
+        1 for pair in intra_network_pairs.values()
+        if pair.get('significant', False)
+    )
+
+    return {
+        'total_pairs': total_pairs,
+        'significant_pairs': significant_pairs,
+        'significance_fraction': significant_pairs / total_pairs if total_pairs > 0 else 0.0
+    }
 
 
 def extract_interhemispheric_network_coherence_per_mode(fc_matrix, roi_labels):
@@ -1572,6 +1622,28 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
         if verbose and fc_matrix is not None:
             print(f"Static FC matrix shape: {fc_matrix.shape}")
 
+        # Compute static connectivity patterns and significance
+        static_connectivity = None
+        static_interhemi_sig = None
+        static_ipsi_sig = None
+
+        if fc_matrix is not None and fc_pvalues is not None:
+            static_connectivity = analyze_connectivity_patterns(
+                fc_matrix, all_channel_labels, p_values=fc_pvalues, alpha=0.05
+            )
+
+            # Extract static significance fractions
+            static_interhemi_sig = compute_significance_fractions(
+                static_connectivity, 'interhemispheric', alpha=0.05
+            )
+            static_ipsi_sig = compute_significance_fractions(
+                static_connectivity, 'ipsilateral', alpha=0.05
+            )
+
+            if verbose:
+                print(f"  Interhemispheric: {static_interhemi_sig['significant_pairs']}/{static_interhemi_sig['total_pairs']} significant")
+                print(f"  Ipsilateral: {static_ipsi_sig['significant_pairs']}/{static_ipsi_sig['total_pairs']} significant")
+
         # ===== 5. MVMD DECOMPOSITION =====
         if verbose:
             print(f"\n=== MVMD DECOMPOSITION ===")
@@ -1591,6 +1663,46 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
 
         mode_fc_data = compute_fc_per_mode(time_modes, all_channel_labels, verbose=verbose)
         z_fc_modes = mode_fc_data.get('mode_fc_z_matrices') if mode_fc_data else None
+
+        # Compute per-mode connectivity patterns and significance
+        per_mode_significance = {'interhemispheric': [], 'ipsilateral': []}
+
+        if mode_fc_data and mode_fc_data.get('mode_fc_pvalues') is not None:
+            mode_fc_matrices = mode_fc_data.get('mode_fc_matrices')
+            mode_fc_pvalues = mode_fc_data.get('mode_fc_pvalues')
+            n_modes = mode_fc_data.get('n_modes', 0)
+
+            if verbose:
+                print(f"  Computing significance for {n_modes} modes...")
+
+            for mode_idx in range(n_modes):
+                # Analyze connectivity for this mode
+                mode_connectivity = analyze_connectivity_patterns(
+                    mode_fc_matrices[mode_idx],
+                    all_channel_labels,
+                    p_values=mode_fc_pvalues[mode_idx],
+                    alpha=0.05
+                )
+
+                # Compute per-mode significance fractions
+                mode_interhemi_sig = compute_significance_fractions(
+                    mode_connectivity, 'interhemispheric', alpha=0.05
+                )
+                mode_ipsi_sig = compute_significance_fractions(
+                    mode_connectivity, 'ipsilateral', alpha=0.05
+                )
+
+                # Store with mode metadata
+                per_mode_significance['interhemispheric'].append({
+                    'mode_idx': mode_idx,
+                    'center_freq': center_freqs[mode_idx],
+                    **mode_interhemi_sig
+                })
+                per_mode_significance['ipsilateral'].append({
+                    'mode_idx': mode_idx,
+                    'center_freq': center_freqs[mode_idx],
+                    **mode_ipsi_sig
+                })
 
         # ===== 7. AGGREGATE MODE FC INTO SLOW-BAND FC =====
         if verbose:
@@ -1688,6 +1800,14 @@ def process_subject(subject_id, manager, loader, cortical_atlas, subcortical_atl
                         'supports_hemisphere_queries': subcortical_roi_extractor.supports_hemisphere_queries()
                     }
                 }
+            },
+
+            'connectivity_significance': {
+                'static': {
+                    'interhemispheric': static_interhemi_sig,
+                    'ipsilateral': static_ipsi_sig
+                },
+                'per_mode': per_mode_significance
             },
 
             # """ LEGACY UNDERNEATH """
@@ -2262,6 +2382,9 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
         'slow_band_coherence_by_group': {},
         'ipsi_static_coherence_by_group': {},
         'ipsi_slow_band_coherence_by_group': {},
+        # Significance fraction data structures
+        'static_significance_by_group': {},
+        'slow_band_significance_by_group': {},
     }
 
     # Process each anhedonia group
@@ -2276,8 +2399,89 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
         stats_results['ipsi_slow_band_coherence_by_group'][group_name] = {}
         stats_results['ipsi_static_coherence_by_group'][group_name] = {}
         stats_results['ipsi_slow_band_coherence_by_group'][group_name] = {}
+        # Initialize significance fraction data for this group
+        stats_results['static_significance_by_group'][group_name] = {
+            'interhemispheric': [],
+            'ipsilateral': []
+        }
+        stats_results['slow_band_significance_by_group'][group_name] = {
+            'interhemispheric': {},
+            'ipsilateral': {}
+        }
 
         valid_subjects = 0
+
+        # ===== PROCESS SIGNIFICANCE FRACTIONS FOR THIS GROUP =====
+        # Process each subject's significance data (independent of network groups)
+        for subject_id in subject_ids:
+            result = all_subject_results.get(subject_id)
+            if not (result and result.get('success')):
+                continue
+
+            sig_data = result.get('connectivity_significance', {})
+            if not sig_data:
+                continue
+
+            # Static significance fractions
+            static_sig = sig_data.get('static', {})
+            if static_sig:
+                # Interhemispheric
+                interhemi_static = static_sig.get('interhemispheric')
+                if interhemi_static and interhemi_static.get('total_pairs', 0) > 0:
+                    stats_results['static_significance_by_group'][group_name]['interhemispheric'].append(
+                        interhemi_static['significance_fraction']
+                    )
+
+                # Ipsilateral
+                ipsi_static = static_sig.get('ipsilateral')
+                if ipsi_static and ipsi_static.get('total_pairs', 0) > 0:
+                    stats_results['static_significance_by_group'][group_name]['ipsilateral'].append(
+                        ipsi_static['significance_fraction']
+                    )
+
+            # Per-mode significance (aggregate to slow-bands)
+            per_mode_sig = sig_data.get('per_mode', {})
+
+            # Helper function to aggregate modes to bands
+            def aggregate_modes_to_bands(mode_list):
+                """Bin modes by frequency band and compute mean significance fraction."""
+                band_modes = {}
+                for mode_data in mode_list:
+                    freq = mode_data.get('center_freq')
+                    if freq is None:
+                        continue
+
+                    band_num = get_band_number(freq)
+                    if band_num is not None:
+                        band_name = f'slow-{band_num}'
+                        if band_name not in band_modes:
+                            band_modes[band_name] = []
+                        band_modes[band_name].append(mode_data['significance_fraction'])
+
+                # Compute mean per band
+                return {
+                    band_name: np.mean(fractions)
+                    for band_name, fractions in band_modes.items()
+                    if fractions
+                }
+
+            # Interhemispheric slow-band
+            interhemi_modes = per_mode_sig.get('interhemispheric', [])
+            if interhemi_modes:
+                band_sig = aggregate_modes_to_bands(interhemi_modes)
+                for band_name, sig_fraction in band_sig.items():
+                    if band_name not in stats_results['slow_band_significance_by_group'][group_name]['interhemispheric']:
+                        stats_results['slow_band_significance_by_group'][group_name]['interhemispheric'][band_name] = []
+                    stats_results['slow_band_significance_by_group'][group_name]['interhemispheric'][band_name].append(sig_fraction)
+
+            # Ipsilateral slow-band
+            ipsi_modes = per_mode_sig.get('ipsilateral', [])
+            if ipsi_modes:
+                band_sig = aggregate_modes_to_bands(ipsi_modes)
+                for band_name, sig_fraction in band_sig.items():
+                    if band_name not in stats_results['slow_band_significance_by_group'][group_name]['ipsilateral']:
+                        stats_results['slow_band_significance_by_group'][group_name]['ipsilateral'][band_name] = []
+                    stats_results['slow_band_significance_by_group'][group_name]['ipsilateral'][band_name].append(sig_fraction)
 
         # For each network group, collect coherence values across subjects
         for network_key, pairs in intra_network_pairs.items():
@@ -3770,7 +3974,7 @@ def export_marginal_hilbert_spectrum_to_csv(all_subject_results, output_dir, ver
     return csv_paths
 
 
-def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None, num_imfs=10):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, export_csv=True, verbose=True, subjects_per_group=None, num_imfs=10):
     """Main function for FC MVP analysis"""
     from datetime import datetime
 
@@ -4217,7 +4421,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                         print(f"      {band}: mean_z={mean_coh:.4f} (n={subjects_count})")
 
     # CSV Export using new pipeline data
-    if save_figures:
+    if export_csv:
         print(f"\n{'='*80}")
         print("EXPORTING CSV DATA FROM NEW PIPELINE")
         print(f"{'='*80}")
@@ -4428,6 +4632,15 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         export_marginal_hilbert_spectrum_to_csv(
             all_subject_results=all_subject_results,
             output_dir=marginal_hsa_csv_dir,
+            verbose=verbose
+        )
+
+        # Export significance fractions summary
+        print("\nExporting significance fraction summary tables...")
+        sig_frac_output_dir = csv_export_dir / 'significance_fractions'
+        export_significance_fractions_to_csv(
+            anhedonic_stat_data,
+            sig_frac_output_dir,
             verbose=verbose
         )
 
@@ -5976,6 +6189,8 @@ Output:
     parser.add_argument('--skip-plots', action='store_true', default=False,
                        help='Skip creating plots entirely. Overrides --show-plots and --no-save. '
                            'Use this to run analysis without any visualization overhead')
+    parser.add_argument('--skip-export-csv', action='store_true', default=False,
+                       help='Skip exporting CSV files. Use this to disable all CSV exports')
     parser.add_argument('--random-seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--num-imfs', type=int, default=10,
@@ -5988,6 +6203,7 @@ Output:
     CREATE_PLOTS = not args.skip_plots  # Whether to create plots (required for both displaying and saving)
     SHOW_PLOTS = args.show_plots and CREATE_PLOTS  # Whether to display plots interactively (requires CREATE_PLOTS=True)
     SAVE_FIGURES = not args.no_save and CREATE_PLOTS  # Whether to save figures to disk as SVG files (requires CREATE_PLOTS=True)
+    EXPORT_CSV = not args.skip_export_csv  # Whether to export CSV files (independent of plotting)
 
     # FC Matrix display mode:
     # - False: Show all correlations, mark non-significant with asterisks
@@ -6006,6 +6222,7 @@ Output:
         create_plots=CREATE_PLOTS,
         show_plots=SHOW_PLOTS,
         save_figures=SAVE_FIGURES,
+        export_csv=EXPORT_CSV,
         verbose=VERBOSE_OUTPUT,
         subjects_per_group=args.subjects_per_group,
         num_imfs=NUM_IMFS,
