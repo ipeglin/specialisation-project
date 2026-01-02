@@ -2391,6 +2391,7 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
     for group_name, subject_ids in groups.items():
         if verbose:
             print(f"\nProcessing {group_name} group for statistics...")
+            print(f"  Total subjects in group: {len(subject_ids)}")
 
         # Initialize group data
         stats_results['static_coherence_by_group'][group_name] = {}
@@ -2413,14 +2414,23 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
 
         # ===== PROCESS SIGNIFICANCE FRACTIONS FOR THIS GROUP =====
         # Process each subject's significance data (independent of network groups)
+        subjects_processed_for_sig = 0
         for subject_id in subject_ids:
             result = all_subject_results.get(subject_id)
             if not (result and result.get('success')):
+                if verbose:
+                    print(f"  DEBUG: Skipping {subject_id} - not successful")
                 continue
 
             sig_data = result.get('connectivity_significance', {})
             if not sig_data:
+                if verbose:
+                    print(f"  DEBUG: Skipping {subject_id} - no connectivity_significance data")
                 continue
+
+            subjects_processed_for_sig += 1
+            if verbose and subjects_processed_for_sig <= 3:  # Print first 3 subjects only
+                print(f"  DEBUG: Processing {subject_id} for significance fractions")
 
             # Static significance fractions
             static_sig = sig_data.get('static', {})
@@ -2428,16 +2438,18 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
                 # Interhemispheric
                 interhemi_static = static_sig.get('interhemispheric')
                 if interhemi_static and interhemi_static.get('total_pairs', 0) > 0:
-                    stats_results['static_significance_by_group'][group_name]['interhemispheric'].append(
-                        interhemi_static['significance_fraction']
-                    )
+                    frac = interhemi_static['significance_fraction']
+                    stats_results['static_significance_by_group'][group_name]['interhemispheric'].append(frac)
+                    if verbose and subjects_processed_for_sig <= 3:
+                        print(f"    Static inter: {interhemi_static['significant_pairs']}/{interhemi_static['total_pairs']} = {frac:.4f}")
 
                 # Ipsilateral
                 ipsi_static = static_sig.get('ipsilateral')
                 if ipsi_static and ipsi_static.get('total_pairs', 0) > 0:
-                    stats_results['static_significance_by_group'][group_name]['ipsilateral'].append(
-                        ipsi_static['significance_fraction']
-                    )
+                    frac = ipsi_static['significance_fraction']
+                    stats_results['static_significance_by_group'][group_name]['ipsilateral'].append(frac)
+                    if verbose and subjects_processed_for_sig <= 3:
+                        print(f"    Static ipsi: {ipsi_static['significant_pairs']}/{ipsi_static['total_pairs']} = {frac:.4f}")
 
             # Per-mode significance (aggregate to slow-bands)
             per_mode_sig = sig_data.get('per_mode', {})
@@ -2468,7 +2480,15 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
             # Interhemispheric slow-band
             interhemi_modes = per_mode_sig.get('interhemispheric', [])
             if interhemi_modes:
+                if verbose and subjects_processed_for_sig <= 3:
+                    print(f"    Interhemi modes: {len(interhemi_modes)} modes")
+                    for mode_data in interhemi_modes[:3]:  # Show first 3 modes
+                        print(f"      Mode freq={mode_data.get('center_freq'):.4f}Hz: {mode_data.get('significant_pairs')}/{mode_data.get('total_pairs')} = {mode_data.get('significance_fraction'):.4f}")
+
                 band_sig = aggregate_modes_to_bands(interhemi_modes)
+                if verbose and subjects_processed_for_sig <= 3:
+                    print(f"    Aggregated to bands: {band_sig}")
+
                 for band_name, sig_fraction in band_sig.items():
                     if band_name not in stats_results['slow_band_significance_by_group'][group_name]['interhemispheric']:
                         stats_results['slow_band_significance_by_group'][group_name]['interhemispheric'][band_name] = []
@@ -2477,11 +2497,41 @@ def prepare_statistics_data(all_subject_results, connectivity_mappings, groups, 
             # Ipsilateral slow-band
             ipsi_modes = per_mode_sig.get('ipsilateral', [])
             if ipsi_modes:
+                if verbose and subjects_processed_for_sig <= 3:
+                    print(f"    Ipsi modes: {len(ipsi_modes)} modes")
+                    for mode_data in ipsi_modes[:3]:  # Show first 3 modes
+                        print(f"      Mode freq={mode_data.get('center_freq'):.4f}Hz: {mode_data.get('significant_pairs')}/{mode_data.get('total_pairs')} = {mode_data.get('significance_fraction'):.4f}")
+
                 band_sig = aggregate_modes_to_bands(ipsi_modes)
+                if verbose and subjects_processed_for_sig <= 3:
+                    print(f"    Aggregated to bands: {band_sig}")
+
                 for band_name, sig_fraction in band_sig.items():
                     if band_name not in stats_results['slow_band_significance_by_group'][group_name]['ipsilateral']:
                         stats_results['slow_band_significance_by_group'][group_name]['ipsilateral'][band_name] = []
                     stats_results['slow_band_significance_by_group'][group_name]['ipsilateral'][band_name].append(sig_fraction)
+
+        # DEBUG: Print subject counts for significance fractions
+        if verbose:
+            print(f"  Subjects processed for significance: {subjects_processed_for_sig} (out of {len(subject_ids)} in group)")
+            n_static_inter = len(stats_results['static_significance_by_group'][group_name]['interhemispheric'])
+            n_static_ipsi = len(stats_results['static_significance_by_group'][group_name]['ipsilateral'])
+            print(f"  Significance fraction counts for {group_name}:")
+            print(f"    Static interhemispheric: n={n_static_inter}")
+            print(f"    Static ipsilateral: n={n_static_ipsi}")
+
+            # Print slow-band counts and sample values
+            for conn_type in ['interhemispheric', 'ipsilateral']:
+                band_dict = stats_results['slow_band_significance_by_group'][group_name][conn_type]
+                if band_dict:
+                    print(f"    Slow-band {conn_type}:")
+                    for band_name in sorted(band_dict.keys()):
+                        values = band_dict[band_name]
+                        n_band = len(values)
+                        # Show first few values and mean
+                        sample_vals = values[:3] if len(values) > 0 else []
+                        mean_val = np.mean(values) if len(values) > 0 else 0
+                        print(f"      {band_name}: n={n_band}, mean={mean_val:.4f}, samples={[f'{v:.4f}' for v in sample_vals]}")
 
         # For each network group, collect coherence values across subjects
         for network_key, pairs in intra_network_pairs.items():
