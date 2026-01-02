@@ -5310,7 +5310,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
 
                 for plot_info in current_display_batch:
                     # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
-                    csv_output_dir = fc_output_dir if save_figures else None
+                    csv_output_dir = fc_output_dir if export_csv else None
 
                     fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                         plot_info['data']['static_fc_matrix'],
@@ -5363,7 +5363,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands'])} slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands']:
                 # Use fc_output_dir for CSV exports (fc_analysis/static_fc/), not figures directory
-                csv_output_dir = fc_output_dir if save_figures else None
+                csv_output_dir = fc_output_dir if export_csv else None
 
                 # Extract band number from band_key (e.g., "slow-5" -> "5")
                 band_key = plot_info['band_key']
@@ -5418,7 +5418,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_per_mode'])} per-mode FC plots...")
             for plot_info in plot_batches['fc_per_mode']:
-                csv_output_dir = fc_output_dir if save_figures else None
+                csv_output_dir = fc_output_dir if export_csv else None
 
                 fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['fc_matrix'],
@@ -5466,7 +5466,7 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             plt.close('all')  # Close any existing figures before this batch
             print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['fc_slow_bands_individual'])} individual subject slow-band FC plots...")
             for plot_info in plot_batches['fc_slow_bands_individual']:
-                csv_output_dir = fc_output_dir if save_figures else None
+                csv_output_dir = fc_output_dir if export_csv else None
 
                 fc_fig_inter, fc_fig_ipsi = plot_fc_results(
                     plot_info['data']['fc_matrix'],
