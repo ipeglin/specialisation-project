@@ -5223,73 +5223,74 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             if show_plots:
                 display_plots_in_batches()
 
-        # Batch 3: Multivariate Hilbert Spectrum
-        if plot_batches['hsa_multivariate']:
+        # Batch 8: Interhemispheric Intra-Network Violin Plots
+        if plot_batches['interhemispheric_violin']:
             current_plot_batch += 1
-            plt.close('all')  # Close any existing figures before this batch
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
+            # Don't close all figures here - violin plots are pre-created
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric intra-network violin plots...")
 
-            for plot_info in plot_batches['hsa_multivariate']:
-                # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
-                hs_results = plot_multivariate_hilbert_spectrum(
-                    hsa_data=plot_info['hsa_data'],
-                    subject_id=plot_info['subject_id'],
-                    center_freqs=plot_info['center_freqs'],
-                    channel_labels=plot_info['channel_labels']
-                )
+            # Suppress seaborn warnings about identical ylims
+            warnings.filterwarnings('ignore', message='Attempting to set identical low and high ylims')
 
-                # Save figures if enabled
-                if plot_info['save_dir']:
-                    # Create subject/composite/ directory structure
-                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+            for plot_info in plot_batches['interhemispheric_violin']:
+                fig = plot_info['figure']
+                metadata = plot_info['metadata']
+                save_dir = plot_info['save_dir']
 
-                    for hs_fig, region_network_key in hs_results:
-                        # Use region+network+hemisphere info in filename
-                        fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
-                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+                if save_dir:
+                    band_name = metadata['band_name']
+                    safe_network = metadata['safe_network']
 
+                    # Create band-specific directory
+                    band_dir = save_dir / band_name
+                    band_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Save figure
+                    filename = f'{safe_network}_violin.png'
+                    filepath = band_dir / filename
+                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
+                    figures_saved_count += 1
+
+                # Close figure if not showing
                 if not show_plots:
-                    for hs_fig, _ in hs_results:
-                        plt.close(hs_fig)
+                    plt.close(fig)
 
             if show_plots:
                 display_plots_in_batches()
 
-        # Batch 4: Marginal Spectrum per Mode
-        if plot_batches['hsa_marginal']:
+
+        # Batch 9: Ipsilateral Intra-Network Violin Plots
+        if plot_batches['ipsilateral_violin']:
             current_plot_batch += 1
-            plt.close('all')  # Close any existing figures before this batch
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
+            # Don't close all figures here - violin plots are pre-created
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['ipsilateral_violin'])} ipsilateral intra-network violin plots...")
 
-            for plot_info in plot_batches['hsa_marginal']:
-                # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
-                mhs_results = plot_marginal_spectrum_per_mode(
-                    hsa_data=plot_info['hsa_data'],
-                    subject_id=plot_info['subject_id'],
-                    center_freqs=plot_info['center_freqs'],
-                    channel_labels=plot_info['channel_labels']
-                )
+            for plot_info in plot_batches['ipsilateral_violin']:
+                fig = plot_info['figure']
+                metadata = plot_info['metadata']
+                save_dir = plot_info['save_dir']
 
-                # Save figures if enabled
-                if plot_info['save_dir']:
-                    # Create subject/composite/ directory structure
-                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
-                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+                if save_dir:
+                    band_name = metadata['band_name']
+                    safe_network = metadata['safe_network']
 
-                    for mhs_fig, region_network_key in mhs_results:
-                        # Use region+network+hemisphere info in filename
-                        fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
-                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
-                        figures_saved_count += 1
+                    # Create band-specific directory
+                    band_dir = save_dir / band_name
+                    band_dir.mkdir(parents=True, exist_ok=True)
 
+                    # Save figure
+                    filename = f'{safe_network}_violin.png'
+                    filepath = band_dir / filename
+                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
+                    figures_saved_count += 1
+
+                # Close figure if not showing
                 if not show_plots:
-                    for mhs_fig, _ in mhs_results:
-                        plt.close(mhs_fig)
+                    plt.close(fig)
 
             if show_plots:
                 display_plots_in_batches()
+
 
         # Batch 5: Static FC Analysis
         if plot_batches['fc_static']:
@@ -5640,69 +5641,37 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
             if show_plots:
                 display_plots_in_batches()
 
-        # Batch 8: Interhemispheric Intra-Network Violin Plots
-        if plot_batches['interhemispheric_violin']:
+
+        # Batch 3: Multivariate Hilbert Spectrum
+        if plot_batches['hsa_multivariate']:
             current_plot_batch += 1
-            # Don't close all figures here - violin plots are pre-created
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['interhemispheric_violin'])} interhemispheric intra-network violin plots...")
+            plt.close('all')  # Close any existing figures before this batch
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_multivariate'])} Multivariate Hilbert Spectrum plots...")
 
-            # Suppress seaborn warnings about identical ylims
-            warnings.filterwarnings('ignore', message='Attempting to set identical low and high ylims')
+            for plot_info in plot_batches['hsa_multivariate']:
+                # Create multivariate HS plot (returns list of tuples: (figure, region_network_key))
+                hs_results = plot_multivariate_hilbert_spectrum(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
 
-            for plot_info in plot_batches['interhemispheric_violin']:
-                fig = plot_info['figure']
-                metadata = plot_info['metadata']
-                save_dir = plot_info['save_dir']
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
 
-                if save_dir:
-                    band_name = metadata['band_name']
-                    safe_network = metadata['safe_network']
+                    for hs_fig, region_network_key in hs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_multivariate_hs.svg'
+                        hs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
 
-                    # Create band-specific directory
-                    band_dir = save_dir / band_name
-                    band_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Save figure
-                    filename = f'{safe_network}_violin.png'
-                    filepath = band_dir / filename
-                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
-                    figures_saved_count += 1
-
-                # Close figure if not showing
                 if not show_plots:
-                    plt.close(fig)
-
-            if show_plots:
-                display_plots_in_batches()
-
-        # Batch 9: Ipsilateral Intra-Network Violin Plots
-        if plot_batches['ipsilateral_violin']:
-            current_plot_batch += 1
-            # Don't close all figures here - violin plots are pre-created
-            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Displaying {len(plot_batches['ipsilateral_violin'])} ipsilateral intra-network violin plots...")
-
-            for plot_info in plot_batches['ipsilateral_violin']:
-                fig = plot_info['figure']
-                metadata = plot_info['metadata']
-                save_dir = plot_info['save_dir']
-
-                if save_dir:
-                    band_name = metadata['band_name']
-                    safe_network = metadata['safe_network']
-
-                    # Create band-specific directory
-                    band_dir = save_dir / band_name
-                    band_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Save figure
-                    filename = f'{safe_network}_violin.png'
-                    filepath = band_dir / filename
-                    fig.savefig(filepath, dpi=300, bbox_inches='tight')
-                    figures_saved_count += 1
-
-                # Close figure if not showing
-                if not show_plots:
-                    plt.close(fig)
+                    for hs_fig, _ in hs_results:
+                        plt.close(hs_fig)
 
             if show_plots:
                 display_plots_in_batches()
@@ -5750,6 +5719,41 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
                     channel_idx_base += len(mvmd_figures)
 
             # Display all MVMD figures in batches
+            if show_plots:
+                display_plots_in_batches()
+
+
+        # Batch 4: Marginal Spectrum per Mode
+        if plot_batches['hsa_marginal']:
+            current_plot_batch += 1
+            plt.close('all')  # Close any existing figures before this batch
+            print(f"[Batch {current_plot_batch}/{plot_batch_count}] Creating {len(plot_batches['hsa_marginal'])} Marginal Spectrum per Mode plots...")
+
+            for plot_info in plot_batches['hsa_marginal']:
+                # Create marginal spectrum plot (returns list of tuples: (figure, region_network_key))
+                mhs_results = plot_marginal_spectrum_per_mode(
+                    hsa_data=plot_info['hsa_data'],
+                    subject_id=plot_info['subject_id'],
+                    center_freqs=plot_info['center_freqs'],
+                    channel_labels=plot_info['channel_labels']
+                )
+
+                # Save figures if enabled
+                if plot_info['save_dir']:
+                    # Create subject/composite/ directory structure
+                    subject_composite_dir = plot_info['save_dir'] / plot_info['subject_id'] / 'composite'
+                    subject_composite_dir.mkdir(parents=True, exist_ok=True)
+
+                    for mhs_fig, region_network_key in mhs_results:
+                        # Use region+network+hemisphere info in filename
+                        fig_path = subject_composite_dir / f'{region_network_key}_marginal_spectrum.svg'
+                        mhs_fig.savefig(fig_path, format='svg', bbox_inches='tight', dpi=300)
+                        figures_saved_count += 1
+
+                if not show_plots:
+                    for mhs_fig, _ in mhs_results:
+                        plt.close(mhs_fig)
+
             if show_plots:
                 display_plots_in_batches()
 
