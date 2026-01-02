@@ -235,6 +235,15 @@ def export_significance_fractions_to_csv(stats_results, output_dir, verbose=True
     for conn_type in connectivity_types:
         if verbose:
             print(f"  Exporting {conn_type} significance fractions...")
+            print(f"    DEBUG: Sample sizes in source data:")
+            # Print sample sizes for debugging
+            for group in groups:
+                static_vals = static_sig.get(group, {}).get(conn_type, [])
+                print(f"      {group} whole-signal: n={len(static_vals)}")
+                slow_bands_dict = slow_band_sig.get(group, {}).get(conn_type, {})
+                for band_name in sorted(slow_bands_dict.keys()):
+                    band_vals = slow_bands_dict[band_name]
+                    print(f"      {group} {band_name}: n={len(band_vals)}")
 
         # Build table data
         table_data = []
