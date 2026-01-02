@@ -2815,6 +2815,9 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                 all_bands.update(band_dict.keys())
 
         for band_name in sorted(all_bands, key=lambda x: int(x.split('-')[1]) if 'Slow-' in x else 0, reverse=True):
+            band_anova_results = ipsi_slow_anova.get(band_name, {})
+            if not band_anova_results:
+                continue
             for conn_key in sorted(all_conn_keys):
                 plot_data = []
                 for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
@@ -2825,7 +2828,7 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
                     continue
                 df = pd.DataFrame(plot_data)
                 title_label = f"{conn_key}"
-                fig = _make_violin(df, f'{band_name.capitalize()} (ipsi)', conn_key, ipsi_slow_anova, title_label)
+                fig = _make_violin(df, f'{band_name.capitalize()} (ipsi)', conn_key, band_anova_results, title_label)
                 figures.append((fig, {'band_name': f'{band_name}_ipsi', 'network_key': conn_key, 'safe_network': conn_key.replace('/', '_')}))
 
     return figures

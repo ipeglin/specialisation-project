@@ -3231,7 +3231,7 @@ def coherence_anova_test(stat_results, verbose=True):
                     network_omnibus_results[network_key]['post_hoc_results'] = post_hoc_df
                     results['post_hoc_collection'].append({
                         'network': network_key,
-                        'band': 'static',
+                        'band': 'whole_signal',
                         'post_hoc': post_hoc_df
                     })
 
@@ -3404,7 +3404,7 @@ def coherence_anova_test(stat_results, verbose=True):
                     ipsi_static_results[conn_key]['post_hoc_results'] = post_hoc_df
                     results['post_hoc_collection'].append({
                         'network': conn_key,
-                        'band': 'static_ipsi',
+                        'band': 'Whole-signal (ipsi)',
                         'post_hoc': post_hoc_df
                     })
 
@@ -3483,7 +3483,7 @@ def coherence_anova_test(stat_results, verbose=True):
                         band_results[conn_key]['post_hoc_results'] = post_hoc_df
                         results['post_hoc_collection'].append({
                             'network': conn_key,
-                            'band': f'{band_name}_ipsi',
+                            'band': f'{band_name.capitalize()} (ipsi)',
                             'post_hoc': post_hoc_df
                         })
 
