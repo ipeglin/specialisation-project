@@ -4714,6 +4714,11 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     marginal_hsa_figures_dir = None
     roi_figures_dir = None
 
+    # Initialize CSV export directory variables
+    fc_output_dir = None
+    group_avg_output_dir = None
+    mvmd_csv_dir = None
+
     if save_figures and create_plots:
         # FC directories
         fc_subject_dir = figures_base_dir / 'fc_subject'
@@ -6144,9 +6149,10 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
     print(f"{'='*80}")
     if save_figures:
         print(f"All outputs saved to: {run_parent_dir}")
-        print(f"  - Static FC CSVs: {fc_output_dir}")
-        print(f"  - Group averages: {group_avg_output_dir}")
-        print(f"  - MVMD modes CSVs: {mvmd_csv_dir}")
+        if export_csv:
+            print(f"  - Static FC CSVs: {fc_output_dir}")
+            print(f"  - Group averages: {group_avg_output_dir}")
+            print(f"  - MVMD modes CSVs: {mvmd_csv_dir}")
         if figures_saved_count > 0:
             print(f"  - Figures ({figures_saved_count} total):")
             print(f"    - FC (subject-level): {fc_subject_dir}")
