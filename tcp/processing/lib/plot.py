@@ -2622,6 +2622,9 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
         for group_data in static_groups.values():
             all_static_networks.update(group_data.keys())
         for network_key in sorted(all_static_networks):
+            # Only create plot if ANOVA results exist
+            if network_key not in static_anova:
+                continue
             plot_data = []
             for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                 network_data = static_groups.get(group_name, {}).get(network_key, {})
@@ -2652,6 +2655,9 @@ def plot_interhemispheric_intra_network_violin(stat_data, anova_results):
         if not band_anova_results:
             continue
         for network_key in sorted(all_networks):
+            # Only create plot if ANOVA results exist for this network
+            if network_key not in band_anova_results:
+                continue
             plot_data = []
             for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                 band_data = slow_band_groups.get(group_name, {}).get(network_key, {}).get(band_name, {})
@@ -2793,6 +2799,9 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
         for group_data in ipsi_static_groups.values():
             all_conn_keys.update(group_data.keys())
         for conn_key in sorted(all_conn_keys):
+            # Only create plot if ANOVA results exist
+            if conn_key not in ipsi_static_anova:
+                continue
             plot_data = []
             for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                 conn_data = ipsi_static_groups.get(group_name, {}).get(conn_key, {})
@@ -2819,6 +2828,9 @@ def plot_ipsilateral_intra_network_violin(stat_data, anova_results):
             if not band_anova_results:
                 continue
             for conn_key in sorted(all_conn_keys):
+                # Only create plot if ANOVA results exist for this connection
+                if conn_key not in band_anova_results:
+                    continue
                 plot_data = []
                 for group_name in ['non-anhedonic', 'low-anhedonic', 'high-anhedonic']:
                     band_data = ipsi_slow_groups.get(group_name, {}).get(conn_key, {}).get(band_name, {})
