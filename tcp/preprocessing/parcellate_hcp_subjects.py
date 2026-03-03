@@ -30,6 +30,7 @@ from tcp.preprocessing.config.data_source_config import (
     DataSourceType,
     create_combined_config,
     create_datalad_config,
+    create_fmriprep_config,
     create_hcp_config,
 )
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR, RUNNING
@@ -46,8 +47,8 @@ class HCPParcellationRunner:
         print(f"HCP Parcellation Runner")
         print(f"Data source: {self.data_source_config.source_type.value}")
         if self.data_source_config.is_hcp_enabled():
-            print(f"HCP root: {self.data_source_config.hcp_root}")
-            print(f"HCP parcellated output: {self.data_source_config.hcp_parcellated_output}")
+            print(f"fmriprep root: {self.data_source_config.fmriprep_root}")
+            print(f"fmriprep parcellated output: {self.data_source_config.fmriprep_parcellated_output}")
 
     def load_subject_file_mapping(self) -> Dict:
         """Load subject file mapping from map_subject_files.py output"""
@@ -133,12 +134,12 @@ class HCPParcellationRunner:
 
         # Initialize parcellator
         parcellator = HCPParcellator(
-            hcp_root=self.data_source_config.hcp_root,
+            fmriprep_root=self.data_source_config.fmriprep_root,
             verbose=True
         )
 
         # Create output directory
-        output_dir = self.data_source_config.hcp_parcellated_output
+        output_dir = self.data_source_config.fmriprep_parcellated_output
         output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Output directory: {output_dir}")
 
@@ -211,8 +212,8 @@ This script parcellates HCP subjects that don't have .h5 timeseries files yet.
 This is a time-intensive operation that can take several hours.
 
 Examples:
-  python parcellate_hcp_subjects.py --data-source-type hcp --hcp-root /path/to/hcp --hcp-parcellated-output /path/to/output
-  python parcellate_hcp_subjects.py --data-source-type combined --hcp-root /path/to/hcp --hcp-parcellated-output /path/to/output --default-task hammer
+  python parcellate_hcp_subjects.py --data-source-type hcp --fmriprep-root /path/to/fmriprep --fmriprep-parcellated-output /path/to/output
+  python parcellate_hcp_subjects.py --data-source-type combined --fmriprep-root /path/to/fmriprep --fmriprep-parcellated-output /path/to/output --default-task hammer
         '''
     )
 
@@ -220,10 +221,10 @@ Examples:
     parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
                        default='datalad',
                        help='Data source type: datalad (default), hcp, or combined')
-    parser.add_argument('--hcp-root', type=Path,
-                       help='Path to HCP output directory (required for hcp/combined modes)')
-    parser.add_argument('--hcp-parcellated-output', type=Path,
-                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-root', type=Path,
+                       help='Path to fmriprep output directory (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-parcellated-output', type=Path,
+                       help='Directory to store parcellated fmriprep .h5 files (required for hcp/combined modes)')
     parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
                        default='prefer_hcp',
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
@@ -236,12 +237,12 @@ Examples:
     print("=" * 50)
 
     try:
-        # Validate HCP arguments
+        # Validate fmriprep arguments
         if args.data_source_type in ['hcp', 'combined']:
-            if not args.hcp_root:
-                parser.error("--hcp-root is required when --data-source-type is 'hcp' or 'combined'")
-            if not args.hcp_parcellated_output:
-                parser.error("--hcp-parcellated-output is required when --data-source-type is 'hcp' or 'combined'")
+            if not args.fmriprep_root:
+                parser.error("--fmriprep-root is required when --data-source-type is 'hcp' or 'combined'")
+            if not args.fmriprep_parcellated_output:
+                parser.error("--fmriprep-parcellated-output is required when --data-source-type is 'hcp' or 'combined'")
 
         # Create data source configuration
         dataset_path = get_tcp_dataset_path()
@@ -252,16 +253,16 @@ Examples:
                 default_task=args.default_task
             )
         elif args.data_source_type == 'hcp':
-            data_source_config = create_hcp_config(
-                hcp_root=args.hcp_root,
-                parcellated_output=args.hcp_parcellated_output,
+            data_source_config = create_fmriprep_config(
+                fmriprep_root=args.fmriprep_root,
+                parcellated_output=args.fmriprep_parcellated_output,
                 default_task=args.default_task
             )
         elif args.data_source_type == 'combined':
             data_source_config = create_combined_config(
                 dataset_path=dataset_path,
-                hcp_root=args.hcp_root,
-                hcp_parcellated_output=args.hcp_parcellated_output,
+                hcp_root=args.fmriprep_root,
+                hcp_parcellated_output=args.fmriprep_parcellated_output,
                 duplicate_resolution=args.duplicate_resolution,
                 default_task=args.default_task
             )

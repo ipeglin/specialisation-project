@@ -31,7 +31,8 @@ sys.path.insert(0, str(project_root))
 from config.paths import get_script_output_path
 from tcp.preprocessing.config.data_source_config import (
     DataSourceConfig,
-    create_hcp_config
+    create_fmriprep_config,
+    create_hcp_config,
 )
 from tcp.preprocessing.hcp_parcellation import HCPParcellator
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR, SKIP, RUNNING
@@ -64,14 +65,14 @@ class MissingHCPParcellator:
 
         # Initialize HCPParcellator instance
         self.parcellator = HCPParcellator(
-            hcp_root=data_source_config.hcp_root,
+            fmriprep_root=data_source_config.fmriprep_root,
             verbose=True
         )
 
         # Print initialization summary
-        print("Missing HCP Parcellator Initialized")
-        print(f"  HCP root: {data_source_config.hcp_root}")
-        print(f"  HCP parcellated output: {data_source_config.hcp_parcellated_output}")
+        print("Missing fmriprep Parcellator Initialized")
+        print(f"  fmriprep root: {data_source_config.fmriprep_root}")
+        print(f"  fmriprep parcellated output: {data_source_config.fmriprep_parcellated_output}")
         print(f"  Task: {self.task}")
         print(f"  Log directory: {self.log_dir}")
 
@@ -154,7 +155,7 @@ class MissingHCPParcellator:
             Dictionary mapping subject_id to has_h5_file boolean
         """
         print(f"\nChecking for existing .h5 files...")
-        output_dir = self.data_source_config.hcp_parcellated_output
+        output_dir = self.data_source_config.fmriprep_parcellated_output
 
         existing_status = {}
         for subject_id in subject_ids:
@@ -218,7 +219,7 @@ class MissingHCPParcellator:
             'output_paths': {}
         }
 
-        output_dir = self.data_source_config.hcp_parcellated_output
+        output_dir = self.data_source_config.fmriprep_parcellated_output
         output_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n{'=' * 60}")
@@ -475,29 +476,29 @@ manual manifest.json updates.
 Examples:
   # Parcellate 3 subjects via CLI
   python scripts/parcellate_missing_hcp_subjects.py \\
-    --hcp-root /cluster/projects/.../hcp_output \\
-    --hcp-parcellated-output /cluster/work/.../hcp_parcellated \\
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \\
+    --fmriprep-parcellated-output /cluster/work/.../fmriprep_parcellated \\
     --subject-ids sub-NDARINVXXXXX sub-NDARINVYYYYY sub-NDARINVZZZZZ
 
   # Parcellate from file
   python scripts/parcellate_missing_hcp_subjects.py \\
-    --hcp-root /cluster/projects/.../hcp_output \\
-    --hcp-parcellated-output /cluster/work/.../hcp_parcellated \\
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \\
+    --fmriprep-parcellated-output /cluster/work/.../fmriprep_parcellated \\
     --subject-file missing_subjects.txt
 
   # Force re-parcellation
   python scripts/parcellate_missing_hcp_subjects.py \\
-    --hcp-root /cluster/projects/.../hcp_output \\
-    --hcp-parcellated-output /cluster/work/.../hcp_parcellated \\
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \\
+    --fmriprep-parcellated-output /cluster/work/.../fmriprep_parcellated \\
     --subject-ids sub-NDARINVXXXXX \\
     --force
         '''
     )
 
-    # Required: HCP Configuration
-    parser.add_argument('--hcp-root', type=Path, required=True,
-                       help='Path to HCP output directory (e.g., /cluster/projects/.../hcp_output)')
-    parser.add_argument('--hcp-parcellated-output', type=Path, required=True,
+    # Required: fmriprep Configuration
+    parser.add_argument('--fmriprep-root', type=Path, required=True,
+                       help='Path to fmriprep output directory (e.g., /cluster/projects/.../fmriprep-25.1.4)')
+    parser.add_argument('--fmriprep-parcellated-output', type=Path, required=True,
                        help='Directory for parcellated .h5 files')
 
     # Subject selection (mutually exclusive)
@@ -521,17 +522,17 @@ Examples:
     print("=" * 60)
 
     try:
-        # Validate HCP paths exist
-        if not args.hcp_root.exists():
-            parser.error(f"HCP root directory not found: {args.hcp_root}")
+        # Validate fmriprep paths exist
+        if not args.fmriprep_root.exists():
+            parser.error(f"fmriprep root directory not found: {args.fmriprep_root}")
 
         if args.subject_file and not args.subject_file.exists():
             parser.error(f"Subject file not found: {args.subject_file}")
 
         # Create data source configuration
-        data_source_config = create_hcp_config(
-            hcp_root=args.hcp_root,
-            parcellated_output=args.hcp_parcellated_output,
+        data_source_config = create_fmriprep_config(
+            fmriprep_root=args.fmriprep_root,
+            parcellated_output=args.fmriprep_parcellated_output,
             default_task=args.task
         )
 
