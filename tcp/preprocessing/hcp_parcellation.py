@@ -216,14 +216,11 @@ class HCPParcellator:
 
     def discover_bold_files(self, subject_id: str, task: str = "hammer") -> List[Path]:
         """
-        Find BOLD files in HCP directory structure.
+        Find BOLD files in fmriprep 25.1.4 directory structure.
 
-        HCP structure:
-        {hcp_root}/sub-{id}/MNINonLinear/Results/
-            task-{task}AP_run-0{run}_bold/
-                task-{task}AP_run-0{run}_bold.nii.gz
-
-        Note: Hammer task has only run == 1 for all subjects
+        fmriprep structure:
+        {fmriprep_root}/sub-{id}/func/
+            sub-{id}_task-{task}AP_run-{run:02d}_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz
 
         Args:
             subject_id: Subject ID (e.g., 'sub-NDARINVXXXXX')
@@ -232,31 +229,30 @@ class HCPParcellator:
         Returns:
             List of paths to BOLD NIFTI files
         """
-        # Handle subject_id with or without "sub-" prefix
         if not subject_id.startswith('sub-'):
             subject_id = f'sub-{subject_id}'
 
-        subject_dir = self.hcp_root / subject_id
-        results_dir = subject_dir / "MNINonLinear" / "Results"
+        func_dir = self.fmriprep_root / subject_id / "func"
 
-        if not results_dir.exists():
+        if not func_dir.exists():
             if self.verbose:
-                print(f"  WARNING: Results directory not found: {results_dir}")
+                print(f"  WARNING: func directory not found: {func_dir}")
             return []
 
         bold_files = []
 
-        # For hammer task, only check run 1
+        # For hammer task, only run 1 is expected
         if task == "hammer":
             run_nums = [1]
         else:
-            # For other tasks, check runs 1-9
             run_nums = range(1, 10)
 
         for run in run_nums:
-            task_dir = results_dir / f"task-{task}AP_run-0{run}_bold"
-            bold_file = task_dir / f"task-{task}AP_run-0{run}_bold.nii.gz"
-
+            bold_file = (
+                func_dir /
+                f"{subject_id}_task-{task}AP_run-{run:02d}"
+                f"_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz"
+            )
             if bold_file.exists():
                 bold_files.append(bold_file)
 
@@ -283,7 +279,7 @@ class HCPParcellator:
         if not bold_files:
             raise FileNotFoundError(
                 f"No BOLD files found for {subject_id}, task={task}\n"
-                f"Searched in: {self.hcp_root / subject_id / 'MNINonLinear' / 'Results'}"
+                f"Searched in: {self.fmriprep_root / subject_id / 'func'}"
             )
 
         if self.verbose:
@@ -292,9 +288,15 @@ class HCPParcellator:
         # Parcellate each run
         run_timeseries = {}
         for bold_path in sorted(bold_files):
-            run_name = bold_path.stem.replace('.nii', '')
+            # Parse run number from filename to produce a normalised, stable H5 key
+            # Pattern: ..._run-{NN}_..._bold.nii.gz -> task-{task}_run-{NN}
+            # NOTE: `import re` is at the top of the file — do NOT re-import here
+            stem = bold_path.name
+            run_match = re.search(r'run-(\d+)', stem)
+            run_num = run_match.group(1) if run_match else "01"
+            normalised_key = f"task-{task}_run-{run_num}"
             ts = self.parcellate_bold(bold_path)
-            run_timeseries[run_name] = ts
+            run_timeseries[normalised_key] = ts
 
         # Save to .h5 file
         output_path = self._save_h5(run_timeseries, subject_id, task, output_dir)
@@ -408,7 +410,7 @@ class HCPParcellator:
             f.attrs['task'] = task
             f.attrs['n_rois'] = self.EXPECTED_TOTAL_PARCELS
             f.attrs['n_runs'] = len(run_timeseries)
-            f.attrs['source'] = 'hcp_parcellation'
+            f.attrs['source'] = DATA_SOURCE_FMRIPREP
             f.attrs['cortical_atlas'] = self.cortical_atlas.name
             f.attrs['subcortical_atlas'] = self.subcortical_atlas.name
             f.attrs['cerebellar_note'] = 'Placeholder zeros (atlas not implemented)'
