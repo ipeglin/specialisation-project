@@ -185,6 +185,89 @@ class DataSourceConfig:
 
         return bold_file if bold_file.exists() else None
 
+    def get_fmriprep_bold_path(self, subject_id: str, task: str = None, run: int = 1) -> Optional[Path]:
+        """
+        Get path to fmriprep BOLD file for a subject.
+
+        fmriprep 25.1.4 BIDS path pattern:
+        {fmriprep_root}/sub-{id}/func/sub-{id}_task-{task}AP_run-{run:02d}_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz
+
+        Args:
+            subject_id: Subject ID (e.g., 'sub-NDARINVXXXXX')
+            task: Task name (default: use self.default_task)
+            run: Run number (default: 1)
+
+        Returns:
+            Path to BOLD file if it exists, None otherwise
+        """
+        if not self.fmriprep_root:
+            return None
+
+        if task is None:
+            task = self.default_task
+
+        # Handle subject_id with or without "sub-" prefix
+        if not subject_id.startswith('sub-'):
+            subject_id = f'sub-{subject_id}'
+
+        func_dir = self.fmriprep_root / subject_id / "func"
+        bold_file = (
+            func_dir /
+            f"{subject_id}_task-{task}AP_run-{run:02d}"
+            f"_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz"
+        )
+        return bold_file if bold_file.exists() else None
+
+    def discover_fmriprep_subjects(self) -> List[str]:
+        """
+        Scan fmriprep output directory for subjects with BOLD data.
+
+        Only includes subjects that have the actual desc-preproc_bold.nii.gz file,
+        not just a func/ directory (avoids partial fmriprep outputs).
+
+        Returns:
+            List of subject IDs (e.g., ['sub-NDARINVXXXXX', ...])
+        """
+        if not self.fmriprep_root or not self.fmriprep_root.exists():
+            return []
+
+        subjects = []
+        for subject_dir in sorted(self.fmriprep_root.glob("sub-*")):
+            func_dir = subject_dir / "func"
+            if not func_dir.exists():
+                continue
+
+            # Verify the full BIDS filename including all required entities
+            bold_pattern = f"{subject_dir.name}_task-{self.default_task}AP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz"
+            bold_file = func_dir / bold_pattern
+            if bold_file.exists() and bold_file.is_file():
+                subjects.append(subject_dir.name)
+
+        return subjects
+
+    def validate_fmriprep_structure(self, subject_id: str) -> bool:
+        """
+        Validate that a subject has the expected fmriprep directory structure.
+
+        Args:
+            subject_id: Subject ID (e.g., 'sub-NDARINVXXXXX')
+
+        Returns:
+            True if func/ directory exists, False otherwise
+        """
+        if not self.fmriprep_root or not self.fmriprep_root.exists():
+            return False
+
+        if not subject_id.startswith('sub-'):
+            subject_id = f'sub-{subject_id}'
+
+        func_dir = self.fmriprep_root / subject_id / "func"
+        return func_dir.exists()
+
+    def is_fmriprep_enabled(self) -> bool:
+        """Check if fmriprep data source is configured"""
+        return self.fmriprep_root is not None
+
     def is_combined_mode(self) -> bool:
         """Check if running in COMBINED mode"""
         return self.source_type == DataSourceType.COMBINED
@@ -280,6 +363,37 @@ def create_combined_config(dataset_path: Path,
         hcp_root=hcp_root,
         hcp_parcellated_output=hcp_parcellated_output,
         duplicate_resolution=duplicate_resolution,
+        default_task=default_task
+    )
+
+
+def create_fmriprep_config(fmriprep_root: Path,
+                           parcellated_output: Path,
+                           default_task: str = "hammer") -> DataSourceConfig:
+    """
+    Create configuration for fmriprep-only mode.
+
+    Uses DataSourceType.HCP internally to maintain compatibility with
+    existing HCPParcellator and HCPParcellationRunner code that checks
+    source_type. This is intentional: the parcellation engine is unchanged;
+    only the path logic is updated.
+
+    Args:
+        fmriprep_root: Path to fmriprep output directory (e.g., fmriprep-25.1.4/)
+        parcellated_output: Directory to store parcellated .h5 files
+        default_task: Default task name
+
+    Returns:
+        DataSourceConfig configured for fmriprep path resolution
+    """
+    return DataSourceConfig(
+        source_type=DataSourceType.HCP,
+        fmriprep_root=fmriprep_root,
+        fmriprep_parcellated_output=parcellated_output,
+        # Maintain hcp_root and hcp_parcellated_output for compatibility
+        # until runner scripts are updated in Plan 04
+        hcp_root=fmriprep_root,
+        hcp_parcellated_output=parcellated_output,
         default_task=default_task
     )
 
