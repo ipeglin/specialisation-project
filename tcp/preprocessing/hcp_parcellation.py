@@ -14,6 +14,7 @@ Author: Ian Philip Eglin
 Date: 2025-01-28
 """
 
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -31,6 +32,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.paths import get_parcellations_path
+from tcp.preprocessing.config.data_source_config import DATA_SOURCE_FMRIPREP
 
 
 class HCPParcellator:
@@ -41,16 +43,18 @@ class HCPParcellator:
     SUBCORTICAL_PARCELS = 32
     CEREBELLAR_REGIONS = 2
 
-    def __init__(self, hcp_root: Path, verbose: bool = True):
+    def __init__(self, fmriprep_root: Path, verbose: bool = True):
         """
-        Initialize parcellator with atlas paths and HCP root.
+        Initialize parcellator with atlas paths and fmriprep root.
 
         Args:
-            hcp_root: Root directory of HCP output (e.g., /hcp_output)
+            fmriprep_root: Root directory of fmriprep output (e.g., fmriprep-25.1.4/)
             verbose: Print detailed progress information
         """
         self.verbose = verbose
-        self.hcp_root = Path(hcp_root)
+        self.fmriprep_root = Path(fmriprep_root)
+        # Maintain backward-compatible alias so any code still using self.hcp_root continues to work
+        self.hcp_root = self.fmriprep_root
         self.parcellations_base = get_parcellations_path()
 
         # Atlas file paths (at project root)
@@ -64,13 +68,13 @@ class HCPParcellator:
         # Validate atlas files exist
         self._validate_atlases()
 
-        # Validate HCP root exists
-        if not self.hcp_root.exists():
-            raise FileNotFoundError(f"HCP root directory not found: {self.hcp_root}")
+        # Validate fmriprep root exists
+        if not self.fmriprep_root.exists():
+            raise FileNotFoundError(f"fmriprep root directory not found: {self.fmriprep_root}")
 
         if self.verbose:
             print(f"Initialized HCPParcellator")
-            print(f"  HCP root: {self.hcp_root}")
+            print(f"  fmriprep root: {self.fmriprep_root}")
             print(f"  Cortical atlas: {self.cortical_atlas.name} ({self.CORTICAL_PARCELS} parcels)")
             print(f"  Subcortical atlas: {self.subcortical_atlas.name} ({self.SUBCORTICAL_PARCELS} parcels)")
             if self.cerebellar_atlas:
@@ -324,7 +328,7 @@ class HCPParcellator:
         def process_one_subject(subject_id):
             """Process single subject (for parallel execution)"""
             try:
-                parcellator = HCPParcellator(hcp_root=self.hcp_root, verbose=False)
+                parcellator = HCPParcellator(fmriprep_root=self.fmriprep_root, verbose=False)
                 output_path = parcellator.parcellate_subject(
                     subject_id=subject_id,
                     task=task,
@@ -417,27 +421,27 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Parcellate HCP BOLD data into 434-ROI timeseries',
+        description='Parcellate fmriprep BOLD data into 434-ROI timeseries',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Parcellate single subject
   python hcp_parcellation.py \\
-    --hcp-root /cluster/projects/.../hcp_output \\
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \\
     --subject-id sub-NDARINVXXXXX \\
-    --output-dir Data/hcp_parcellated
+    --output-dir Data/fmriprep_parcellated
 
   # Parcellate multiple subjects in parallel
   python hcp_parcellation.py \\
-    --hcp-root /cluster/projects/.../hcp_output \\
+    --fmriprep-root /cluster/projects/.../fmriprep-25.1.4 \\
     --subject-ids sub-NDARINV001 sub-NDARINV002 sub-NDARINV003 \\
-    --output-dir Data/hcp_parcellated \\
+    --output-dir Data/fmriprep_parcellated \\
     --n-jobs 4
         """
     )
 
-    parser.add_argument('--hcp-root', type=Path, required=True,
-                       help='Root directory of HCP output')
+    parser.add_argument('--fmriprep-root', type=Path, required=True,
+                       help='Root directory of fmriprep output')
     parser.add_argument('--subject-id', type=str,
                        help='Subject ID (e.g., sub-NDARINVXXXXX) for single subject')
     parser.add_argument('--subject-ids', type=str, nargs='+',
@@ -459,7 +463,7 @@ Examples:
 
     if args.subject_id:
         # Single subject mode
-        parcellator = HCPParcellator(hcp_root=args.hcp_root, verbose=True)
+        parcellator = HCPParcellator(fmriprep_root=args.fmriprep_root, verbose=True)
         output_path = parcellator.parcellate_subject(
             subject_id=args.subject_id,
             task=args.task,
@@ -469,7 +473,7 @@ Examples:
 
     else:
         # Parallel mode
-        parcellator = HCPParcellator(hcp_root=args.hcp_root, verbose=True)
+        parcellator = HCPParcellator(fmriprep_root=args.fmriprep_root, verbose=True)
         output_paths = parcellator.parcellate_subjects_parallel(
             subject_ids=args.subject_ids,
             task=args.task,
