@@ -399,6 +399,41 @@ def get_mdd_analysis_path(subpath: str = 'mdd_analysis') -> Path:
     """Get path for MDD analysis outputs (uses analysis category)"""
     return get_script_output_path('mdd_analysis', subpath=subpath)
 
+
+def get_fmriprep_output_path(subpath: str = '') -> Path:
+    """
+    Get path to fmriprep output directory.
+
+    Reads the fmriprep_output key from default_config.json for the current platform.
+    On IDUN: /cluster/projects/itea_lille-ie/Transdiagnostic/output/fmriprep-25.1.4
+    On macOS/Windows/Linux: platform-specific placeholder path.
+
+    Args:
+        subpath: Optional subdirectory path
+
+    Returns:
+        Path to fmriprep output directory
+    """
+    base = _path_config._get_base_path('fmriprep_output')
+    return base / subpath if subpath else base
+
+
+def get_fmriprep_parcellated_output_path(subpath: str = '') -> Path:
+    """
+    Get path to fmriprep parcellated output directory (for .h5 files).
+
+    Reads the fmriprep_parcellated_output key from default_config.json.
+
+    Args:
+        subpath: Optional subdirectory path
+
+    Returns:
+        Path to fmriprep parcellated output directory
+    """
+    base = _path_config._get_base_path('fmriprep_parcellated_output')
+    return base / subpath if subpath else base
+
+
 def get_parcellations_path(subpath: str = '') -> Path:
     """
     Get path to parcellation atlases directory.

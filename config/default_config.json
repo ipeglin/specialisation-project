@@ -9,6 +9,8 @@
     "models_base": "/Users/ipeglin/Documents/specialisation-project/Models",
     "reports_base": "/Users/ipeglin/Documents/specialisation-project/Reports",
     "temp_base": "/tmp",
+    "fmriprep_output": "/Users/ipeglin/Documents/specialisation-project/Data/fmriprep-25.1.4",
+    "fmriprep_parcellated_output": "/Users/ipeglin/Documents/specialisation-project/Preprocessing/fmriprep_parcellated",
     "description": "macOS M1 MacBook configuration"
   },
   "windows": {
@@ -21,6 +23,8 @@
     "models_base": "C:/Users/ipeglin/Documents/specialisation-project/Models",
     "reports_base": "C:/Users/ipeglin/Documents/specialisation-project/Reports",
     "temp_base": "C:/temp",
+    "fmriprep_output": "C:/Users/ipeglin/Documents/specialisation-project/Data/fmriprep-25.1.4",
+    "fmriprep_parcellated_output": "C:/Users/ipeglin/Documents/specialisation-project/Preprocessing/fmriprep_parcellated",
     "description": "Windows 11 desktop configuration"
   },
   "idun": {
@@ -33,6 +37,8 @@
     "models_base": "/cluster/work/ianpe/models",
     "reports_base": "/cluster/work/ianpe/reports",
     "temp_base": "/cluster/work/ianpe/tmp",
+    "fmriprep_output": "/cluster/projects/itea_lille-ie/Transdiagnostic/output/fmriprep-25.1.4",
+    "fmriprep_parcellated_output": "/cluster/work/ianpe/preprocessing/fmriprep_parcellated",
     "description": "IDUN HPC cluster configuration"
   },
   "linux": {
@@ -45,6 +51,8 @@
     "models_base": "/home/ipeglin/models",
     "reports_base": "/home/ipeglin/reports",
     "temp_base": "/tmp",
+    "fmriprep_output": "/home/ipeglin/data/fmriprep-25.1.4",
+    "fmriprep_parcellated_output": "/home/ipeglin/preprocessing/fmriprep_parcellated",
     "description": "Generic Linux configuration"
   },
   "output_categories": {
