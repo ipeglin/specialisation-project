@@ -564,10 +564,10 @@ def main():
     parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
                        default='datalad',
                        help='Data source type: datalad (default), hcp, or combined')
-    parser.add_argument('--hcp-root', type=Path,
-                       help='Path to HCP output directory (required for hcp/combined modes)')
-    parser.add_argument('--hcp-parcellated-output', type=Path,
-                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-root', type=Path,
+                       help='Path to fmriprep output directory (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-parcellated-output', type=Path,
+                       help='Directory to store parcellated fmriprep .h5 files (required for hcp/combined modes)')
     parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
                        default='prefer_hcp',
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
@@ -589,24 +589,24 @@ def main():
                 default_task=args.default_task
             )
         elif args.data_source_type == 'hcp':
-            if not args.hcp_root or not args.hcp_parcellated_output:
-                parser.error("--hcp-root and --hcp-parcellated-output are required for HCP mode")
-            from tcp.preprocessing.config.data_source_config import create_hcp_config
-            data_source_config = create_hcp_config(
-                hcp_root=args.hcp_root,
-                parcellated_output=args.hcp_parcellated_output,
+            if not args.fmriprep_root or not args.fmriprep_parcellated_output:
+                parser.error("--fmriprep-root and --fmriprep-parcellated-output are required for HCP mode")
+            from tcp.preprocessing.config.data_source_config import create_fmriprep_config
+            data_source_config = create_fmriprep_config(
+                fmriprep_root=args.fmriprep_root,
+                parcellated_output=args.fmriprep_parcellated_output,
                 default_task=args.default_task
             )
         elif args.data_source_type == 'combined':
-            if not args.hcp_root or not args.hcp_parcellated_output:
-                parser.error("--hcp-root and --hcp-parcellated-output are required for combined mode")
+            if not args.fmriprep_root or not args.fmriprep_parcellated_output:
+                parser.error("--fmriprep-root and --fmriprep-parcellated-output are required for combined mode")
             from tcp.preprocessing.config.data_source_config import (
                 create_combined_config,
             )
             data_source_config = create_combined_config(
                 dataset_path=dataset_path,
-                hcp_root=args.hcp_root,
-                hcp_parcellated_output=args.hcp_parcellated_output,
+                hcp_root=args.fmriprep_root,
+                hcp_parcellated_output=args.fmriprep_parcellated_output,
                 duplicate_resolution=args.duplicate_resolution,
                 default_task=args.default_task
             )

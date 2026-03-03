@@ -367,15 +367,15 @@ class TCPPipeline:
                 if kwargs.get('fetch_dry_run', False):
                     cmd.append('--dry-run')
 
-            # Add HCP data source arguments for steps that need them
+            # Add fmriprep data source arguments for steps that need them
             if step in [PipelineStep.FILTER_SUBJECTS, PipelineStep.MAP_SUBJECT_FILES,
                        PipelineStep.PARCELLATE_HCP_SUBJECTS, PipelineStep.INTEGRATE_CROSS_ANALYSIS]:
                 if 'data_source_type' in kwargs:
                     cmd.extend(['--data-source-type', kwargs['data_source_type']])
-                if 'hcp_root' in kwargs and kwargs['hcp_root']:
-                    cmd.extend(['--hcp-root', str(kwargs['hcp_root'])])
-                if 'hcp_parcellated_output' in kwargs and kwargs['hcp_parcellated_output']:
-                    cmd.extend(['--hcp-parcellated-output', str(kwargs['hcp_parcellated_output'])])
+                if 'fmriprep_root' in kwargs and kwargs['fmriprep_root']:
+                    cmd.extend(['--fmriprep-root', str(kwargs['fmriprep_root'])])
+                if 'fmriprep_parcellated_output' in kwargs and kwargs['fmriprep_parcellated_output']:
+                    cmd.extend(['--fmriprep-parcellated-output', str(kwargs['fmriprep_parcellated_output'])])
                 if 'duplicate_resolution' in kwargs:
                     cmd.extend(['--duplicate-resolution', kwargs['duplicate_resolution']])
                 if 'default_task' in kwargs:
@@ -673,10 +673,10 @@ Sample Modes:
     parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
                        default='datalad',
                        help='Data source type: datalad (default), hcp, or combined')
-    parser.add_argument('--hcp-root', type=Path,
-                       help='Path to HCP output directory (required for hcp/combined modes)')
-    parser.add_argument('--hcp-parcellated-output', type=Path,
-                       help='Directory to store parcellated HCP .h5 files (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-root', type=Path,
+                       help='Path to fmriprep output directory (required for hcp/combined modes)')
+    parser.add_argument('--fmriprep-parcellated-output', type=Path,
+                       help='Directory to store parcellated fmriprep .h5 files (required for hcp/combined modes)')
     parser.add_argument('--duplicate-resolution', choices=['prefer_hcp', 'prefer_datalad', 'error'],
                        default='prefer_hcp',
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
@@ -689,12 +689,12 @@ Sample Modes:
     start_from = PipelineStep(args.start_from) if args.start_from else None
     stop_at = PipelineStep(args.stop_at) if args.stop_at else None
 
-    # Validate HCP arguments
+    # Validate fmriprep arguments
     if args.data_source_type in ['hcp', 'combined']:
-        if not args.hcp_root:
-            parser.error("--hcp-root is required when --data-source-type is 'hcp' or 'combined'")
-        if not args.hcp_parcellated_output:
-            parser.error("--hcp-parcellated-output is required when --data-source-type is 'hcp' or 'combined'")
+        if not args.fmriprep_root:
+            parser.error("--fmriprep-root is required when --data-source-type is 'hcp' or 'combined'")
+        if not args.fmriprep_parcellated_output:
+            parser.error("--fmriprep-parcellated-output is required when --data-source-type is 'hcp' or 'combined'")
 
     # Initialize pipeline
     pipeline = TCPPipeline(output_dir=args.output_dir)
@@ -711,10 +711,10 @@ Sample Modes:
         'data_types': args.data_types,
         'tasks': args.tasks,
         'fetch_dry_run': args.fetch_dry_run,
-        # HCP data source configuration
+        # fmriprep data source configuration
         'data_source_type': args.data_source_type,
-        'hcp_root': args.hcp_root,
-        'hcp_parcellated_output': args.hcp_parcellated_output,
+        'fmriprep_root': args.fmriprep_root,
+        'fmriprep_parcellated_output': args.fmriprep_parcellated_output,
         'duplicate_resolution': args.duplicate_resolution,
         'default_task': args.default_task
     }
