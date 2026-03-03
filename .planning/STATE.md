@@ -1,43 +1,59 @@
 # Project State
 
-**Project:** TCP fMRI Pipeline — fmriprep Migration
-**Last session:** 2026-03-03
-**Stopped at:** Completed 01-01-PLAN.md
+## Project Reference
 
----
+See: .planning/PROJECT.md (updated 2026-03-02)
+
+**Core value:** Parcellation pipeline correctly locates and loads fmriprep BOLD NIfTI for each subject
+**Current focus:** Phase 01 - Functional Path Migration
 
 ## Current Position
 
-**Phase:** 01-functional-path-migration
-**Current Plan:** 02
-**Progress:** [##--------] 1/5 plans complete (est.)
+Phase: 1 of 2 (Functional Path Migration)
+Plan: 3 of 5 in current phase (01-03 is next)
+Status: In progress
+Last activity: 2026-03-03 - Completed 01-02: DataSourceConfig fmriprep fields and methods
 
----
-
-## Decisions
-
-- **[01-01]** fmriprep_output added as top-level platform key in default_config.json, not derived from data_base; accessor uses _get_base_path() directly
-- **[01-01]** macOS/Windows/Linux get local placeholder paths; idun gets real cluster path /cluster/projects/itea_lille-ie/Transdiagnostic/output/fmriprep-25.1.4
-- **[01-01]** Audit found map_subject_files.py and filter_subjects.py also have HCP references — must be addressed in later plan
-
----
-
-## Blockers
-
-None
-
----
+Progress: [######........................] 28% (2 of 7 total plans)
 
 ## Performance Metrics
 
-| Phase | Plan | Duration | Tasks | Files |
-|-------|------|----------|-------|-------|
-| 01-functional-path-migration | 01 | 2min | 2 | 2 |
+**Velocity:**
+- Total plans completed: 2
+- Average duration: ~3 min
+- Total execution time: ~6 min
 
----
+**By Phase:**
 
-## Session Info
+| Phase | Plans | Completed | Avg/Plan |
+|-------|-------|-----------|----------|
+| 01 - Functional Path Migration | 5 | 2 | ~3 min |
+| 02 - Verification and Hardening | 2 | 0 | - |
 
-**Last session:** 2026-03-03T14:55:25Z
-**Stopped at:** Completed 01-01-PLAN.md
-**Resume file:** None
+**Recent Trend:**
+- Last 2 plans: ~4 min, ~2 min
+- Trend: Stable
+
+*Updated after each plan completion*
+
+## Accumulated Context
+
+### Decisions
+
+- [01-02]: DataSourceType.HCP used in create_fmriprep_config() for runner compatibility - Plan 04 removes shim
+- [01-02]: fmriprep_root not validated in __post_init__ to avoid breaking HCP source_type validation; validated in methods
+- [01-02]: discover_fmriprep_subjects() verifies full BIDS filename not just func/ dir to exclude partial outputs
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+None yet.
+
+## Session Continuity
+
+Last session: 2026-03-03 14:55
+Stopped at: Completed 01-02-PLAN.md
+Resume file: None
