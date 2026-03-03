@@ -31,7 +31,8 @@ from config.paths import (
     get_tcp_dataset_path,
     get_data_path,
     get_preprocessing_path,
-    get_analysis_path
+    get_analysis_path,
+    get_fmriprep_output_path,          # add this
 )
 
 
@@ -66,7 +67,7 @@ def main():
     if args.json:
         # Add additional path checks
         info['tcp_dataset_path'] = str(get_tcp_dataset_path())
-        info['hcp_output_path'] = str(get_data_path('hcp_output'))
+        info['fmriprep_output_path'] = str(get_fmriprep_output_path())
 
         if args.check_exists:
             info['path_existence'] = {
@@ -102,9 +103,9 @@ def main():
 
     print(f"\nDataset-Specific Paths:")
     tcp_dataset = get_tcp_dataset_path()
-    hcp_output = get_data_path('hcp_output')
+    fmriprep_output = get_fmriprep_output_path()
     print(f"  TCP dataset (ds005237): {tcp_dataset}")
-    print(f"  HCP parcellated output: {hcp_output}")
+    print(f"  fmriprep output (fmriprep-25.1.4): {fmriprep_output}")
 
     if args.check_exists:
         print(f"\nPath Existence Check:")
@@ -126,6 +127,10 @@ def main():
             Path(info['current_paths']['preprocessing_base']),
             "Preprocessing base"
         )
+        all_exist &= check_path_exists(
+            fmriprep_output,
+            "fmriprep output (fmriprep-25.1.4)"
+        )
 
         print(f"\n{'='*70}")
         if all_exist:
@@ -145,7 +150,7 @@ def main():
     else:
         print(f"  Status: Using platform defaults for '{info['detected_platform']}'")
     print(f"  Dataset expected at: {tcp_dataset}")
-    print(f"  HCP output at: {hcp_output}")
+    print(f"  fmriprep output at: {fmriprep_output}")
 
 
 if __name__ == '__main__':
