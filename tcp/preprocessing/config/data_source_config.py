@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import List, Optional
 
 
+DATA_SOURCE_FMRIPREP = "fmriprep_parcellation"
+
+
 class DataSourceType(Enum):
     """Type of data source for fMRI timeseries"""
     DATALAD = "datalad"
@@ -47,6 +50,10 @@ class DataSourceConfig:
     hcp_root: Optional[Path] = None
     hcp_parcellated_output: Optional[Path] = None
 
+    # fmriprep fields
+    fmriprep_root: Optional[Path] = None
+    fmriprep_parcellated_output: Optional[Path] = None
+
     # COMBINED mode configuration
     duplicate_resolution: str = "prefer_hcp"  # 'prefer_hcp', 'prefer_datalad', or 'error'
 
@@ -62,6 +69,10 @@ class DataSourceConfig:
             self.hcp_root = Path(self.hcp_root)
         if self.hcp_parcellated_output and not isinstance(self.hcp_parcellated_output, Path):
             self.hcp_parcellated_output = Path(self.hcp_parcellated_output)
+        if self.fmriprep_root and not isinstance(self.fmriprep_root, Path):
+            self.fmriprep_root = Path(self.fmriprep_root)
+        if self.fmriprep_parcellated_output and not isinstance(self.fmriprep_parcellated_output, Path):
+            self.fmriprep_parcellated_output = Path(self.fmriprep_parcellated_output)
 
         # Validate source type requirements
         if self.source_type == DataSourceType.DATALAD:
