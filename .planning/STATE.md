@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 1 of 2 (Functional Path Migration)
-Plan: 5 of 5 in current phase (01-05 is next)
-Status: In progress
-Last activity: 2026-03-03 - Completed 01-04: Runner scripts CLI migration to fmriprep arguments
+Plan: 5 of 5 in current phase (phase complete)
+Status: Complete
+Last activity: 2026-03-03 - Completed 01-05: verify_paths.py update and final integration check
 
-Progress: [###########...................] 57% (4 of 7 total plans)
+Progress: [################..............] 71% (5 of 7 total plans)
 
 ## Performance Metrics
 
@@ -27,11 +27,11 @@ Progress: [###########...................] 57% (4 of 7 total plans)
 
 | Phase | Plans | Completed | Avg/Plan |
 |-------|-------|-----------|----------|
-| 01 - Functional Path Migration | 5 | 4 | ~5 min |
+| 01 - Functional Path Migration | 5 | 5 | ~4 min |
 | 02 - Verification and Hardening | 2 | 0 | - |
 
 **Recent Trend:**
-- Last 4 plans: ~4 min, ~2 min, ~3 min, ~9 min
+- Last 5 plans: ~4 min, ~2 min, ~3 min, ~9 min, ~2 min
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -48,6 +48,8 @@ Progress: [###########...................] 57% (4 of 7 total plans)
 - [01-03]: CLI --hcp-root renamed to --fmriprep-root; both main() instantiation calls updated
 - [01-04]: combined mode passes fmriprep_root as hcp_root to create_combined_config() — internal field name unchanged
 - [01-04]: create_hcp_config() call replaced with create_fmriprep_config() for the 'hcp' data-source-type branch
+- [01-05]: MNINonLinear refs in data_source_config.py HCP methods (discover_hcp_subjects, validate_hcp_structure, get_hcp_bold_path) intentionally preserved for combined mode — fmriprep-specific methods are clean
+- [01-05]: verify_paths.py uses get_fmriprep_output_path() (not get_data_path('fmriprep_output')) to look up the top-level platform key
 
 ### Pending Todos
 
@@ -59,6 +61,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-03 16:10
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-03-03 16:12
+Stopped at: Completed 01-05-PLAN.md (Phase 01 complete)
 Resume file: None
