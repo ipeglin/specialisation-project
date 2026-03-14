@@ -112,7 +112,12 @@ class DataladDataFetcher:
             raise RuntimeError(f"Error loading file mapping: {e}")
 
     def check_dataset_status(self) -> bool:
-        """Check if the dataset path is a valid datalad repository"""
+        """Check if the dataset path is a valid datalad repository.
+
+        Uses lightweight filesystem checks instead of `datalad status` to avoid
+        the expensive full-dataset traversal that `datalad status` performs on
+        large repositories (which can exceed the 30-second timeout on IDUN).
+        """
         if not self.dataset_path.exists():
             self.logger.error(f"Dataset path does not exist: {self.dataset_path}")
             return False
@@ -122,20 +127,27 @@ class DataladDataFetcher:
             self.logger.error(f"Dataset is not a git repository: {self.dataset_path}")
             return False
 
-        # Check if it's a datalad dataset
+        # Check for .datalad/config — the canonical marker of a datalad dataset.
+        # This avoids running `datalad status` which traverses every tracked file
+        # and times out on large datasets.
+        datalad_config = self.dataset_path / '.datalad' / 'config'
+        if not datalad_config.exists():
+            self.logger.error(f"Directory is not a datalad dataset (missing .datalad/config): {self.dataset_path}")
+            return False
+
+        # Verify datalad is available on PATH with a cheap version check
         try:
             result = subprocess.run(
-                ['datalad', 'status'],
-                cwd=self.dataset_path,
+                ['datalad', '--version'],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=10
             )
             if result.returncode != 0:
-                self.logger.error(f"Dataset is not a datalad repository: {result.stderr}")
+                self.logger.error("datalad command returned non-zero exit on --version check")
                 return False
         except subprocess.TimeoutExpired:
-            self.logger.error("Timeout checking datalad status")
+            self.logger.error("Timeout running datalad --version")
             return False
         except FileNotFoundError:
             self.logger.error("datalad command not found. Please install datalad.")
