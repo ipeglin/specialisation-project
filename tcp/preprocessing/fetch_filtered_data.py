@@ -27,7 +27,7 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_script_output_path, get_tcp_dataset_path
+from config.paths import get_script_output_path, get_tcp_dataset_path, get_fmriprep_output_path
 from tcp.preprocessing.utils.unicode_compat import CHECK, CROSS, ERROR
 
 class DataladDataFetcher:
@@ -595,6 +595,7 @@ def main():
 
     # Get paths
     dataset_path = args.dataset_path or get_tcp_dataset_path()
+    fmriprep_root = args.fmriprep_root or get_fmriprep_output_path()
 
     # Auto-detect file mapping path if not provided
     if args.file_mapping:
@@ -606,6 +607,7 @@ def main():
     print("TCP Dataset Data Fetcher (REFACTORED)")
     print("=" * 50)
     print(f"Dataset path: {dataset_path}")
+    print(f"fmriprep root: {fmriprep_root}")
     print(f"File mapping: {file_mapping_path}")
     print(f"Data types: {', '.join(args.data_types)}")
     print(f"Tasks: {', '.join(args.tasks)}")

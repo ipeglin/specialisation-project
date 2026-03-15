@@ -26,7 +26,7 @@ import glob
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.paths import get_tcp_dataset_path, get_script_output_path
+from config.paths import get_tcp_dataset_path, get_script_output_path, get_fmriprep_output_path
 from tcp.preprocessing.config.data_source_config import DataSourceConfig, create_datalad_config
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR
 
@@ -480,12 +480,13 @@ def main():
     try:
         # Create data source configuration
         dataset_path = args.dataset_path or get_tcp_dataset_path()
+        fmriprep_root = args.fmriprep_root or get_fmriprep_output_path()
 
-        if args.fmriprep_root:
+        if fmriprep_root:
             # fmriprep mode: map BIDS BOLD files from fmriprep output directory
             from tcp.preprocessing.config.data_source_config import create_fmriprep_config
             data_source_config = create_fmriprep_config(
-                fmriprep_root=args.fmriprep_root,
+                fmriprep_root=fmriprep_root,
                 parcellated_output=args.hcp_parcellated_output or dataset_path,
                 default_task=args.default_task
             )
