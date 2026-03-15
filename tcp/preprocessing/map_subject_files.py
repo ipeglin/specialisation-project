@@ -142,11 +142,10 @@ class SubjectFileMapper:
         return subject_ids, subjects_df
 
     def map_subject_files(self, subject_ids: List[str], subjects_df: pd.DataFrame) -> Dict[str, Dict]:
-        """Map all file paths for each subject (supports both DATALAD and HCP sources)"""
+        """Map all file paths for each subject (supports DATALAD, HCP, and fmriprep sources)"""
         print(f"\nMapping files for {len(subject_ids)} subjects...")
 
         subject_file_mapping = {}
-        timeseries_path = self.dataset_path / "fMRI_timeseries_clean_denoised_GSR_parcellated"
 
         for i, subject_id in enumerate(subject_ids, 1):
             if i % 50 == 0 or i == len(subject_ids):
@@ -156,21 +155,23 @@ class SubjectFileMapper:
             data_source = subjects_df[subjects_df['subject_id'] == subject_id]['data_source'].iloc[0] \
                 if 'data_source' in subjects_df.columns else 'datalad'
 
-            file_map = self._map_single_subject(subject_id, timeseries_path, data_source)
+            file_map = self._map_single_subject(subject_id, data_source)
             subject_file_mapping[subject_id] = file_map
 
         print(f"  File mapping complete")
         return subject_file_mapping
 
-    def _map_single_subject(self, subject_id: str, timeseries_path: Path, data_source: str = 'datalad') -> Dict:
+    def _map_single_subject(self, subject_id: str, data_source: str = 'datalad') -> Dict:
         """Dispatch to appropriate mapper based on data source"""
         if data_source == 'hcp':
             return self._map_hcp_subject(subject_id)
+        elif self.data_source_config.fmriprep_root:
+            return self._map_fmriprep_subject(subject_id)
         else:
-            return self._map_datalad_subject(subject_id, timeseries_path)
+            return self._map_datalad_subject(subject_id)
 
-    def _map_datalad_subject(self, subject_id: str, timeseries_path: Path) -> Dict:
-        """Map files for a datalad subject"""
+    def _map_datalad_subject(self, subject_id: str) -> Dict:
+        """Map files for a datalad subject (BIDS raw data only — no timeseries)"""
         file_map = {
             'raw_nifti': {'hammer': [], 'stroop': []},
             'events': {'hammer': [], 'stroop': []},
@@ -211,21 +212,28 @@ class SubjectFileMapper:
                     str(f.relative_to(self.dataset_path)) for f in files
                 ]
 
-        # Map timeseries data (different ID format)
-        if timeseries_path.exists():
-            # Convert BIDS ID to timeseries ID format
-            # sub-NDARINVXXXXX -> NDAR_INVXXXXX
-            if subject_id.startswith('sub-NDAR'):
-                timeseries_id = subject_id.replace('sub-NDAR', 'NDAR_').replace('INV', 'INV')
-                ts_subject_dir = timeseries_path / timeseries_id
+        return file_map
 
-                if ts_subject_dir.exists():
-                    for task in ['hammer', 'stroop']:
-                        # Look for .h5 files containing task name
-                        files = list(ts_subject_dir.glob(f"*{task}*.h5"))
-                        file_map['timeseries'][task] = [
-                            str(f.relative_to(self.dataset_path)) for f in files
-                        ]
+    def _map_fmriprep_subject(self, subject_id: str) -> Dict:
+        """Map fmriprep BIDS BOLD files for a subject.
+
+        Stores absolute paths because fmriprep outputs live outside the datalad
+        dataset root and are not annex-tracked.
+        """
+        file_map = {
+            'raw_nifti': {'hammer': [], 'stroop': []},
+            'events': {'hammer': [], 'stroop': []},
+            'json_metadata': {'hammer': [], 'stroop': []},
+            'anatomical': {'t1w': [], 't2w': []},
+            'anatomical_json': {'t1w': [], 't2w': []},
+            'timeseries': {'hammer': [], 'stroop': []},
+            'data_source': 'fmriprep'
+        }
+
+        bold_path = self.data_source_config.get_fmriprep_bold_path(subject_id, task='hammer', run=1)
+        if bold_path is not None:
+            # Store absolute path — fmriprep outputs are not in the datalad dataset
+            file_map['raw_nifti']['hammer'] = [str(bold_path)]
 
         return file_map
 
@@ -451,6 +459,9 @@ def main():
     parser.add_argument('--data-source-type', choices=['datalad', 'hcp', 'combined'],
                        default='datalad',
                        help='Data source type: datalad (default), hcp, or combined')
+    parser.add_argument('--fmriprep-root', type=Path,
+                       help='Path to fmriprep output directory (e.g. fmriprep-25.1.4/). '
+                            'When provided, maps fmriprep BIDS BOLD files instead of datalad timeseries.')
     parser.add_argument('--hcp-root', type=Path,
                        help='Path to HCP output directory (required for hcp/combined modes)')
     parser.add_argument('--hcp-parcellated-output', type=Path,
@@ -459,7 +470,7 @@ def main():
                        default='prefer_hcp',
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
     parser.add_argument('--default-task', type=str, default='hammer',
-                       help='Default task name for HCP data discovery (default: hammer)')
+                       help='Default task name for data discovery (default: hammer)')
 
     args = parser.parse_args()
 
@@ -470,7 +481,15 @@ def main():
         # Create data source configuration
         dataset_path = args.dataset_path or get_tcp_dataset_path()
 
-        if args.data_source_type == 'datalad':
+        if args.fmriprep_root:
+            # fmriprep mode: map BIDS BOLD files from fmriprep output directory
+            from tcp.preprocessing.config.data_source_config import create_fmriprep_config
+            data_source_config = create_fmriprep_config(
+                fmriprep_root=args.fmriprep_root,
+                parcellated_output=args.hcp_parcellated_output or dataset_path,
+                default_task=args.default_task
+            )
+        elif args.data_source_type == 'datalad':
             data_source_config = create_datalad_config(
                 dataset_path=dataset_path,
                 default_task=args.default_task

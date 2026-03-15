@@ -366,6 +366,9 @@ class TCPPipeline:
                     cmd.extend(['--tasks'] + kwargs['tasks'])
                 if kwargs.get('fetch_dry_run', False):
                     cmd.append('--dry-run')
+                # Pass fmriprep root so the fetcher knows files are absolute paths
+                if 'fmriprep_root' in kwargs and kwargs['fmriprep_root']:
+                    cmd.extend(['--fmriprep-root', str(kwargs['fmriprep_root'])])
 
             # Add fmriprep data source arguments for steps that need them
             if step in [PipelineStep.FILTER_SUBJECTS, PipelineStep.MAP_SUBJECT_FILES,

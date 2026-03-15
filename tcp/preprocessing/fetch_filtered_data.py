@@ -157,27 +157,35 @@ class DataladDataFetcher:
 
     def is_file_downloaded(self, file_path: Path) -> bool:
         """
-        Check if a file has been downloaded (not a git-annex symlink).
+        Check if a file is present and contains actual data.
 
-        Works cross-platform (Windows, macOS, Linux) by checking:
-        1. File exists
-        2. If it's a symlink, verify the target exists
-        3. File has actual content (size > 1KB for H5 files, symlinks are tiny)
+        Handles two path types:
+        - Absolute paths (fmriprep outputs outside the datalad dataset): checked directly.
+        - Relative paths (datalad-tracked files): resolved relative to dataset_path,
+          then checked for git-annex symlink / pointer status.
+
+        Works cross-platform (Windows, macOS, Linux).
         """
         try:
+            # Absolute paths belong to fmriprep (or another external source) and are
+            # never annex-tracked — just verify the file exists and has content.
+            if file_path.is_absolute():
+                if not file_path.exists():
+                    return False
+                try:
+                    return file_path.stat().st_size > 0
+                except OSError:
+                    return False
+
             full_path = self.dataset_path / file_path
             if not full_path.exists():
                 return False
 
             # Check if it's a symlink pointing to git-annex
             if full_path.is_symlink():
-                # On Windows, symlinks might point to git-annex objects
                 try:
-                    # Check if symlink target exists and is accessible
                     resolved = full_path.resolve(strict=True)
-                    # Verify it's not just a symlink to an annex object path
                     if '.git/annex/objects' in str(resolved):
-                        # This is a git-annex symlink, check if target actually exists
                         if not resolved.exists():
                             return False
                 except (OSError, RuntimeError):
@@ -339,19 +347,37 @@ class DataladDataFetcher:
                             print(f"  [{i}/{len(files_to_download)}] [DRY RUN] Would fetch: {file_path}")
                         continue
 
-                    # Use datalad get to fetch the specific file
-                    cmd = ['datalad', 'get', file_path]
+                    file_path_obj = Path(file_path)
                     try:
-                        self.logger.info(f"  [{i}/{len(files_to_download)}] Downloading: {Path(file_path).name}")
+                        self.logger.info(f"  [{i}/{len(files_to_download)}] Downloading: {file_path_obj.name}")
                     except (OSError, IOError):
-                        print(f"  [{i}/{len(files_to_download)}] Downloading: {Path(file_path).name}")
+                        print(f"  [{i}/{len(files_to_download)}] Downloading: {file_path_obj.name}")
 
+                    # Absolute paths (e.g. fmriprep outputs) are not datalad-tracked.
+                    # They must already exist on the cluster filesystem — if they don't,
+                    # report the missing file rather than attempting datalad get.
+                    if file_path_obj.is_absolute():
+                        if file_path_obj.exists() and file_path_obj.stat().st_size > 0:
+                            try:
+                                self.logger.info(f"    {CHECK} File present on filesystem")
+                            except (OSError, IOError):
+                                print(f"    {CHECK} File present on filesystem")
+                        else:
+                            try:
+                                self.logger.warning(f"    {CROSS} File not found: {file_path}")
+                            except (OSError, IOError):
+                                print(f"    {CROSS} File not found: {file_path}")
+                            success = False
+                        continue
+
+                    # Relative path: use datalad get to fetch from the annex remote
+                    cmd = ['datalad', 'get', file_path]
                     result = subprocess.run(
                         cmd,
                         cwd=self.dataset_path,
                         capture_output=True,
                         text=True,
-                        timeout=300  # 5 minute timeout per pattern
+                        timeout=300  # 5 minute timeout per file
                     )
 
                     if result.returncode == 0:
@@ -360,14 +386,16 @@ class DataladDataFetcher:
                         except (OSError, IOError):
                             print(f"    {CHECK} Downloaded successfully")
                     else:
-                        stderr_msg = result.stderr.strip() if result.stderr else "No error message"
-                        stdout_msg = result.stdout.strip() if result.stdout else "No output"
+                        stderr_msg = result.stderr.strip() if result.stderr else ""
+                        stdout_msg = result.stdout.strip() if result.stdout else ""
+                        # datalad get writes result JSON to stdout, not stderr
+                        error_detail = stderr_msg or stdout_msg or "No error message"
                         try:
-                            self.logger.warning(f"    {CROSS} Download failed: {stderr_msg}")
+                            self.logger.warning(f"    {CROSS} Download failed: {error_detail}")
                         except (OSError, IOError):
-                            print(f"    {CROSS} Download failed: {stderr_msg}")
-                        # Don't mark as failure if files don't exist (common for optional data)
-                        if "No such file" not in stderr_msg and "not found" not in stderr_msg and "nothing to get" not in stdout_msg.lower():
+                            print(f"    {CROSS} Download failed: {error_detail}")
+                        combined = (stderr_msg + " " + stdout_msg).lower()
+                        if "no such file" not in combined and "not found" not in combined and "nothing to get" not in combined:
                             success = False
 
                 except subprocess.TimeoutExpired:
@@ -557,6 +585,9 @@ def main():
                        help='Show what would be fetched without actually fetching')
     parser.add_argument('--dataset-path', type=Path,
                        help='Override dataset path (default: from config)')
+    parser.add_argument('--fmriprep-root', type=Path,
+                       help='Path to fmriprep output directory. When provided, mapped files are '
+                            'treated as absolute fmriprep paths (no datalad get).')
     parser.add_argument('--file-mapping', type=Path,
                        help='Override file mapping path (auto-detected by default)')
 
