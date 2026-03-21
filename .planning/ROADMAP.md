@@ -29,6 +29,16 @@
 
 ---
 
+### Phase 01.1: participants-txt subject filter (INSERTED)
+
+**Goal:** Add optional `--participants-file` CLI flag to parcellation entry points that filters discovered fmriprep subjects against a user-specified subject list, with hard error on missing subjects.
+**Requirements**: TBD
+**Depends on:** Phase 1
+**Plans:** 1/1 plans complete
+
+Plans:
+- [x] 01.1-01-PLAN.md -- Create participants_filter utility and wire into both parcellation CLI scripts
+
 ### Phase 2: Verification and Hardening
 
 **Goal:** Validate the migrated pipeline against real fmriprep data on the IDUN cluster, confirm correct BOLD image shape and atlas alignment, and harden path verification tooling for ongoing use.

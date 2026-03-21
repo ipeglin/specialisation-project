@@ -1,3 +1,17 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+stopped_at: Completed 01.1-01-PLAN.md (Phase 01.1 complete)
+last_updated: "2026-03-21T09:37:47.038Z"
+progress:
+  total_phases: 3
+  completed_phases: 2
+  total_plans: 6
+  completed_plans: 6
+---
+
 # Project State
 
 ## Project Reference
@@ -5,20 +19,17 @@
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Parcellation pipeline correctly locates and loads fmriprep BOLD NIfTI for each subject
-**Current focus:** Phase 01 - Functional Path Migration
+**Current focus:** Phase 01.1 — participants-txt-subject-filter
 
 ## Current Position
 
-Phase: 1 of 2 (Functional Path Migration)
-Plan: 5 of 5 in current phase (phase complete)
-Status: Complete
-Last activity: 2026-03-03 - Completed 01-05: verify_paths.py update and final integration check
-
-Progress: [################..............] 71% (5 of 7 total plans)
+Phase: 01.1 (participants-txt-subject-filter) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 4
 - Average duration: ~5 min
 - Total execution time: ~18 min
@@ -31,10 +42,12 @@ Progress: [################..............] 71% (5 of 7 total plans)
 | 02 - Verification and Hardening | 2 | 0 | - |
 
 **Recent Trend:**
+
 - Last 5 plans: ~4 min, ~2 min, ~3 min, ~9 min, ~2 min
 - Trend: Stable
 
 *Updated after each plan completion*
+| Phase 01.1-participants-txt-subject-filter P01 | 2 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -50,6 +63,13 @@ Progress: [################..............] 71% (5 of 7 total plans)
 - [01-04]: create_hcp_config() call replaced with create_fmriprep_config() for the 'hcp' data-source-type branch
 - [01-05]: MNINonLinear refs in data_source_config.py HCP methods (discover_hcp_subjects, validate_hcp_structure, get_hcp_bold_path) intentionally preserved for combined mode — fmriprep-specific methods are clean
 - [01-05]: verify_paths.py uses get_fmriprep_output_path() (not get_data_path('fmriprep_output')) to look up the top-level platform key
+- [Phase 01.1-01]: participants_filter.py is standalone utility not a DataSourceConfig method — decouples filter logic from config class
+- [Phase 01.1-01]: Filter applied before empty-list guard in parcellate_hcp_subjects() so no-subjects message still fires when filter produces empty result
+- [Phase 01.1-01]: Single-subject path in hcp_parcellation.py intentionally excluded from participants filter
+
+### Roadmap Evolution
+
+- Phase 01.1 inserted after Phase 1: participants-txt subject filter (INSERTED) — optional participants.txt file to intersect available fmriprep subjects with a user-specified subject list, ensuring analysis is limited to subjects from the previous HCP-based run
 
 ### Pending Todos
 
@@ -61,6 +81,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-03 16:12
-Stopped at: Completed 01-05-PLAN.md (Phase 01 complete)
+Last session: 2026-03-21T09:37:47.036Z
+Stopped at: Completed 01.1-01-PLAN.md (Phase 01.1 complete)
 Resume file: None
