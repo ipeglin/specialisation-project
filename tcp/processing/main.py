@@ -64,6 +64,7 @@ from tcp.processing.lib.plot import (
 )
 from tcp.processing.lib.slow_band import get_band_number, get_frequency_range
 from tcp.processing.lib.subject_filtering import get_accessible_subjects_from_file
+from tcp.preprocessing.utils.participants_filter import load_participants_file, apply_participants_filter
 from tcp.processing.roi import (
     CorticalAtlasLookup,
     ROIExtractionService,
@@ -3770,7 +3771,7 @@ def export_marginal_hilbert_spectrum_to_csv(all_subject_results, output_dir, ver
     return csv_paths
 
 
-def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None, num_imfs=10):
+def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show_plots=True, save_figures=False, verbose=True, subjects_per_group=None, num_imfs=10, participants_file=None):
     """Main function for FC MVP analysis"""
     from datetime import datetime
 
@@ -3869,6 +3870,20 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         data_requirements=['timeseries'],
         downloaded_only=use_downloaded_only,
     )
+
+    # Apply participants file filter if provided
+    if participants_file is not None:
+        participants_subjects = load_participants_file(participants_file)
+        anhedonic_subjects = apply_participants_filter(
+            participants_subjects=participants_subjects,
+            discovered_subjects=anhedonic_subjects,
+        )
+        non_anhedonic_subjects = apply_participants_filter(
+            participants_subjects=participants_subjects,
+            discovered_subjects=non_anhedonic_subjects,
+        )
+        low_anhedonic_subjects = [sid for sid in low_anhedonic_subjects if sid in anhedonic_subjects]
+        high_anhedonic_subjects = [sid for sid in high_anhedonic_subjects if sid in anhedonic_subjects]
 
     print(f"\nSubject Selection:")
     print(f"  Anhedonic subjects: {len(anhedonic_subjects)}")
@@ -5980,6 +5995,11 @@ Output:
                         help='Random seed for reproducibility')
     parser.add_argument('--num-imfs', type=int, default=10,
                         help='Number of IMFs for MVMD to decompose signals into')
+    parser.add_argument('--participants-file', type=Path, default=None,
+                        help='Optional path to participants.txt file. When provided, only subjects '
+                             'listed in this file will be processed. Format: one subject ID per '
+                             'line, # comments supported. Hard error if any listed subject is not '
+                             'found in either group.')
 
     args = parser.parse_args()
 
@@ -6009,6 +6029,7 @@ Output:
         verbose=VERBOSE_OUTPUT,
         subjects_per_group=args.subjects_per_group,
         num_imfs=NUM_IMFS,
+        participants_file=args.participants_file,
     )
 
     # Note: plt.show() is now called within each batch in main(), not here
