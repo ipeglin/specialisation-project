@@ -27,6 +27,7 @@ The parcellation pipeline must correctly locate and load the fmriprep BOLD NIfTI
 - [ ] BOLD filename constructed per-subject using fmriprep BIDS pattern: `{subject_id}_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz`
 - [ ] CLI arguments (`--hcp-root`) updated or aliased to accept fmriprep root
 - [ ] All hardcoded references to `hcp_output` path updated in config and scripts (parcellation scope only)
+- [x] Optional `--participants-file` flag on both parcellation entry points with hard error on missing subjects — Validated in Phase 01.1: participants-txt-subject-filter
 
 ### Out of Scope
 
@@ -71,4 +72,4 @@ The parcellation pipeline must correctly locate and load the fmriprep BOLD NIfTI
 | Scope migration to parcellation only | Subject mapping/filtering not yet needed for fmriprep data | — Pending |
 
 ---
-*Last updated: 2026-03-02 after initialization*
+*Last updated: 2026-03-21 — Phase 01.1 complete: participants file filter added to both parcellation entry points*
