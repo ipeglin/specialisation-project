@@ -109,7 +109,7 @@ class HCPParcellationRunner:
         # Find HCP subjects without .h5 files
         hcp_subjects_to_parcellate = []
         for subject_id, file_map in self.subject_file_mapping.items():
-            if file_map.get('data_source') == 'hcp':
+            if file_map.get('data_source') in ('hcp', 'fmriprep'):
                 # Check if timeseries .h5 files exist
                 has_h5 = any(len(files) > 0 for files in file_map.get('timeseries', {}).values())
                 if not has_h5:
@@ -132,7 +132,7 @@ class HCPParcellationRunner:
                 'failed': 0,
                 'subjects_already_parcellated': len([
                     sid for sid, fm in self.subject_file_mapping.items()
-                    if fm.get('data_source') == 'hcp'
+                    if fm.get('data_source') in ('hcp', 'fmriprep')
                 ])
             }
 
