@@ -76,43 +76,49 @@ def load_participants_file(participants_path: Path) -> List[str]:
 def apply_participants_filter(
     participants_subjects: List[str],
     discovered_subjects: List[str],
+    strict: bool = True,
 ) -> List[str]:
     """
-    Intersect a participants list with discovered fmriprep subjects.
-
-    Subjects in participants_subjects that are NOT in discovered_subjects
-    cause a hard error listing all missing IDs.
-    Subjects in discovered_subjects but NOT in participants_subjects are
-    silently excluded with a warning log.
+    Intersect a participants list with discovered subjects.
 
     Args:
         participants_subjects: Output of load_participants_file().
-        discovered_subjects: Output of discover_fmriprep_subjects() or
-            any subject discovery returning a list of subject ID strings.
+        discovered_subjects: List of subject IDs from any subject discovery source.
+        strict: If True (default), raise ValueError when any participants file
+            subject is not found in discovered_subjects. If False, emit a warning
+            and continue with the intersection — use this when the discovered list
+            comes from a manifest that may not include all preprocessed subjects.
 
     Returns:
         Filtered list of subject IDs in participants file order.
 
     Raises:
-        ValueError: If one or more participants file subjects are not found
-            in the discovered subjects.
+        ValueError: If strict=True and one or more participants file subjects
+            are not found in the discovered subjects.
     """
     discovered_set = set(discovered_subjects)
 
     missing = [s for s in participants_subjects if s not in discovered_set]
     if missing:
-        raise ValueError(
-            f"{len(missing)} subject(s) from participants file not found in fmriprep output:\n"
-            + "\n".join(f"  - {s}" for s in missing)
-            + f"\n\nExpected fmriprep output at the configured fmriprep_root. "
-            + f"Ensure preprocessing is complete for all listed subjects."
-        )
+        if strict:
+            raise ValueError(
+                f"{len(missing)} subject(s) from participants file not found in fmriprep output:\n"
+                + "\n".join(f"  - {s}" for s in missing)
+                + f"\n\nExpected fmriprep output at the configured fmriprep_root. "
+                + f"Ensure preprocessing is complete for all listed subjects."
+            )
+        else:
+            print(
+                f"{WARNING} {len(missing)} subject(s) from participants file not found in manifest "
+                f"and will be skipped:\n"
+                + "\n".join(f"  - {s}" for s in missing)
+            )
 
     filtered = [s for s in participants_subjects if s in discovered_set]
 
     excluded_count = len(discovered_set) - len(filtered)
     if excluded_count > 0:
-        print(f"{WARNING} {excluded_count} fmriprep subject(s) excluded by participants filter")
+        print(f"{WARNING} {excluded_count} subject(s) excluded by participants filter")
 
     print(f"{CHECK} Participants filter applied: {len(filtered)} subjects selected")
     return filtered

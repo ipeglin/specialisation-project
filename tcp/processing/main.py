@@ -3877,10 +3877,12 @@ def main(mask_diagonal=False, mask_nonsignificant=False, create_plots=True, show
         anhedonic_subjects = apply_participants_filter(
             participants_subjects=participants_subjects,
             discovered_subjects=anhedonic_subjects,
+            strict=False,
         )
         non_anhedonic_subjects = apply_participants_filter(
             participants_subjects=participants_subjects,
             discovered_subjects=non_anhedonic_subjects,
+            strict=False,
         )
         low_anhedonic_subjects = [sid for sid in low_anhedonic_subjects if sid in anhedonic_subjects]
         high_anhedonic_subjects = [sid for sid in high_anhedonic_subjects if sid in anhedonic_subjects]
