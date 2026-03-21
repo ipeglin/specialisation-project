@@ -34,6 +34,7 @@ from tcp.preprocessing.config.data_source_config import (
     create_hcp_config,
 )
 from tcp.preprocessing.utils.unicode_compat import CHECK, ERROR, RUNNING
+from tcp.preprocessing.utils.participants_filter import load_participants_file, apply_participants_filter
 
 
 class HCPParcellationRunner:
@@ -43,6 +44,7 @@ class HCPParcellationRunner:
         self.data_source_config = data_source_config
         self.subject_file_mapping: Optional[Dict] = None
         self.mapping_file = get_script_output_path('tcp_preprocessing', 'map_subject_files') / "subject_file_mapping.json"
+        self.participants_file: Optional[Path] = None
 
         print(f"HCP Parcellation Runner")
         print(f"Data source: {self.data_source_config.source_type.value}")
@@ -112,6 +114,14 @@ class HCPParcellationRunner:
                 has_h5 = any(len(files) > 0 for files in file_map.get('timeseries', {}).values())
                 if not has_h5:
                     hcp_subjects_to_parcellate.append(subject_id)
+
+        # Apply participants file filter if provided
+        if self.participants_file is not None:
+            participants_subjects = load_participants_file(self.participants_file)
+            hcp_subjects_to_parcellate = apply_participants_filter(
+                participants_subjects=participants_subjects,
+                discovered_subjects=hcp_subjects_to_parcellate
+            )
 
         if not hcp_subjects_to_parcellate:
             print(f"\n{CHECK} No HCP subjects need parcellation")
@@ -230,6 +240,10 @@ Examples:
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
     parser.add_argument('--default-task', type=str, default='hammer',
                        help='Default task name for HCP data discovery (default: hammer)')
+    parser.add_argument('--participants-file', type=Path, default=None,
+                       help='Optional path to participants.txt file. When provided, only subjects '
+                            'listed in this file will be parcellated. Format: one subject ID per '
+                            'line, # comments supported.')
 
     args = parser.parse_args()
 
@@ -269,6 +283,7 @@ Examples:
 
         # Initialize parcellation runner
         runner = HCPParcellationRunner(data_source_config=data_source_config)
+        runner.participants_file = args.participants_file
 
         # Load subject file mapping
         runner.load_subject_file_mapping()
