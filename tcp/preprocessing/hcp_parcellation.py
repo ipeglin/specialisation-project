@@ -33,6 +33,7 @@ sys.path.insert(0, str(project_root))
 
 from config.paths import get_parcellations_path
 from tcp.preprocessing.config.data_source_config import DATA_SOURCE_FMRIPREP
+from tcp.preprocessing.utils.participants_filter import load_participants_file, apply_participants_filter
 
 
 class HCPParcellator:
@@ -454,6 +455,10 @@ Examples:
                        help='Output directory for .h5 files')
     parser.add_argument('--n-jobs', type=int, default=4,
                        help='Number of parallel jobs (default: 4, only used with --subject-ids)')
+    parser.add_argument('--participants-file', type=Path, default=None,
+                       help='Optional path to participants.txt file. When provided, only subjects '
+                            'listed in this file will be parcellated (intersected with --subject-ids '
+                            'if both given). Format: one subject ID per line, # comments supported.')
 
     args = parser.parse_args()
 
@@ -476,8 +481,15 @@ Examples:
     else:
         # Parallel mode
         parcellator = HCPParcellator(fmriprep_root=args.fmriprep_root, verbose=True)
+        subject_ids = args.subject_ids
+        if args.participants_file is not None:
+            participants_subjects = load_participants_file(args.participants_file)
+            subject_ids = apply_participants_filter(
+                participants_subjects=participants_subjects,
+                discovered_subjects=subject_ids
+            )
         output_paths = parcellator.parcellate_subjects_parallel(
-            subject_ids=args.subject_ids,
+            subject_ids=subject_ids,
             task=args.task,
             output_dir=args.output_dir,
             n_jobs=args.n_jobs
