@@ -383,6 +383,8 @@ class TCPPipeline:
                     cmd.extend(['--duplicate-resolution', kwargs['duplicate_resolution']])
                 if 'default_task' in kwargs:
                     cmd.extend(['--default-task', kwargs['default_task']])
+                if step == PipelineStep.PARCELLATE_HCP_SUBJECTS and kwargs.get('participants_file'):
+                    cmd.extend(['--participants-file', str(kwargs['participants_file'])])
 
             # Execute step
             step_timeout = step_info.get('timeout', 7200)  # Default 2 hours if not specified
@@ -685,6 +687,10 @@ Sample Modes:
                        help='How to handle subjects in both datalad and HCP (combined mode only, default: prefer_hcp)')
     parser.add_argument('--default-task', type=str, default='hammer',
                        help='Default task name for HCP data discovery (default: hammer)')
+    parser.add_argument('--participants-file', type=Path, default=None,
+                       help='Optional path to participants.txt file. When provided, only subjects '
+                            'listed in this file will be parcellated. Format: one subject ID per '
+                            'line, # comments supported.')
 
     args = parser.parse_args()
 
@@ -719,7 +725,8 @@ Sample Modes:
         'fmriprep_root': args.fmriprep_root,
         'fmriprep_parcellated_output': args.fmriprep_parcellated_output,
         'duplicate_resolution': args.duplicate_resolution,
-        'default_task': args.default_task
+        'default_task': args.default_task,
+        'participants_file': args.participants_file,
     }
 
     success = pipeline.run_pipeline(
